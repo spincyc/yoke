@@ -218,6 +218,10 @@ class Node:
     # -- public introspection ------------------------------------------------
 
     @property
+    def node_id(self) -> str:
+        return self._config.node_id
+
+    @property
     def node_state(self) -> NodeState:
         return self._state
 
