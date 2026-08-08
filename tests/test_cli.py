@@ -226,6 +226,33 @@ def test_ack_from_wrong_node_or_wrong_version_ignored() -> None:
     assert outcome.sends == 2  # the bogus acks did not resolve the intent
 
 
+def test_target_consumer_that_is_a_producer_refused_before_sending() -> None:
+    # Regression from the live end-to-end smoke: `yoke pair cam-1 cam-1`
+    # named a producer as the consumer; producers never ack, so the CLI
+    # burned the full deadline. It must refuse fast instead.
+    net = FakeNet([(1000.1, ann_producer())])
+    outcome = run_intent(net.io(), "pair", "cam-1", "cam-1")
+    assert outcome.exit_code == 2
+    assert net.sends == []
+    assert any("not a consumer" in line for line in outcome.err)
+
+
+def test_named_producer_that_is_a_consumer_refused_before_sending() -> None:
+    # tv-two must announce before the target consumer: collection stops
+    # early once the target is seen, so the check is best-effort on what
+    # was actually observed.
+    net = FakeNet(
+        [
+            (1000.1, ann_consumer(origin="tv-two", name="Other TV")),
+            (1000.2, ann_consumer()),
+        ]
+    )
+    outcome = run_intent(net.io(), "pair", "tv-den", "tv-two")
+    assert outcome.exit_code == 2
+    assert net.sends == []
+    assert any("not a producer" in line for line in outcome.err)
+
+
 def test_kind_mismatch_precheck_refuses_before_sending() -> None:
     net = FakeNet(
         [

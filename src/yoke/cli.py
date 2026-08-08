@@ -31,6 +31,7 @@ from yoke.core.types import (
     VERSION_ZERO,
     Body,
     FrameType,
+    Role,
     Version,
 )
 from yoke.net.mcast import open_multicast_socket
@@ -117,9 +118,21 @@ def run_intent(
             "proceeding with pairing version 0"
         )
     else:
+        if consumer_view.role != Role.CONSUMER.value:
+            err.append(
+                f"{consumer!r} announces as a {consumer_view.role}, not a "
+                "consumer; it will never ack an intent — refusing to send"
+            )
+            return IntentOutcome(2, (), tuple(err), None, 0, announced)
         n = (consumer_view.pairing_version or VERSION_ZERO)[0]
     if op == "pair" and producer is not None:
         producer_view = snooper.nodes.get(producer)
+        if producer_view is not None and producer_view.role != Role.PRODUCER.value:
+            err.append(
+                f"{producer!r} announces as a {producer_view.role}, not a "
+                "producer; refusing to send"
+            )
+            return IntentOutcome(2, (), tuple(err), None, 0, announced)
         if (
             consumer_view is not None
             and producer_view is not None
