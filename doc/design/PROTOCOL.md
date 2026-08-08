@@ -44,9 +44,16 @@ Unknown envelope fields ⇒ drop (count: `malformed`). Unknown fields
 
 `sig = HMAC-SHA256(psk, canonical_bytes(frame_without_sig)).hexdigest()`
 where `frame_without_sig` is the frame object with the `sig` key removed
-entirely. The PSK is site-provisioned raw bytes (from a config file,
-0600). In open mode (empty PSK) `sig` MUST be `""` and MUST NOT be
-verified. A bad signature ⇒ drop (count: `auth`). Constant-time compare.
+entirely. The PSK is site-provisioned key bytes (from a config file,
+mode 0600, at most one trailing newline stripped; hex is recommended so
+no raw whitespace is ambiguous — see DEPLOYMENT.md). `sig` MUST match
+`^([0-9a-f]{64})?$` — 64 lowercase hex digits, or empty in open mode;
+any other string ⇒ drop (count: `auth`) before the compare (a non-hex
+`sig` must never reach the constant-time comparison, which can crash on
+non-ASCII input — ADR 0010). A non-string `sig` ⇒ drop (`malformed`).
+In open mode (empty PSK) a receiver requires `sig == ""` and drops any
+signed frame as `auth`; a keyed receiver drops an unsigned frame as
+`auth`. A bad signature ⇒ drop (count: `auth`). Constant-time compare.
 
 ### Replay defense
 
@@ -87,10 +94,16 @@ startup (after state restore), and immediately after any state change.
 
 - Consumers MUST include `pairing` (null producer = unpaired; version
   `[0, ""]` when never paired). Producers set `pairing: null`.
-- Producers MUST include `media`: for HDMI,
-  `{"group": "<ipv4>", "port": <int>}` — the multicast group the encoder
-  transmits on; for USB, `{"host": "<ipv4>", "port": <int>, "busids":
-  ["<busid>", ...]}`. Consumers set `media: null`.
+- Producers MUST include `media`, an opaque **driver-defined** object
+  that the paired consumer's driver of the same `kind` knows how to
+  consume; the control plane never interprets it (ADR 0002). It MUST be
+  a JSON object or null, and MUST be ≤ the frame budget. The reference
+  drivers use: software HDMI (igmp) `{"group": "<ipv4>", "port": <int>}`;
+  Just Add Power (jap) `{"channel": <int>, "group": "<ipv4>"}`; USB
+  (usbip) `{"host": "<ipv4>", "port": <int>, "busids": ["<busid>",
+  ...]}`. A consumer whose driver rejects the media shape surfaces
+  `driver-error` and retries — the media contract is enforced by the
+  drivers, not this envelope. Consumers set `media: null`.
 
 ### `int` — pairing intent
 
@@ -129,12 +142,15 @@ rejections and MUST NOT change state.
 { "event": "<slug>", "detail": { ... } }
 ```
 
-Normative event slugs: `pairing-applied`, `pairing-rejected`, `media-up`,
-`media-pending`, `media-down`, `driver-error`, `driver-retry`,
-`peer-lost`, `peer-returned`, `auth-fail`, `rx-drop`, `started`,
-`stopping`. `rx-drop` detail carries the drop counters
-`{malformed, version, auth, stale, oversize}` and is emitted at most once
-per `ANN_INTERVAL` when counters changed.
+Normative event slugs: `pairing-applied`, `media-up`, `media-pending`,
+`media-down`, `driver-error`, `driver-retry`, `peer-lost`,
+`peer-returned`, `rx-drop`, `started`, `stopping`. `rx-drop` detail
+carries the drop counters `{malformed, version, auth, stale, oversize}`
+and is emitted at most once per `ANN_INTERVAL` when counters changed; an
+`auth` count rising is how an authentication failure surfaces (there is
+no separate `auth-fail` event). `driver-error` detail is
+`{"detail": "<str>"}`. A rejected intent surfaces only as its `ack`
+(see below), not as an event.
 
 ### `bye`
 
@@ -167,9 +183,15 @@ events on every transition.
 
 Producers are passive: announce, transmit media to their fixed group
 (HDMI) or accept sessions (USB), report driver health. They apply no
-intents. A USB producer additionally enforces single-attachment: a
-second consumer session attempt is refused by the media plane; the
-producer emits `evt driver-error {"reason": "busy"}`.
+intents. USB single-attachment is enforced by the media plane (usbipd
+refuses a second session), not by the control plane; if that refusal
+reaches the producer's driver it surfaces generically as
+`evt driver-error {"detail": "<str>"}`. Two consumers pairing to one USB
+producer is therefore resolved at the media layer, and yoke models each
+consumer's pairing independently regardless (a losing consumer sits in
+`error`/`pending` with its driver retrying). HDMI producers are
+inherently shareable — multiple decoders may join one encoder's group —
+so nothing enforces exclusivity there.
 
 ## Peer tracking
 

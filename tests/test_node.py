@@ -38,6 +38,7 @@ from yoke.core.types import (
 
 PSK = b"unit-test-psk"
 T0 = 1_754_000_000.0
+SEQ0 = int(T0) * 1_000_000_000  # nanosecond seq floor at T0 (ADR 0007)
 HDMI_MEDIA: Body = {"group": "239.10.0.1", "port": 5004}
 HDMI_MEDIA_2: Body = {"group": "239.10.0.2", "port": 5004}
 USB_MEDIA: Body = {"host": "10.0.0.9", "port": 3240, "busids": ["1-1"]}
@@ -201,12 +202,12 @@ def test_start_effect_order_and_shapes() -> None:
     assert [type(e) for e in fx] == [Persist, SendFrame, SendFrame]
     persist = fx[0]
     assert isinstance(persist, Persist)
-    assert persist.state.seq == int(T0)
+    assert persist.state.seq == SEQ0  # nanosecond floor (ADR 0007)
     assert persist.state.pairing == Pairing(None, (0, ""))
     started, ann = sends(fx, FrameType.EVT)[0], sends(fx, FrameType.ANN)[0]
     assert started.body == {"event": "started", "detail": {}}
-    assert started.seq == int(T0) + 1
-    assert ann.seq == int(T0) + 2
+    assert started.seq == SEQ0 + 1
+    assert ann.seq == SEQ0 + 2
     assert ann.body == {
         "role": "consumer",
         "kind": "hdmi",
@@ -221,11 +222,11 @@ def test_start_effect_order_and_shapes() -> None:
 def test_seq_floor_uses_now_over_stale_persisted_seq() -> None:
     loop = Loop(state=PersistedState(seq=10))
     started = sends(loop.start_fx, FrameType.EVT)[0]
-    assert started.seq == int(T0) + 1
+    assert started.seq == SEQ0 + 1
 
 
 def test_seq_floor_uses_persisted_seq_when_higher() -> None:
-    high = int(T0) + 9999
+    high = SEQ0 + 9999
     loop = Loop(state=PersistedState(seq=high))
     started = sends(loop.start_fx, FrameType.EVT)[0]
     assert started.seq == high + 1
@@ -641,7 +642,7 @@ def test_anti_entropy_reissues_cached_body_under_own_seq() -> None:
     assert reissue.body == body
     assert reissue.body["version"] == [3, "cli"]
     # ... but under the relayer's own seq counter, not the author's seq 1
-    assert reissue.seq > int(T0)
+    assert reissue.seq > SEQ0
     ann_after = sends(loop.poll_at(loop.node.next_deadline()), FrameType.ANN)[0]
     assert ann_after.seq > reissue.seq  # same counter as the relayer's own frames
     # fires at most once per scheduling
@@ -729,7 +730,7 @@ def test_livelock_regression_reissue_survives_authors_later_traffic() -> None:
     assert reissue.body["version"] == [3, "cli-x"]  # authorship preserved
     # fresh seq from B's own counter, far above anything cli-x ever sent,
     # so con-9's replay defense accepts the relay
-    assert reissue.seq > int(T0)
+    assert reissue.seq > SEQ0
     assert reissue.seq > 2
 
 
@@ -851,3 +852,84 @@ def test_shutdown_sends_stopping_then_bye() -> None:
     assert bye.type is FrameType.BYE
     assert bye.body == {}
     assert stopping.seq < bye.seq
+
+
+# -- review regressions ------------------------------------------------------
+
+
+def test_pending_pair_to_later_wrong_kind_producer_does_not_attach() -> None:
+    # Pair (pending) to an unknown producer, which then announces as the
+    # WRONG kind. The consumer must NOT attach its media (which would
+    # churn the driver forever); it stays pending. (Review finding: the
+    # kind-mismatch guard only ran at intent-apply time.)
+    loop = Loop(kind=Kind.HDMI)
+    loop.feed(FrameType.INT, "cli", pair_body("node-1", "prodx", (1, "cli")))
+    assert loop.node.node_state is NodeState.PENDING
+    fx = loop.feed(FrameType.ANN, "prodx", producer_ann(USB_MEDIA, kind="usb"))
+    assert attaches(fx) == []
+    assert loop.node.node_state is NodeState.PENDING
+
+
+def test_paired_producer_role_flip_detaches_and_goes_pending() -> None:
+    loop = Loop(kind=Kind.HDMI)
+    paired_active(loop, "prod-1", (1, "cli"))
+    assert loop.node.node_state is NodeState.ACTIVE
+    # prod-1 re-announces as a consumer (operator reused the node id).
+    fx = loop.feed(FrameType.ANN, "prod-1", consumer_ann((0, "")))
+    assert any(isinstance(e, DetachMedia) for e in fx)
+    assert loop.node.node_state is NodeState.PENDING
+
+
+def test_far_future_seq_is_rejected_and_does_not_poison_replay() -> None:
+    loop = Loop()
+    # A spoofed frame claiming prod-1's origin with an absurd seq.
+    poison = int(T0 + 10_000) * 1_000_000_000  # >1h ahead, in ns
+    fx = loop.feed(FrameType.ANN, "prod-1", producer_ann(), seq=poison)
+    assert fx == []
+    assert loop.node._drops["stale"] == 1
+    # The real prod-1 (normal seq) is still heard afterwards.
+    loop.feed(FrameType.ANN, "prod-1", producer_ann(), seq=SEQ0 + 5)
+    assert "prod-1" in loop.node.peers
+
+
+def test_stale_driver_active_after_unpair_is_ignored() -> None:
+    loop = Loop()
+    paired_active(loop, "prod-1", (1, "cli"))
+    loop.feed(FrameType.INT, "cli", unpair_body("node-1", (2, "cli")))
+    assert loop.node.node_state is NodeState.IDLE
+    # A late ACTIVE from the attach that completed after the unpair.
+    fx = loop.node.on_driver_status(DriverStatus(NodeState.ACTIVE), loop.now)
+    assert fx == []
+    assert loop.node.node_state is NodeState.IDLE
+    assert "media-up" not in evts(fx)
+
+
+def test_corrected_retry_reusing_rejected_version_is_cached() -> None:
+    # Bystander view: an intent is rejected (self-pair) at version (1,cli),
+    # then a corrected intent reuses the same version number with a valid
+    # producer. The corrected one must still cache/anti-entropy.
+    bystander = Loop(node_id="watch-1", role=Role.PRODUCER, kind=Kind.HDMI)
+    # cache the doomed self-pair intent (producer == consumer)
+    bystander.feed(FrameType.INT, "cli", pair_body("con-9", "con-9", (1, "cli")))
+    assert bystander.node._intent_cache.get("con-9") is not None
+    # observe con-9 reject it
+    ack = {"version": [1, "cli"], "applied": False, "reason": "self-pair"}
+    bystander.feed(FrameType.ACK, "con-9", ack)
+    assert bystander.node._intent_cache.get("con-9") is None
+    # corrected retry: same version number, valid producer -> caches
+    bystander.feed(FrameType.INT, "cli", pair_body("con-9", "prod-1", (1, "cli")))
+    cached = bystander.node._intent_cache.get("con-9")
+    assert cached is not None
+    assert cached.body["producer"] == "prod-1"
+
+
+def test_prune_forgets_long_departed_peers() -> None:
+    from yoke.core.types import PEER_FORGET
+
+    loop = Loop()
+    loop.feed(FrameType.ANN, "ghost", producer_ann())
+    loop.feed(FrameType.BYE, "ghost", {})
+    assert "ghost" in loop.node.peers
+    loop.poll_at(loop.now + PEER_FORGET + 1.0)
+    assert "ghost" not in loop.node.peers
+    assert "ghost" not in loop.node._replay

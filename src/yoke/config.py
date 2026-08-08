@@ -46,6 +46,7 @@ class AgentConfig:
     psk: bytes
     group: str = CONTROL_GROUP
     port: int = CONTROL_PORT
+    interface: str = "0.0.0.0"
     driver: Body = field(default_factory=dict)
 
 
@@ -85,18 +86,30 @@ def load(path: Path) -> AgentConfig:
     if "psk_file" in data:
         psk_path = Path(_require_str(data, "psk_file", path))
         try:
-            psk = psk_path.read_bytes().strip()
+            raw_psk = psk_path.read_bytes()
+            mode = psk_path.stat().st_mode
         except OSError as exc:
             raise ConfigError(f"{path}: psk_file {psk_path}: {exc}") from exc
+        if mode & 0o077:
+            raise ConfigError(
+                f"{path}: psk_file {psk_path} is group/other-accessible "
+                f"(mode {mode & 0o777:o}); chmod 600 it"
+            )
+        # Strip at most one trailing newline (editors add it); preserve
+        # every other byte so raw key material is not silently weakened.
+        psk = raw_psk[:-1] if raw_psk.endswith(b"\n") else raw_psk
         if not psk:
             raise ConfigError(f"{path}: psk_file {psk_path} is empty")
 
     group = data.get("group", CONTROL_GROUP)
     port = data.get("port", CONTROL_PORT)
+    interface = data.get("interface", "0.0.0.0")
     if not isinstance(group, str):
         raise ConfigError(f"{path}: invalid 'group'")
     if not isinstance(port, int) or isinstance(port, bool) or not 1 <= port <= 65535:
         raise ConfigError(f"{path}: invalid 'port'")
+    if not isinstance(interface, str):
+        raise ConfigError(f"{path}: invalid 'interface'")
 
     driver = data.get("driver", {})
     if not isinstance(driver, dict):
@@ -110,5 +123,6 @@ def load(path: Path) -> AgentConfig:
         psk=psk,
         group=group,
         port=port,
+        interface=interface,
         driver=dict(driver),
     )

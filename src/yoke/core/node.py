@@ -8,11 +8,11 @@ Normative reference: doc/design/PROTOCOL.md.
 
 Spec notes:
 
-- The ``pairing-rejected`` event slug from PROTOCOL.md is never emitted:
-  the resolved behavioral spec prescribes only the ``ack`` for
-  rejections (self-pair, kind-mismatch, unknown-producer, superseded),
-  so the slug stays reserved. Likewise the ``driver-error`` ack reason
-  is never produced — driver failures happen after the ack, as events.
+- Rejections (self-pair, kind-mismatch, unknown-producer, superseded)
+  surface only as the ``ack``, never as an event — PROTOCOL.md lists no
+  ``pairing-rejected`` slug. Driver failures happen after the ack and
+  surface as ``driver-error`` events, so there is no ``driver-error``
+  ack reason either.
 - ``AttachMedia`` at intent-apply time requires the producer peer to be
   live (known and not departed/lost); a departed peer's stale media is
   treated as unknown and attach happens on its return.
@@ -41,17 +41,23 @@ Spec notes:
 
 from __future__ import annotations
 
+import json
 import random
 from dataclasses import dataclass
 
+from yoke.core.frames import canonical_bytes
 from yoke.core.types import (
     ANN_INTERVAL,
     ANN_JITTER,
     INTENT_CACHE_TTL,
+    MAX_TRACKED,
     NODE_ID_RE,
+    NS_PER_S,
+    PEER_FORGET,
     PEER_TIMEOUT,
     RETRY_BACKOFF_BASE,
     RETRY_BACKOFF_CAP,
+    SEQ_FUTURE_MARGIN_S,
     SUPPRESSION_MAX,
     SUPPRESSION_MIN,
     AttachMedia,
@@ -208,7 +214,7 @@ class Node:
     ) -> None:
         self._config = config
         self._pairing = state.pairing
-        self._seq = max(state.seq, int(now))
+        self._seq = max(state.seq, int(now) * NS_PER_S)
         self._media = media
         self._rng = random.Random(seed)
         self._err: str | None = None
@@ -217,13 +223,21 @@ class Node:
         else:
             self._state = NodeState.IDLE
         self._peers: dict[str, _PeerRec] = {}
-        self._replay: dict[str, tuple[int, bytes]] = {}
+        self._replay: dict[
+            str, tuple[int, bytes]
+        ] = {}  # origin -> (seq, canonical bytes)
         self._drops: dict[str, int] = dict.fromkeys(_COUNTER_KEYS, 0)
         self._dups = 0
         self._drops_reported: dict[str, int] = dict(self._drops)
         self._rx_drop_at = float("-inf")
         self._intent_cache: dict[str, _CachedIntent] = {}
-        self._rejected: dict[str, Version] = {}
+        # consumer id -> (rejected version, the producer that was rejected).
+        # Keyed on producer too so a corrected retry that reuses the
+        # version number but names a valid producer is not suppressed
+        # (ADR 0009 amendment; the CLI derives versions from the
+        # consumer's announced pairing, which a rejection does not
+        # advance, so version reuse is expected).
+        self._rejected: dict[str, tuple[Version, object]] = {}
         self._resend_at: dict[str, float] = {}
         self._ann_due = now
         self._retry_at: float | None = None
@@ -286,19 +300,31 @@ class Node:
         self._touch(now)
         if frame.origin == self._config.node_id:
             return []  # own multicast loopback
+        if frame.seq > (int(now) + SEQ_FUTURE_MARGIN_S) * NS_PER_S:
+            # Implausibly-far-future seq (nanoseconds): a spoofed
+            # high-water would otherwise stale-drop the real origin's
+            # frames indefinitely (ADR 0010). Reject without advancing the
+            # replay mark. Integer math keeps the ceiling exact.
+            self._drops["stale"] += 1
+            return []
+        # Dedup on canonical bytes (PROTOCOL.md replay defense; same basis
+        # as the snooper, so the oracle reproduces agent verdicts): a
+        # re-encoded copy of the same content at the same seq is a dup,
+        # not a distinct frame.
+        canon = canonical_bytes(json.loads(raw.decode("utf-8")))
         last = self._replay.get(frame.origin)
         if last is not None:
-            last_seq, last_raw = last
+            last_seq, last_canon = last
             if frame.seq < last_seq:
                 self._drops["stale"] += 1
                 return []
             if frame.seq == last_seq:
-                if raw == last_raw:
+                if canon == last_canon:
                     self._dups += 1
                     return []
                 self._drops["stale"] += 1
                 return []
-        self._replay[frame.origin] = (frame.seq, raw)
+        self._replay[frame.origin] = (frame.seq, canon)
         if frame.type is FrameType.ANN:
             return self._on_ann(frame, now)
         if frame.type is FrameType.INT:
@@ -321,6 +347,15 @@ class Node:
         self._touch(now)
         fx: list[Effect] = []
         prev = self._state
+        # A consumer with no pairing has nothing to be active/pending/error
+        # about: a status arriving from an attach that completed after an
+        # unpair is stale and must not resurrect a torn-down pairing.
+        if (
+            self._config.role is Role.CONSUMER
+            and self._pairing.producer is None
+            and status.state is not NodeState.IDLE
+        ):
+            return []
         if status.state is NodeState.ACTIVE:
             self._err = None
             self._backoff = RETRY_BACKOFF_BASE
@@ -363,6 +398,7 @@ class Node:
                 rec.lost = True
                 fx.append(self._evt("peer-lost", {"peer": pid, "reason": "timeout"}))
                 fx.extend(self._paired_producer_gone(pid, now))
+        self._prune(now)
         if self._retry_at is not None and now >= self._retry_at:
             self._retry_at = None
             fx.extend(self._fire_retry())
@@ -412,14 +448,22 @@ class Node:
         fx: list[Effect] = []
         if returned:
             fx.append(self._evt("peer-returned", {"peer": origin}))
-        if (
-            self._config.role is Role.CONSUMER
-            and self._pairing.producer == origin
-            and rec.media is not None
-            and (returned or self._attached_media != rec.media)
-        ):
-            self._attached_media = rec.media
-            fx.append(AttachMedia(origin, rec.media))
+        if self._config.role is Role.CONSUMER and self._pairing.producer == origin:
+            if rec.role is not Role.PRODUCER or rec.kind is not self._config.kind:
+                # The node we are paired to is not (or is no longer) a
+                # compatible producer: a role flip, or a wrong-kind
+                # producer we pending-paired to before it announced. Do
+                # not attach its media; fall back to pending so a later
+                # compatible announce can re-attach cleanly.
+                if self._attached_media is not None:
+                    self._attached_media = None
+                    fx.append(DetachMedia())
+                fx.extend(self._paired_producer_gone(origin, now))
+            elif rec.media is not None and (
+                returned or self._attached_media != rec.media
+            ):
+                self._attached_media = rec.media
+                fx.append(AttachMedia(origin, rec.media))
         if rec.role is Role.CONSUMER and rec.pairing is not None:
             entry = self._cache_get(origin, now)
             if entry is not None:
@@ -438,10 +482,15 @@ class Node:
             return [Log(f"malformed intent body from {frame.origin}")]
         op, consumer, producer, version = parsed
         rejected = self._rejected.get(consumer)
+        is_rejected = (
+            rejected is not None
+            and version_key(version) == version_key(rejected[0])
+            and producer == rejected[1]
+        )
         entry = self._cache_get(consumer, now)
-        if (entry is None or version_key(version) > version_key(entry.version)) and (
-            rejected is None or version_key(version) != version_key(rejected)
-        ):
+        if (
+            entry is None or version_key(version) > version_key(entry.version)
+        ) and not is_rejected:
             self._intent_cache[consumer] = _CachedIntent(version, dict(frame.body), now)
         cached = self._intent_cache.get(consumer)
         if (
@@ -485,14 +534,14 @@ class Node:
             return [self._ack(version, applied=False, reason="superseded")]
         if op == "pair":
             if not isinstance(producer, str) or not NODE_ID_RE.match(producer):
-                self._note_rejection(self._config.node_id, version)
+                self._note_rejection(self._config.node_id, version, producer)
                 return [self._ack(version, applied=False, reason="unknown-producer")]
             if producer == self._config.node_id:
-                self._note_rejection(self._config.node_id, version)
+                self._note_rejection(self._config.node_id, version, producer)
                 return [self._ack(version, applied=False, reason="self-pair")]
             peer = self._peers.get(producer)
             if peer is not None and peer.kind is not self._config.kind:
-                self._note_rejection(self._config.node_id, version)
+                self._note_rejection(self._config.node_id, version, producer)
                 return [self._ack(version, applied=False, reason="kind-mismatch")]
             return self._apply_pair(producer, version, now)
         return self._apply_unpair(version, now)
@@ -639,6 +688,33 @@ class Node:
             return rec.media
         return None
 
+    def _prune(self, now: float) -> None:
+        """Bound per-origin bookkeeping against id-cycling exhaustion
+        (ADR 0010). Never evict the currently paired producer."""
+        keep = self._pairing.producer
+        forgotten = [
+            pid
+            for pid, rec in self._peers.items()
+            if pid != keep
+            and (rec.departed or rec.lost)
+            and now - rec.last_seen > PEER_FORGET
+        ]
+        for pid in forgotten:
+            del self._peers[pid]
+            self._replay.pop(pid, None)
+        for name in ("_replay", "_peers", "_rejected", "_intent_cache"):
+            self._cap_fifo(getattr(self, name), keep)
+
+    @staticmethod
+    def _cap_fifo(mapping: dict[str, object], keep: str | None) -> None:
+        while len(mapping) > MAX_TRACKED:
+            for oldest in mapping:
+                if oldest != keep:
+                    del mapping[oldest]
+                    break
+            else:
+                break
+
     def _cache_get(self, consumer: str, now: float) -> _CachedIntent | None:
         entry = self._intent_cache.get(consumer)
         if entry is None:
@@ -651,11 +727,15 @@ class Node:
 
     _REJECTION_REASONS = frozenset({"self-pair", "kind-mismatch", "unknown-producer"})
 
-    def _note_rejection(self, consumer: str, version: Version) -> None:
-        """A consumer refused this intent version: stop offering it."""
+    def _note_rejection(
+        self, consumer: str, version: Version, producer: object
+    ) -> None:
+        """A consumer refused (version, producer): stop offering exactly
+        that intent, but leave a same-version different-producer retry
+        free to circulate."""
         prior = self._rejected.get(consumer)
-        if prior is None or version_key(version) > version_key(prior):
-            self._rejected[consumer] = version
+        if prior is None or version_key(version) >= version_key(prior[0]):
+            self._rejected[consumer] = (version, producer)
         entry = self._intent_cache.get(consumer)
         if entry is not None and version_key(entry.version) == version_key(version):
             del self._intent_cache[consumer]
@@ -666,6 +746,13 @@ class Node:
         version = _parse_version(body.get("version"), min_n=1)
         if version is None or body.get("applied") is not False:
             return []
-        if body.get("reason") in self._REJECTION_REASONS:
-            self._note_rejection(frame.origin, version)
+        if body.get("reason") not in self._REJECTION_REASONS:
+            return []
+        # The ack does not carry the producer; identify it from our own
+        # cached copy of the rejected intent. Without one we cannot tell a
+        # corrected retry apart, so we do not pin — self-healing (one more
+        # reject cycle) covers that rarer case.
+        entry = self._intent_cache.get(frame.origin)
+        if entry is not None and version_key(entry.version) == version_key(version):
+            self._note_rejection(frame.origin, version, entry.body.get("producer"))
         return []

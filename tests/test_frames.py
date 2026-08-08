@@ -539,3 +539,21 @@ def test_decode_tolerates_floats_in_body() -> None:
     obj = _open_frame(body={"rate": 1.5})
     frame = decode(_compact(obj), OPEN)
     assert frame.body == {"rate": 1.5}
+
+
+@pytest.mark.parametrize(
+    "sig",
+    ["é", "ÿ" * 64, "not-hex-but-ascii", "abc", "A" * 64, "0" * 63, "0" * 65],
+    ids=["nonascii1", "nonascii64", "ascii-nonhex", "short", "uppercase", "63", "65"],
+)
+def test_bad_sig_format_drops_as_auth_never_raises(sig: str) -> None:
+    """A non-hex sig — including non-ASCII, which would crash
+    hmac.compare_digest with TypeError — must drop as auth, not escape.
+    One crafted packet must never take down a receive loop."""
+    obj = _open_frame(sig=sig)
+    with pytest.raises(FrameDrop) as excinfo:
+        decode(_compact(obj), OPEN)
+    assert excinfo.value.reason is DropReason.AUTH
+    with pytest.raises(FrameDrop) as excinfo_keyed:
+        decode(_compact(obj), PSK)
+    assert excinfo_keyed.value.reason is DropReason.AUTH

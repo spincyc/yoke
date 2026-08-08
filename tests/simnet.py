@@ -350,8 +350,10 @@ class SimNet:
 
     def rejected_version(self, node_id: str, consumer: str) -> Version | None:
         """The version this node has pinned as consumer-rejected
-        (ADR 0009 eviction), if any."""
-        return self.nodes[node_id].node._rejected.get(consumer)
+        (ADR 0009 eviction), if any. The node stores (version, producer);
+        this returns just the version for assertions."""
+        pin = self.nodes[node_id].node._rejected.get(consumer)
+        return pin[0] if pin is not None else None
 
     def observed_winner(self, consumer: str) -> Version:
         """Highest intent version for ``consumer`` that any surviving

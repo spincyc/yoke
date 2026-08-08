@@ -331,14 +331,30 @@ class AgentRunner:
 
 
 class _SocketTransport:
-    """Bind ``sendto`` to the control group destination."""
+    """Bind ``sendto`` to the control group destination.
+
+    Send errors are swallowed: an interface flap or a full send buffer
+    (ENETUNREACH, ENOBUFS, EPERM) must not crash the agent — the protocol
+    is loss-tolerant (announce/CLI retries, anti-entropy). Repeated
+    failures are logged once until a send succeeds again, so an outage
+    does not flood the journal (and, under the shipped systemd unit,
+    does not trip the restart-rate limiter).
+    """
 
     def __init__(self, sock: socket.socket, dest: tuple[str, int]) -> None:
         self._sock = sock
         self._dest = dest
+        self._muted = False
 
     def sendto(self, raw: bytes) -> None:
-        self._sock.sendto(raw, self._dest)
+        try:
+            self._sock.sendto(raw, self._dest)
+        except OSError as exc:
+            if not self._muted:
+                _log.warning("multicast send failed (suppressing repeats): %s", exc)
+                self._muted = True
+            return
+        self._muted = False
 
 
 def _stable_seed(node_id: str) -> int:
@@ -367,7 +383,7 @@ async def run_agent_async(cfg: AgentConfig) -> None:
         media=driver.describe(),
         seed=_stable_seed(cfg.node.node_id),
     )
-    sock = open_multicast_socket(cfg.group, cfg.port)
+    sock = open_multicast_socket(cfg.group, cfg.port, interface=cfg.interface)
     sock.setblocking(False)
     loop = asyncio.get_running_loop()
 

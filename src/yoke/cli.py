@@ -304,13 +304,20 @@ def resolve_psk(
     """The PSK plus an optional stderr warning. OSError propagates for an
     explicitly named file; the default path is simply skipped if absent."""
     if explicit is not None:
-        psk = Path(explicit).read_bytes().strip()
+        psk = _read_psk(Path(explicit))
     elif default_path.exists():
-        psk = default_path.read_bytes().strip()
+        psk = _read_psk(default_path)
     else:
         psk = b""
     warning = None if psk else "warning: no PSK; open mode (frames unsigned)"
     return psk, warning
+
+
+def _read_psk(path: Path) -> bytes:
+    """Read a PSK the same way the agent does: strip only one trailing
+    newline (preserve raw key bytes)."""
+    raw = path.read_bytes()
+    return raw[:-1] if raw.endswith(b"\n") else raw
 
 
 # -- wiring ------------------------------------------------------------------

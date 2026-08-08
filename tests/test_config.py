@@ -40,19 +40,41 @@ class TestConfigLoad:
     def test_full(self, tmp_path: Path) -> None:
         psk = tmp_path / "psk"
         psk.write_bytes(b"sekrit\n")
+        psk.chmod(0o600)
         cfg = load(
             write_config(
                 tmp_path,
                 MINIMAL.format(state=tmp_path / "s.json")
                 + f'name = "Den TV"\npsk_file = "{psk}"\n'
-                + 'group = "239.1.2.3"\nport = 1234\n'
+                + 'group = "239.1.2.3"\nport = 1234\ninterface = "10.0.0.5"\n'
                 + '[driver]\ntype = "jap"\ndecoder_host = "10.0.0.20"\n',
             )
         )
         assert cfg.node.name == "Den TV"
-        assert cfg.psk == b"sekrit"  # stripped
+        assert cfg.psk == b"sekrit"  # only the trailing newline stripped
         assert (cfg.group, cfg.port) == ("239.1.2.3", 1234)
+        assert cfg.interface == "10.0.0.5"
         assert cfg.driver["type"] == "jap"
+
+    def test_psk_preserves_internal_and_whitespace_bytes(self, tmp_path: Path) -> None:
+        psk = tmp_path / "psk"
+        psk.write_bytes(b" \tkey with spaces \x00\n")  # only final \n stripped
+        psk.chmod(0o600)
+        cfg = load(
+            write_config(
+                tmp_path,
+                MINIMAL.format(state=tmp_path / "s.json") + f'psk_file = "{psk}"\n',
+            )
+        )
+        assert cfg.psk == b" \tkey with spaces \x00"
+
+    def test_group_or_other_readable_psk_refused(self, tmp_path: Path) -> None:
+        psk = tmp_path / "psk"
+        psk.write_bytes(b"sekrit")
+        psk.chmod(0o644)
+        text = MINIMAL.format(state=tmp_path / "s.json") + f'psk_file = "{psk}"\n'
+        with pytest.raises(ConfigError, match="group/other-accessible"):
+            load(write_config(tmp_path, text))
 
     def test_missing_file(self, tmp_path: Path) -> None:
         with pytest.raises(ConfigError, match="not found"):
@@ -86,6 +108,7 @@ class TestConfigLoad:
     def test_empty_psk_rejected(self, tmp_path: Path) -> None:
         psk = tmp_path / "psk"
         psk.write_bytes(b"\n")
+        psk.chmod(0o600)
         text = MINIMAL.format(state=tmp_path / "s.json") + f'psk_file = "{psk}"\n'
         with pytest.raises(ConfigError, match="empty"):
             load(write_config(tmp_path, text))

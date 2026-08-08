@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import hmac as hmac_mod
 import json
+import re
 from typing import Any
 
 from yoke.core.types import (
@@ -24,6 +25,7 @@ from yoke.core.types import (
 )
 
 _ENVELOPE_KEYS = {"v", "t", "id", "seq", "ts", "body", "sig"}
+_HEX_OR_EMPTY = re.compile(r"^(?:[0-9a-f]{64})?$")  # SHA-256 hex, or "" open mode
 
 
 class EncodeError(ValueError):
@@ -134,6 +136,13 @@ def decode(raw: bytes, psk: bytes) -> Frame:
     sig = obj["sig"]
     if not isinstance(sig, str):
         raise FrameDrop(DropReason.MALFORMED, "sig")
+    # sig must be SHA-256 hex (or "" in open mode). Reject any other
+    # string BEFORE compare_digest: that call raises TypeError on a
+    # non-ASCII str operand, and an attacker-chosen sig must never crash
+    # the receive loop — it drops as auth. This precedes verification,
+    # so without the guard it is a one-packet unauthenticated DoS.
+    if not _HEX_OR_EMPTY.match(sig):
+        raise FrameDrop(DropReason.AUTH, "sig format")
     unsigned = {k: v for k, v in obj.items() if k != "sig"}
     expected = _signature(unsigned, psk)
     if not hmac_mod.compare_digest(sig, expected):

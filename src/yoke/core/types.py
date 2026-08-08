@@ -27,6 +27,26 @@ CLI_DEADLINE = 10.0
 INTENT_CACHE_TTL = 24 * 3600.0
 SUPPRESSION_MIN = 0.2
 SUPPRESSION_MAX = 1.2
+# A well-behaved origin resumes seq at max(persisted+1, int(unix_time))
+# (ADR 0007), so a legitimate seq never runs far ahead of the receiver's
+# clock. Frames claiming a seq beyond this margin are rejected so a
+# spoofed high-water cannot permanently mute a real origin (ADR 0010).
+NS_PER_S = 1_000_000_000
+# Sequence numbers are Unix nanoseconds (ADR 0007): fine enough that a
+# burst of frames never collides within one origin, and consistent
+# between agents (which derive the floor from the seconds clock via
+# integer math) and the CLI (time.time_ns). A frame claiming a seq more
+# than SEQ_FUTURE_MARGIN_S seconds ahead of the receiver's clock is
+# rejected so a spoofed high-water cannot permanently mute a real origin
+# (ADR 0010).
+SEQ_FUTURE_MARGIN_S = 3600
+# Bounds on per-origin bookkeeping so a device cycling through distinct
+# node ids cannot exhaust memory (ADR 0010). A peer lost or departed for
+# longer than PEER_FORGET is dropped; the replay/rejection/intent maps
+# are FIFO-capped at MAX_TRACKED entries (the currently paired producer
+# is never evicted).
+PEER_FORGET = 300.0
+MAX_TRACKED = 4096
 
 NODE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
 

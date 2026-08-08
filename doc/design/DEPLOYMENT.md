@@ -27,11 +27,20 @@ defect) show up as bitrate where the snooper expects silence.
 | Path | Purpose |
 |---|---|
 | `/etc/yoke/agent.toml` | identity, role, kind, driver (see `examples/`) |
-| `/etc/yoke/psk` | site pre-shared key, mode 0600, raw bytes |
+| `/etc/yoke/psk` | site pre-shared key, mode 0600 |
 | `/var/lib/yoke/state.json` | pairing + sequence state (agent-managed) |
 
-Provision the PSK once per site: `head -c 32 /dev/urandom > /etc/yoke/psk`.
-Open mode (no `psk_file`) is for offline labs only.
+Provision the PSK once per site as hex (a single trailing newline is
+stripped on load; every other byte is significant, so hex avoids any raw
+`\n`/whitespace ambiguity):
+
+```
+( umask 077; head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' \
+    > /etc/yoke/psk )
+```
+
+Yoke refuses a `psk` file that is group- or other-readable. Open mode
+(no `psk_file`) is for offline labs only.
 
 ## Service
 

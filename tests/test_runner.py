@@ -315,8 +315,11 @@ async def test_driver_poll_error_is_reported_as_status() -> None:
         def poll(self) -> Any:
             raise RuntimeError("device on fire")
 
-    driver = ExplodingDriver()
-    h = make_harness(driver=driver, driver_poll_interval=0.02)
+    # Use a producer: an unpaired consumer deliberately ignores non-idle
+    # driver status (a torn-down attach must not resurrect state), so the
+    # driver-error surfaces on a node that is actually driving media.
+    driver = ExplodingDriver(media=PROD_MEDIA)
+    h = make_harness(role=Role.PRODUCER, driver=driver, driver_poll_interval=0.02)
     h.task = asyncio.create_task(h.runner.run())
     try:
         await eventually(lambda: "driver-error" in h.events())

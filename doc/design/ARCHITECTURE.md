@@ -96,17 +96,20 @@ src/yoke/
   core/          sans-I/O protocol core — stdlib only, no sockets, no clock
     frames.py    wire format: canonical encode/decode, HMAC, validation
     node.py      agent state machine (producer & consumer behaviors)
-    types.py     shared dataclasses and enums
+    types.py     shared dataclasses, enums, and constants
   net/
-    mcast.py     asyncio UDP multicast transport
-    runner.py    wires core.node to mcast + a driver + persisted state
+    mcast.py     UDP multicast socket helper (interface-selectable)
+    runner.py    wires core.node to the socket + a driver + persisted state
   drivers/
-    base.py      Driver protocol: apply(pairing), poll(), describe()
+    base.py      Driver protocol: attach(producer, media), detach(), poll(), describe()
     sim.py       in-memory driver with scriptable fault injection (tests)
     igmp.py      decoder-side multicast join/leave (reference software path)
-    usbip.py     usbip attach/detach via injected command runner
+    usbip.py     usbip attach/detach + producer bind/unbind
+    jap.py       Just Add Power decoder API driver (channel switching)
     shellcmd.py  command-runner abstraction (mockable; never shell=True)
-  cli.py         yoke pair|unpair|status|snoop
+  config.py      per-agent TOML config with fail-fast validation
+  statefile.py   atomic (write-fsync-rename) persisted-state load/save
+  cli.py         yoke pair|unpair|status|snoop|agent
   snoop.py       passive decoder/renderer for the control group
 ```
 
