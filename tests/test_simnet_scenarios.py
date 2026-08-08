@@ -438,3 +438,149 @@ def test_rejected_intent_evicted_then_higher_valid_intent_converges() -> None:
     net.run(5.0)
     assert net.agree("con-1") == Pairing("prod-1", good)
     assert net.state_of("con-1") is NodeState.ACTIVE
+
+
+# -- scenario: shared HDMI producer, two independent consumers -----------------
+
+
+def test_two_consumers_one_hdmi_producer_both_active() -> None:
+    # HDMI producers are inherently shareable: each decoder joins the
+    # encoder's multicast group independently, so two consumers pairing
+    # to the same producer both go active, each under its own
+    # per-consumer version (ARCHITECTURE.md, "What yoke is not").
+    net = SimNet(seed=15)
+    mesh(net, producers=1, consumers=2)
+    v1, _ = net.send_intent("pair", "con-1", "prod-1", version=(1, CLI))
+    net.run(2.0)
+    v2, _ = net.send_intent("pair", "con-2", "prod-1", version=(1, CLI))
+    net.run(4.0)
+    assert net.agree("con-1") == Pairing("prod-1", v1)
+    assert net.agree("con-2") == Pairing("prod-1", v2)
+    for consumer in ("con-1", "con-2"):
+        assert net.state_of(consumer) is NodeState.ACTIVE
+        assert net.nodes[consumer].driver.attached_to == "prod-1"
+        assert applied_acks(net, consumer, (1, CLI))
+    assert net.quiescent()
+
+
+# -- scenario: re-pair a consumer from one producer to another -----------------
+
+
+def test_repair_consumer_from_one_producer_to_another() -> None:
+    net = SimNet(seed=16)
+    mesh(net, producers=2, consumers=1)
+    first, _ = net.send_intent("pair", "con-1", "prod-1", version=(1, CLI))
+    net.run(2.0)
+    assert net.pairing_of("con-1") == Pairing("prod-1", first)
+    assert net.state_of("con-1") is NodeState.ACTIVE
+    second, _ = net.send_intent("pair", "con-1", "prod-2", version=(2, CLI))
+    net.run(4.0)
+    # NOTE: re-pairing replaces the attachment with a direct re-attach,
+    # not a DetachMedia/AttachMedia sequence: the driver contract treats
+    # attach-while-attached as a switch (SimDriver: "idempotent
+    # re-attach"; an IGMP driver leaves the old group as part of joining
+    # the new one). Only an explicit unpair emits DetachMedia.
+    calls = net.nodes["con-1"].driver.calls
+    assert [c[1] for c in calls if c[0] == "attach"] == ["prod-1", "prod-2"]
+    assert ("detach",) not in calls
+    assert net.nodes["con-1"].driver.attached_to == "prod-2"
+    assert net.agree("con-1") == Pairing("prod-2", second)
+    assert net.state_of("con-1") is NodeState.ACTIVE
+    assert applied_acks(net, "con-1", second)
+    assert net.quiescent()
+
+
+# -- scenario: producer reboots midstream --------------------------------------
+
+
+def test_producer_reboot_midstream_consumer_recovers() -> None:
+    net = SimNet(seed=17)
+    mesh(net, producers=1, consumers=1)
+    version, _ = net.send_intent("pair", "con-1", "prod-1", version=(1, CLI))
+    net.run(2.0)
+    assert net.state_of("con-1") is NodeState.ACTIVE
+    # the producer crashes mid-stream: silent for longer than
+    # PEER_TIMEOUT before its replacement process comes up
+    net.set_offline("prod-1")
+    net.run(8.0)  # > PEER_TIMEOUT
+    slugs = net.event_slugs("con-1")
+    assert "peer-lost" in slugs
+    assert "media-pending" in slugs
+    assert net.state_of("con-1") is NodeState.PENDING
+    assert net.pairing_of("con-1") == Pairing("prod-1", version)  # retained
+    # producers are passive, so losing persisted state is harmless
+    net.reboot("prod-1", lose_state=True)
+    net.run(5.0)
+    assert "peer-returned" in net.event_slugs("con-1")
+    assert net.state_of("con-1") is NodeState.ACTIVE
+    assert net.nodes["con-1"].driver.attached_to == "prod-1"
+    assert net.agree("con-1") == Pairing("prod-1", version)
+    assert net.quiescent()
+
+
+# -- scenario: forged tear-down of a live pairing under a wrong PSK ------------
+
+
+def test_forged_frame_wrong_psk_ignored() -> None:
+    # SimNet's bus verifies every datagram against one shared PSK, so a
+    # per-node PSK mismatch cannot be modeled per-link; the equivalent
+    # field failure is a mis-keyed (or malicious) sender whose frames
+    # hit the group: every receiver drops them as auth and the live
+    # pairing is untouched. Here the forgery tries to unpair an ACTIVE
+    # consumer.
+    net = SimNet(seed=18)
+    mesh(net, producers=1, consumers=1)
+    version, _ = net.send_intent("pair", "con-1", "prod-1", version=(1, CLI))
+    net.run(2.0)
+    assert net.state_of("con-1") is NodeState.ACTIVE
+    body: Body = {"op": "unpair", "consumer": "con-1", "version": [9, "attacker"]}
+    forged = encode(FrameType.INT, "attacker", 1, net.now, body, b"not-the-psk")
+    auth_before = {n: net.drops_of(n)["auth"] for n in ("prod-1", "con-1")}
+    net.inject_raw(forged, sender="attacker")
+    net.run(3.0)
+    for node_id, before in auth_before.items():
+        assert net.drops_of(node_id)["auth"] == before + 1
+    rx_drops = [b for b in net.events("con-1") if b.get("event") == "rx-drop"]
+    assert rx_drops
+    assert rx_drops[-1]["detail"]["auth"] == auth_before["con-1"] + 1
+    assert net.agree("con-1") == Pairing("prod-1", version)
+    assert net.state_of("con-1") is NodeState.ACTIVE
+    assert net.nodes["con-1"].driver.attached_to == "prod-1"
+    assert net.quiescent()
+
+
+# -- scenario: unpair then re-pair to a different producer ---------------------
+
+
+def test_unpair_then_repair_same_consumer() -> None:
+    net = SimNet(seed=19)
+    mesh(net, producers=2, consumers=1)
+    v_pair, _ = net.send_intent("pair", "con-1", "prod-1", version=(1, CLI))
+    net.run(2.0)
+    assert net.pairing_of("con-1") == Pairing("prod-1", v_pair)
+    assert net.state_of("con-1") is NodeState.ACTIVE
+    v_unpair, _ = net.send_intent("unpair", "con-1", version=(2, CLI))
+    net.run(2.0)
+    assert net.pairing_of("con-1") == Pairing(None, v_unpair)
+    assert net.state_of("con-1") is NodeState.IDLE
+    assert net.nodes["con-1"].driver.attached_to is None
+    # NOTE: unpair emits no "media-down" event: _apply_unpair sets the
+    # node IDLE before DetachMedia runs, so when the driver's IDLE
+    # status is fed back the state is already IDLE and the transition
+    # branch does not fire. The teardown surfaces as "pairing-applied"
+    # (producer null) plus the immediate idle announce; "media-down"
+    # only fires when the driver reports IDLE while the node still
+    # believes media is up (spontaneous media loss).
+    assert "media-down" not in net.event_slugs("con-1")
+    v_repair, _ = net.send_intent("pair", "con-1", "prod-2", version=(3, CLI))
+    net.run(4.0)
+    calls = net.nodes["con-1"].driver.calls
+    assert [c[0] for c in calls] == ["attach", "detach", "attach"]
+    assert (calls[0][1], calls[2][1]) == ("prod-1", "prod-2")
+    assert net.agree("con-1") == Pairing("prod-2", v_repair)
+    assert net.state_of("con-1") is NodeState.ACTIVE
+    assert net.event_slugs("con-1").count("pairing-applied") == 3
+    # applied versions are strictly increasing across the sequence
+    applied = [a["version"] for a in net.acks("con-1") if a["applied"] is True]
+    assert applied == [[1, CLI], [2, CLI], [3, CLI]]
+    assert net.quiescent()
