@@ -16,11 +16,18 @@ Spec notes:
 - ``AttachMedia`` at intent-apply time requires the producer peer to be
   live (known and not departed/lost); a departed peer's stale media is
   treated as unknown and attach happens on its return.
-- A byte-identical duplicate ``int`` datagram still cancels a pending
-  anti-entropy resend even though it is dropped as ``dup``: re-sent
-  cached intents are verbatim copies (original origin/seq/sig), so
-  without this the suppression window could never observe a peer's
-  resend.
+- Anti-entropy re-sends are RE-ISSUED, not verbatim (ADR 0009): a
+  cached intent body is sent as a fresh ``int`` frame under this node's
+  own origin and seq. Verbatim re-sends (the original design) livelock:
+  once the target consumer has seen any higher-seq frame from the
+  intent's author, replay defense stale-drops the verbatim copy
+  forever. The version inside the body preserves authorship and total
+  order; suppression observes peers' re-issues through the normal
+  ``int`` path.
+- Intents rejected by their consumer (observed via the multicast ack:
+  self-pair, kind-mismatch, unknown-producer) are evicted from the
+  anti-entropy cache and remembered per consumer, so a doomed
+  highest-version intent is not re-offered forever.
 - Peer timeout uses a 1 ms epsilon in ``next_deadline()`` so that
   polling exactly at the returned instant satisfies the strict
   ``now - last_seen > PEER_TIMEOUT`` test.
@@ -64,7 +71,6 @@ from yoke.core.types import (
     PersistedState,
     Role,
     SendFrame,
-    SendRaw,
     Version,
     version_key,
 )
@@ -106,7 +112,7 @@ class _PeerRec:
 @dataclass(frozen=True)
 class _CachedIntent:
     version: Version
-    raw: bytes
+    body: Body
     cached_at: float
 
 
@@ -137,10 +143,19 @@ def _parse_intent(body: Body) -> tuple[str, str, object, Version] | None:
 
 def _parse_ann(body: Body, now: float) -> _PeerRec | None:
     """Defensively parse an ``ann`` body into a peer record."""
+    role_raw = body.get("role")
+    kind_raw = body.get("kind")
+    state_raw = body.get("state")
+    if (
+        not isinstance(role_raw, str)
+        or not isinstance(kind_raw, str)
+        or not isinstance(state_raw, str)
+    ):
+        return None
     try:
-        role = Role(body.get("role"))
-        kind = Kind(body.get("kind"))
-        state = NodeState(body.get("state"))
+        role = Role(role_raw)
+        kind = Kind(kind_raw)
+        state = NodeState(state_raw)
     except ValueError:
         return None
     name = body.get("name")
@@ -208,6 +223,7 @@ class Node:
         self._drops_reported: dict[str, int] = dict(self._drops)
         self._rx_drop_at = float("-inf")
         self._intent_cache: dict[str, _CachedIntent] = {}
+        self._rejected: dict[str, Version] = {}
         self._resend_at: dict[str, float] = {}
         self._ann_due = now
         self._retry_at: float | None = None
@@ -279,8 +295,6 @@ class Node:
             if frame.seq == last_seq:
                 if raw == last_raw:
                     self._dups += 1
-                    if frame.type is FrameType.INT:
-                        self._cancel_resend_for_dup_int(frame, now)
                     return []
                 self._drops["stale"] += 1
                 return []
@@ -288,10 +302,12 @@ class Node:
         if frame.type is FrameType.ANN:
             return self._on_ann(frame, now)
         if frame.type is FrameType.INT:
-            return self._on_int(frame, raw, now)
+            return self._on_int(frame, now)
+        if frame.type is FrameType.ACK:
+            return self._on_ack(frame, now)
         if frame.type is FrameType.BYE:
             return self._on_bye(frame, now)
-        return []  # ack/evt: observed, not acted on
+        return []  # evt: observed, not acted on
 
     def on_drop(self, reason: DropReason, now: float) -> list[Effect]:
         self._touch(now)
@@ -354,7 +370,10 @@ class Node:
             del self._resend_at[cid]
             entry = self._cache_get(cid, now)
             if entry is not None:
-                fx.append(SendRaw(entry.raw))
+                # Re-issue under our own origin/seq (ADR 0009): a verbatim
+                # copy would be stale-dropped whenever the author has since
+                # sent higher-seq traffic.
+                fx.append(self._send(FrameType.INT, dict(entry.body)))
         if now >= self._ann_due:
             fx.append(self._ann(now))
         if (
@@ -412,18 +431,23 @@ class Node:
                     self._resend_at.pop(origin, None)
         return fx
 
-    def _on_int(self, frame: Frame, raw: bytes, now: float) -> list[Effect]:
+    def _on_int(self, frame: Frame, now: float) -> list[Effect]:
         parsed = _parse_intent(frame.body)
         if parsed is None:
             self._drops["malformed"] += 1
             return [Log(f"malformed intent body from {frame.origin}")]
         op, consumer, producer, version = parsed
+        rejected = self._rejected.get(consumer)
         entry = self._cache_get(consumer, now)
-        if entry is None or version_key(version) > version_key(entry.version):
-            self._intent_cache[consumer] = _CachedIntent(version, raw, now)
-        cached = self._intent_cache[consumer]
-        if consumer in self._resend_at and version_key(version) >= version_key(
-            cached.version
+        if (entry is None or version_key(version) > version_key(entry.version)) and (
+            rejected is None or version_key(version) != version_key(rejected)
+        ):
+            self._intent_cache[consumer] = _CachedIntent(version, dict(frame.body), now)
+        cached = self._intent_cache.get(consumer)
+        if (
+            consumer in self._resend_at
+            and cached is not None
+            and version_key(version) >= version_key(cached.version)
         ):
             del self._resend_at[consumer]
         if self._config.role is Role.CONSUMER and consumer == self._config.node_id:
@@ -461,11 +485,14 @@ class Node:
             return [self._ack(version, applied=False, reason="superseded")]
         if op == "pair":
             if not isinstance(producer, str) or not NODE_ID_RE.match(producer):
+                self._note_rejection(self._config.node_id, version)
                 return [self._ack(version, applied=False, reason="unknown-producer")]
             if producer == self._config.node_id:
+                self._note_rejection(self._config.node_id, version)
                 return [self._ack(version, applied=False, reason="self-pair")]
             peer = self._peers.get(producer)
             if peer is not None and peer.kind is not self._config.kind:
+                self._note_rejection(self._config.node_id, version)
                 return [self._ack(version, applied=False, reason="kind-mismatch")]
             return self._apply_pair(producer, version, now)
         return self._apply_unpair(version, now)
@@ -622,14 +649,23 @@ class Node:
             return None
         return entry
 
-    def _cancel_resend_for_dup_int(self, frame: Frame, now: float) -> None:
-        """Suppression: a peer re-sent a cached intent (byte-identical dup)."""
-        parsed = _parse_intent(frame.body)
-        if parsed is None:
-            return
-        _, consumer, _, version = parsed
-        if consumer not in self._resend_at:
-            return
-        entry = self._cache_get(consumer, now)
-        if entry is not None and version_key(version) >= version_key(entry.version):
-            del self._resend_at[consumer]
+    _REJECTION_REASONS = frozenset({"self-pair", "kind-mismatch", "unknown-producer"})
+
+    def _note_rejection(self, consumer: str, version: Version) -> None:
+        """A consumer refused this intent version: stop offering it."""
+        prior = self._rejected.get(consumer)
+        if prior is None or version_key(version) > version_key(prior):
+            self._rejected[consumer] = version
+        entry = self._intent_cache.get(consumer)
+        if entry is not None and version_key(entry.version) == version_key(version):
+            del self._intent_cache[consumer]
+            self._resend_at.pop(consumer, None)
+
+    def _on_ack(self, frame: Frame, now: float) -> list[Effect]:
+        body = frame.body
+        version = _parse_version(body.get("version"), min_n=1)
+        if version is None or body.get("applied") is not False:
+            return []
+        if body.get("reason") in self._REJECTION_REASONS:
+            self._note_rejection(frame.origin, version)
+        return []

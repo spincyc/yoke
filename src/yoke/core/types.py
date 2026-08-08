@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 PROTOCOL_VERSION = 1
@@ -36,24 +36,24 @@ VERSION_ZERO: Version = (0, "")
 Body = dict[str, Any]
 
 
-class Role(str, Enum):
+class Role(StrEnum):
     PRODUCER = "producer"
     CONSUMER = "consumer"
 
 
-class Kind(str, Enum):
+class Kind(StrEnum):
     HDMI = "hdmi"
     USB = "usb"
 
 
-class NodeState(str, Enum):
+class NodeState(StrEnum):
     IDLE = "idle"
     PENDING = "pending"
     ACTIVE = "active"
     ERROR = "error"
 
 
-class FrameType(str, Enum):
+class FrameType(StrEnum):
     ANN = "ann"
     INT = "int"
     ACK = "ack"
@@ -61,7 +61,7 @@ class FrameType(str, Enum):
     BYE = "bye"
 
 
-class DropReason(str, Enum):
+class DropReason(StrEnum):
     """Counter slugs for dropped inbound frames (PROTOCOL.md)."""
 
     MALFORMED = "malformed"
@@ -162,8 +162,12 @@ class SendFrame:
 
 @dataclass(frozen=True)
 class SendRaw:
-    """Re-multicast a previously received datagram verbatim (anti-entropy:
-    cached intents keep their original origin, seq, and signature)."""
+    """Re-multicast a previously received datagram verbatim.
+
+    No longer emitted by the core: verbatim anti-entropy re-sends
+    livelock against replay defense (ADR 0009) — cached intents are
+    re-issued as fresh ``SendFrame`` ints instead. Retained because the
+    shell supports it and replay tooling may use it deliberately."""
 
     raw: bytes
 

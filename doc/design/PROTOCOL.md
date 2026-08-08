@@ -181,13 +181,25 @@ re-attached.
 
 ## Anti-entropy
 
-All agents cache the highest-version `int` per consumer (full frame,
-re-sendable). On receiving `ann` from consumer C whose
-`pairing.version <` cached version for C: schedule re-multicast of the
-cached intent after a deterministic jitter in `[0.2 s, 1.2 s]` (seeded
-per node); cancel if any peer re-sends it first (suppression). This
-converges consumers that were offline when an intent was sent, without
-any coordinator. Cache entries expire after `INTENT_CACHE_TTL` (24 h).
+All agents cache the highest-version `int` **body** per consumer. On
+receiving `ann` from consumer C whose `pairing.version <` cached
+version for C: schedule a re-issue of the cached intent after a
+deterministic jitter in `[0.2 s, 1.2 s]` (seeded per node); cancel if
+any `int` for C with a version `>=` the cached one is heard first
+(suppression). A re-issue is a **fresh frame under the relayer's own
+origin and seq** carrying the cached body unchanged — the `version`
+inside the body preserves authorship and total order. Re-issuing
+verbatim copies is forbidden: they livelock against replay defense
+whenever the original author has since sent higher-seq traffic
+(ADR 0009). This converges consumers that were offline when an intent
+was sent, without any coordinator. Cache entries expire after
+`INTENT_CACHE_TTL` (24 h).
+
+Agents observe `ack` frames: an ack with `applied: false` and a
+rejection reason (`self-pair`, `kind-mismatch`, `unknown-producer`) for
+version V of consumer C evicts a cached intent of exactly version V for
+C everywhere and marks V as rejected there, so a doomed highest-version
+intent is not re-offered forever. `superseded` acks evict nothing.
 
 ## Timing constants
 

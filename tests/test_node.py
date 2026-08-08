@@ -33,7 +33,6 @@ from yoke.core.types import (
     PersistedState,
     Role,
     SendFrame,
-    SendRaw,
     Version,
 )
 
@@ -128,8 +127,8 @@ def attaches(fx: list[Effect]) -> list[AttachMedia]:
     return [e for e in fx if isinstance(e, AttachMedia)]
 
 
-def raws(fx: list[Effect]) -> list[SendRaw]:
-    return [e for e in fx if isinstance(e, SendRaw)]
+def ints(fx: list[Effect]) -> list[SendFrame]:
+    return sends(fx, FrameType.INT)
 
 
 class Loop:
@@ -628,20 +627,26 @@ def test_own_frames_ignored_silently() -> None:
 # -- anti-entropy ------------------------------------------------------------
 
 
-def test_anti_entropy_resend_fires_with_cached_raw() -> None:
+def test_anti_entropy_reissues_cached_body_under_own_seq() -> None:
     loop = Loop(role=Role.PRODUCER, node_id="watch-1", media=HDMI_MEDIA)
-    frame, raw = build_frame(
-        FrameType.INT, "cli", 1, pair_body("con-9", "prod-1", (3, "cli"))
-    )
-    assert loop.feed_pair(frame, raw) == []
+    body = pair_body("con-9", "prod-1", (3, "cli"))
+    assert loop.feed(FrameType.INT, "cli", body) == []
     loop.feed(FrameType.ANN, "con-9", consumer_ann((1, "cli"), "prod-0"))
     due = loop.node.next_deadline()
     assert T0 + SUPPRESSION_MIN <= due <= T0 + SUPPRESSION_MAX
     fx = loop.poll_at(due)
-    assert raws(fx) == [SendRaw(raw)]
+    assert all(isinstance(e, SendFrame) for e in fx)  # never SendRaw (ADR 0009)
+    (reissue,) = ints(fx)
+    # the cached BODY is re-issued: version (incl. original author) preserved
+    assert reissue.body == body
+    assert reissue.body["version"] == [3, "cli"]
+    # ... but under the relayer's own seq counter, not the author's seq 1
+    assert reissue.seq > int(T0)
+    ann_after = sends(loop.poll_at(loop.node.next_deadline()), FrameType.ANN)[0]
+    assert ann_after.seq > reissue.seq  # same counter as the relayer's own frames
     # fires at most once per scheduling
-    fx = loop.poll_at(due + ANN_INTERVAL)
-    assert raws(fx) == []
+    fx = loop.poll_at(loop.now + ANN_INTERVAL)
+    assert ints(fx) == []
 
 
 def test_anti_entropy_suppressed_by_newer_intent() -> None:
@@ -652,21 +657,20 @@ def test_anti_entropy_suppressed_by_newer_intent() -> None:
     assert due <= T0 + SUPPRESSION_MAX
     loop.feed(FrameType.INT, "cli", pair_body("con-9", "prod-2", (4, "cli")))
     fx = loop.poll_at(T0 + SUPPRESSION_MAX + 0.1)
-    assert raws(fx) == []
+    assert ints(fx) == []
 
 
-def test_anti_entropy_suppressed_by_peer_resend_dup() -> None:
+def test_anti_entropy_suppressed_by_peer_reissue() -> None:
     loop = Loop(role=Role.PRODUCER, node_id="watch-1", media=HDMI_MEDIA)
-    frame, raw = build_frame(
-        FrameType.INT, "cli", 1, pair_body("con-9", "prod-1", (3, "cli"))
-    )
-    loop.feed_pair(frame, raw)
+    body = pair_body("con-9", "prod-1", (3, "cli"))
+    loop.feed(FrameType.INT, "cli", body)
     loop.feed(FrameType.ANN, "con-9", consumer_ann((1, "cli"), "prod-0"))
     assert loop.node.next_deadline() <= T0 + SUPPRESSION_MAX
-    # another agent re-multicasts the cached intent verbatim first
-    assert loop.feed_pair(frame, raw) == []
+    # another agent won the suppression race and re-issued the same intent
+    # body under its own origin and seq: heard via the ordinary int path
+    assert loop.feed(FrameType.INT, "relay-2", body) == []
     fx = loop.poll_at(T0 + SUPPRESSION_MAX + 0.1)
-    assert raws(fx) == []
+    assert ints(fx) == []
 
 
 def test_anti_entropy_cancelled_by_current_ann() -> None:
@@ -675,7 +679,7 @@ def test_anti_entropy_cancelled_by_current_ann() -> None:
     loop.feed(FrameType.ANN, "con-9", consumer_ann((1, "cli"), "prod-0"))
     loop.feed(FrameType.ANN, "con-9", consumer_ann((3, "cli"), "prod-1"))
     fx = loop.poll_at(T0 + SUPPRESSION_MAX + 0.1)
-    assert raws(fx) == []
+    assert ints(fx) == []
 
 
 def test_intent_cache_ttl_expiry() -> None:
@@ -686,22 +690,102 @@ def test_intent_cache_ttl_expiry() -> None:
     loop.feed(FrameType.ANN, "con-9", consumer_ann((1, "cli"), "prod-0"))
     assert loop.node.next_deadline() > late + SUPPRESSION_MAX
     fx = loop.poll_at(late + SUPPRESSION_MAX + 0.1)
-    assert raws(fx) == []
+    assert ints(fx) == []
 
 
 def test_consumer_caches_and_serves_intents_for_other_consumers() -> None:
     loop = Loop()  # consumer role
-    frame, raw = build_frame(
-        FrameType.INT, "cli", 1, pair_body("con-9", "prod-1", (3, "cli"))
-    )
-    fx = loop.feed_pair(frame, raw)
+    body = pair_body("con-9", "prod-1", (3, "cli"))
+    fx = loop.feed(FrameType.INT, "cli", body)
     assert sends(fx, FrameType.ACK) == []  # not addressed to us: no ack
     assert loop.node.pairing == Pairing(None, (0, ""))
     loop.feed(FrameType.ANN, "con-9", consumer_ann((1, "cli"), "prod-0"))
     due = loop.node.next_deadline()
     assert due <= T0 + SUPPRESSION_MAX
     fx = loop.poll_at(due)
-    assert raws(fx) == [SendRaw(raw)]
+    (reissue,) = ints(fx)
+    assert reissue.body == body
+
+
+def test_livelock_regression_reissue_survives_authors_later_traffic() -> None:
+    """ADR 0009: verbatim resends livelock once the author sent higher seqs.
+
+    Bystander B caches cli-x's intent (seq 1) for consumer A, then hears
+    cli-x seq 2. A verbatim copy of seq 1 would now be stale-dropped by
+    anyone who heard seq 2 — including A after partial reception. The
+    re-issue must therefore be a fresh int under B's own origin and seq.
+    """
+    loop = Loop(role=Role.PRODUCER, node_id="watch-1", media=HDMI_MEDIA)
+    body = pair_body("con-9", "prod-1", (3, "cli-x"))
+    loop.feed(FrameType.INT, "cli-x", body)  # cli-x seq 1: cached for con-9
+    # any later frame from the author bumps its replay high-water mark
+    assert loop.feed(FrameType.EVT, "cli-x", {"event": "noop", "detail": {}}) == []
+    loop.feed(FrameType.ANN, "con-9", consumer_ann((1, "cli-x"), "prod-0"))
+    due = loop.node.next_deadline()
+    assert due <= T0 + SUPPRESSION_MAX
+    fx = loop.poll_at(due)
+    (reissue,) = ints(fx)
+    assert reissue.body == body
+    assert reissue.body["version"] == [3, "cli-x"]  # authorship preserved
+    # fresh seq from B's own counter, far above anything cli-x ever sent,
+    # so con-9's replay defense accepts the relay
+    assert reissue.seq > int(T0)
+    assert reissue.seq > 2
+
+
+def test_rejection_ack_evicts_cache_and_blocks_recache() -> None:
+    loop = Loop(role=Role.PRODUCER, node_id="watch-1", media=HDMI_MEDIA)
+    doomed = pair_body("con-9", "con-9", (3, "cli"))  # self-pair: A rejects it
+    loop.feed(FrameType.INT, "cli", doomed)
+    fx = loop.feed(
+        FrameType.ACK,
+        "con-9",
+        {"version": [3, "cli"], "applied": False, "reason": "self-pair"},
+    )
+    assert fx == []
+    # A still announces an older pairing: nothing may be scheduled or sent
+    loop.feed(FrameType.ANN, "con-9", consumer_ann((1, "cli"), None))
+    assert loop.node.next_deadline() > T0 + SUPPRESSION_MAX
+    fx = loop.poll_at(T0 + SUPPRESSION_MAX + 0.1)
+    assert ints(fx) == []
+    # a re-delivered copy of the rejected intent must not re-enter the cache
+    loop.feed(FrameType.INT, "cli", doomed)  # fresh seq, same body
+    loop.feed(FrameType.ANN, "con-9", consumer_ann((1, "cli"), None))
+    fx = loop.poll_at(loop.now + SUPPRESSION_MAX + 0.1)
+    assert ints(fx) == []
+    fx = loop.poll_at(loop.now + SUPPRESSION_MAX + 0.1)  # any later schedule too
+    assert ints(fx) == []
+
+
+def test_newer_intent_after_rejection_is_cached_and_reoffered() -> None:
+    loop = Loop(role=Role.PRODUCER, node_id="watch-1", media=HDMI_MEDIA)
+    loop.feed(FrameType.INT, "cli", pair_body("con-9", "con-9", (3, "cli")))
+    loop.feed(
+        FrameType.ACK,
+        "con-9",
+        {"version": [3, "cli"], "applied": False, "reason": "self-pair"},
+    )
+    fixed = pair_body("con-9", "prod-1", (4, "cli"))  # higher version: valid again
+    loop.feed(FrameType.INT, "cli", fixed)
+    loop.feed(FrameType.ANN, "con-9", consumer_ann((1, "cli"), None))
+    due = loop.node.next_deadline()
+    assert due <= loop.now + SUPPRESSION_MAX
+    fx = loop.poll_at(due)
+    (reissue,) = ints(fx)
+    assert reissue.body == fixed
+    assert reissue.body["version"] == [4, "cli"]
+
+
+def test_consumer_records_own_rejection_and_never_reoffers_it() -> None:
+    loop = Loop()  # consumer node-1
+    fx = loop.feed(FrameType.INT, "cli", pair_body("node-1", "node-1", (1, "cli")))
+    ack = sends(fx, FrameType.ACK)[0]
+    assert ack.body["applied"] is False and ack.body["reason"] == "self-pair"
+    # across several announce periods the consumer must never re-offer the
+    # intent it rejected for itself
+    for _ in range(5):
+        fx = loop.poll_at(loop.node.next_deadline())
+        assert ints(fx) == []
 
 
 # -- producer behavior -------------------------------------------------------
