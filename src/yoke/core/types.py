@@ -1,0 +1,196 @@
+"""Shared vocabulary of the yoke control plane.
+
+Everything here is pure data. The wire representations live in
+``frames.py``; the behavior lives in ``node.py``. See
+doc/design/PROTOCOL.md for the normative definitions.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any
+
+PROTOCOL_VERSION = 1
+CONTROL_GROUP = "239.121.111.107"
+CONTROL_PORT = 9753
+MAX_FRAME_BYTES = 1200
+
+ANN_INTERVAL = 2.0
+ANN_JITTER = 0.25  # +/- fraction of ANN_INTERVAL
+PEER_TIMEOUT = 6.5
+RETRY_BACKOFF_BASE = 1.0
+RETRY_BACKOFF_CAP = 30.0
+CLI_RETRIES = 5
+CLI_DEADLINE = 10.0
+INTENT_CACHE_TTL = 24 * 3600.0
+SUPPRESSION_MIN = 0.2
+SUPPRESSION_MAX = 1.2
+
+NODE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
+
+Version = tuple[int, str]
+VERSION_ZERO: Version = (0, "")
+
+Body = dict[str, Any]
+
+
+class Role(str, Enum):
+    PRODUCER = "producer"
+    CONSUMER = "consumer"
+
+
+class Kind(str, Enum):
+    HDMI = "hdmi"
+    USB = "usb"
+
+
+class NodeState(str, Enum):
+    IDLE = "idle"
+    PENDING = "pending"
+    ACTIVE = "active"
+    ERROR = "error"
+
+
+class FrameType(str, Enum):
+    ANN = "ann"
+    INT = "int"
+    ACK = "ack"
+    EVT = "evt"
+    BYE = "bye"
+
+
+class DropReason(str, Enum):
+    """Counter slugs for dropped inbound frames (PROTOCOL.md)."""
+
+    MALFORMED = "malformed"
+    VERSION = "version"
+    AUTH = "auth"
+    STALE = "stale"
+    DUP = "dup"
+    OVERSIZE = "oversize"
+
+
+@dataclass(frozen=True)
+class Frame:
+    """A decoded, authenticated control frame."""
+
+    type: FrameType
+    origin: str
+    seq: int
+    ts: float
+    body: Body
+
+
+@dataclass(frozen=True)
+class Pairing:
+    """A consumer's applied pairing. ``producer`` None means unpaired."""
+
+    producer: str | None
+    version: Version
+
+
+@dataclass(frozen=True)
+class DriverStatus:
+    """What the media plane reports back to the core."""
+
+    state: NodeState
+    detail: str = ""
+
+
+@dataclass(frozen=True)
+class NodeConfig:
+    node_id: str
+    role: Role
+    kind: Kind
+    name: str = ""
+
+    def __post_init__(self) -> None:
+        if not NODE_ID_RE.match(self.node_id):
+            raise ValueError(f"invalid node id: {self.node_id!r}")
+
+
+@dataclass
+class PersistedState:
+    """The only durable state an agent owns (PROTOCOL.md: persist before ack)."""
+
+    seq: int = 0
+    pairing: Pairing = field(default_factory=lambda: Pairing(None, VERSION_ZERO))
+
+    def to_json(self) -> Body:
+        return {
+            "seq": self.seq,
+            "pairing": {
+                "producer": self.pairing.producer,
+                "version": list(self.pairing.version),
+            },
+        }
+
+    @classmethod
+    def from_json(cls, data: Body) -> PersistedState:
+        pairing = data["pairing"]
+        version = pairing["version"]
+        return cls(
+            seq=int(data["seq"]),
+            pairing=Pairing(
+                producer=pairing["producer"],
+                version=(int(version[0]), str(version[1])),
+            ),
+        )
+
+
+def version_key(version: Version) -> tuple[int, str]:
+    """Total order for pairing versions: counter, then origin id."""
+    return (version[0], version[1])
+
+
+# --- Effects: what the sans-I/O core asks its shell to do -------------------
+
+
+@dataclass(frozen=True)
+class SendFrame:
+    """Sign and multicast a frame authored by this node.
+
+    The core assigns ``seq``; the shell encodes with the site PSK.
+    """
+
+    type: FrameType
+    seq: int
+    body: Body
+
+
+@dataclass(frozen=True)
+class SendRaw:
+    """Re-multicast a previously received datagram verbatim (anti-entropy:
+    cached intents keep their original origin, seq, and signature)."""
+
+    raw: bytes
+
+
+@dataclass(frozen=True)
+class AttachMedia:
+    """Tell the driver to consume the given producer's media parameters."""
+
+    producer: str
+    media: Body
+
+
+@dataclass(frozen=True)
+class DetachMedia:
+    pass
+
+
+@dataclass(frozen=True)
+class Persist:
+    """Durably store this state before emitting any later effect."""
+
+    state: PersistedState
+
+
+@dataclass(frozen=True)
+class Log:
+    message: str
+
+
+Effect = SendFrame | SendRaw | AttachMedia | DetachMedia | Persist | Log
