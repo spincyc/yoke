@@ -1,0 +1,11 @@
+# Onboard agent for a USB consumer: the box plugged into a computer's
+# USB port (or the computer itself), attaching exported devices via usbip.
+node_id = "desk-usb"
+role = "consumer"
+kind = "usb"
+name = "Desk USB drop"
+psk_file = "/etc/yoke/psk"
+state_file = "/var/lib/yoke/state.json"
+
+[driver]
+type = "usbip"

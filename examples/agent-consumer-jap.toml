@@ -1,0 +1,11 @@
+# Warden for a Just Add Power decoder feeding the den TV.
+node_id = "tv-den"
+role = "consumer"
+kind = "hdmi"
+name = "Den TV (JAP RX)"
+psk_file = "/etc/yoke/psk"
+state_file = "/var/lib/yoke/state.json"
+
+[driver]
+type = "jap"
+decoder_host = "10.20.30.111"   # the JAP receiver's management address

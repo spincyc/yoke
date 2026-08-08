@@ -1,0 +1,11 @@
+# Warden for a Just Add Power encoder on channel 12 (garage camera).
+node_id = "cam-garage"
+role = "producer"
+kind = "hdmi"
+name = "Garage camera (JAP TX ch12)"
+psk_file = "/etc/yoke/psk"
+state_file = "/var/lib/yoke/state.json"
+
+[driver]
+type = "jap"
+channel = 12

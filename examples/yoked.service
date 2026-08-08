@@ -1,0 +1,22 @@
+# systemd unit for a yoke agent. Install: copy to /etc/systemd/system/,
+# place /etc/yoke/agent.toml and /etc/yoke/psk, then
+#   systemctl enable --now yoked
+[Unit]
+Description=yoke endpoint agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/python3 -m yoke.cli agent --config /etc/yoke/agent.toml
+Restart=always
+RestartSec=2
+# Crash-only by design: state persists before acks; convergence is
+# re-established from the network on every start.
+StateDirectory=yoke
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/yoke
+
+[Install]
+WantedBy=multi-user.target

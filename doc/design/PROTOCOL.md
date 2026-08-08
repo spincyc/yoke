@@ -18,7 +18,9 @@ A frame is canonical JSON, UTF-8, with:
 
 - keys sorted lexicographically at every level,
 - separators `,` and `:` (no whitespace),
-- no floats anywhere except the `ts` field (see below); integers only.
+- encoders MUST NOT emit non-integer numbers anywhere except the `ts`
+  field (see below); decoders MUST tolerate them in bodies (robustness —
+  the signature binds parsed content either way).
 
 Canonical bytes = `json.dumps(obj, sort_keys=True, separators=(",", ":"),
 ensure_ascii=False).encode("utf-8")`.

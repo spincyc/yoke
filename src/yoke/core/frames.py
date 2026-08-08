@@ -30,13 +30,26 @@ class EncodeError(ValueError):
     """The frame under construction violates YWP/1 (caller bug)."""
 
 
-class FrameDrop(Exception):
+class FrameDrop(Exception):  # noqa: N818 — a drop signal, not an error
     """Inbound datagram must be dropped; ``reason`` names the counter."""
 
     def __init__(self, reason: DropReason, detail: str = "") -> None:
         super().__init__(f"{reason.value}: {detail}" if detail else reason.value)
         self.reason = reason
         self.detail = detail
+
+
+def _reject_floats(value: Any, where: str) -> None:
+    """Senders emit integers only outside ``ts`` (PROTOCOL.md Encoding);
+    decoders stay tolerant so the rule cannot brick interop."""
+    if isinstance(value, float):
+        raise EncodeError(f"non-integer number in {where}: {value!r}")
+    if isinstance(value, dict):
+        for key, item in value.items():
+            _reject_floats(item, f"{where}.{key}")
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            _reject_floats(item, f"{where}[{index}]")
 
 
 def canonical_bytes(obj: dict[str, Any]) -> bytes:
@@ -63,8 +76,9 @@ def encode(
     """Build, sign, and serialize one frame. Raises EncodeError on misuse."""
     if not NODE_ID_RE.match(origin):
         raise EncodeError(f"invalid origin id: {origin!r}")
-    if seq < 1:
-        raise EncodeError(f"seq must be >= 1, got {seq}")
+    if isinstance(seq, bool) or seq < 1:
+        raise EncodeError(f"seq must be an int >= 1, got {seq!r}")
+    _reject_floats(body, "body")
     unsigned: dict[str, Any] = {
         "v": PROTOCOL_VERSION,
         "t": frame_type.value,
@@ -98,8 +112,9 @@ def decode(raw: bytes, psk: bytes) -> Frame:
         raise FrameDrop(DropReason.MALFORMED, "not an object")
     if set(obj) != _ENVELOPE_KEYS:
         raise FrameDrop(DropReason.MALFORMED, "envelope keys")
-    if obj["v"] != PROTOCOL_VERSION:
-        raise FrameDrop(DropReason.VERSION, repr(obj["v"]))
+    version = obj["v"]
+    if type(version) is not int or version != PROTOCOL_VERSION:
+        raise FrameDrop(DropReason.VERSION, repr(version))
     try:
         frame_type = FrameType(obj["t"])
     except ValueError as exc:
