@@ -786,8 +786,8 @@ def _run_command(
 
 
 def _open_socket(transport: str, host: str, port: int) -> socket.socket:
-    """Open the datagram socket for a live run: a multicast-joined socket
-    or a plain UDP socket bound to ``port`` for unicast."""
+    """Receiver socket: a multicast-joined socket (bound to ``port``) or a
+    plain UDP socket bound to ``port`` for unicast."""
     from yoke.net.mcast import open_multicast_socket
 
     if transport == "multicast":
@@ -795,6 +795,20 @@ def _open_socket(transport: str, host: str, port: int) -> socket.socket:
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind(("", port))
+    return sock
+
+
+def _open_sender_socket(transport: str) -> socket.socket:
+    """Sender socket: bound to an EPHEMERAL local port — never the
+    destination port (binding that would steal the receiver's inbound
+    datagrams when both run on one host). Multicast sends need the TTL and
+    loopback options but no bind to the group port."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind(("", 0))
+    if transport == "multicast":
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 1)
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 1)
     return sock
 
 
@@ -819,7 +833,7 @@ def _run_live_sender(
     from yoke.media.runner import SenderRunner
 
     host, port = plan.endpoint
-    sock = _open_socket(plan.transport, host, port)
+    sock = _open_sender_socket(plan.transport)
     runner = SenderRunner(build_sender(config), dest=(host, port))
     frames = plan.frames if plan.frames is not None else DEFAULT_RUN_FRAMES
     try:
