@@ -101,6 +101,8 @@ class _StreamAgg:
     fec_recovered: int = 0
     src_bytes: int = 0
     codec_bytes: int = 0
+    ratio_sum: float = 0.0
+    ratio_n: int = 0
     target_ratio: float | None = None
     latencies: list[float] = field(default_factory=list)
 
@@ -181,6 +183,13 @@ class MetricsCollector:
             self._source_now[(stream_id, event.pts)] = event.now
         elif event.stage == roles.codec and event.kind is EventKind.OUT:
             agg.codec_bytes += _unit_bytes(event.detail)
+            # Effective ratio is the codec's own applied ratio (source and
+            # codec model byte sizes on different bases, so their quotient
+            # is meaningless — the codec reports the real ratio directly).
+            applied = _as_float(event.detail.get("ratio"))
+            if applied is not None:
+                agg.ratio_sum += applied
+                agg.ratio_n += 1
         elif event.stage == roles.wire_out and event.kind is EventKind.OUT:
             agg.packets_sent += 1
         elif event.stage == roles.wire_in and event.kind is EventKind.IN:
@@ -247,7 +256,7 @@ class MetricsCollector:
         loss_rate = loss / agg.packets_sent if agg.packets_sent else 0.0
         recover_denom = agg.fec_recovered + loss
         recovery_rate = agg.fec_recovered / recover_denom if recover_denom else 0.0
-        ratio = agg.src_bytes / agg.codec_bytes if agg.codec_bytes else None
+        ratio = agg.ratio_sum / agg.ratio_n if agg.ratio_n else None
         return {
             "frames_sourced": agg.frames_sourced,
             "frames_ok": agg.frames_ok,

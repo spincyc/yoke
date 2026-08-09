@@ -30,19 +30,45 @@ yoke snoop                             # passively watch the control plane
   reordering, partitions, conflicting intents, replay, driver failure — is
   reproduced deterministically in the test suite with no network at all.
 
+## Media plane (software reference)
+
+Beyond routing, yoke ships a **software AV-over-IP pipeline** that runs the
+compression sweet spot (line-based, visually-lossless, ~2–4:1, sub-1 ms —
+`doc/research/prototype/COMPRESSION.md`). It is built like the control
+plane: sans-I/O stages (source → codec → packetize → FEC → jitter → sink)
+that a passive snooper verifies **without touching the stream**, a seeded
+network simulator, and a real-UDP runner. The production datapath is
+GStreamer/MTL behind the `stream` driver; this pipeline is the reference
+model, the test oracle, and the debugging toolkit.
+
+```
+yoke-media simulate --drop 0.05 --fec xor   # run over a seeded lossy link, report health
+yoke-media probe                            # integrity gate: exit 0 only if every frame verified
+yoke-media snoop                            # passively verify a live stream, transmit nothing
+yoke-media trace --frames 3                 # dump each unit's journey through every stage
+yoke-media run --role receiver              # host A: real UDP, print metrics
+yoke-media run --role sender --peer <A>     # host B: stream to host A
+```
+
+Verification is layered — offline sim, then real-socket loopback on one
+host, then two hosts — and gated by one command (`make verify`). See
+`doc/design/MEDIA.md` and `doc/design/MEDIA-TESTING.md`.
+
 ## Layout
 
 | Path | Contents |
 |---|---|
-| `doc/design/ARCHITECTURE.md` | System architecture and rationale |
+| `doc/design/ARCHITECTURE.md` | Control-plane architecture and rationale |
 | `doc/design/PROTOCOL.md` | Yoke Wire Protocol v1 (normative) |
+| `doc/design/MEDIA.md` | Media pipeline design; `MEDIA-TESTING.md` verification |
 | `doc/decisions/` | Architecture decision records |
-| `doc/research/` | Hardware research: which endpoints to buy |
-| `src/yoke/core/` | Sans-I/O protocol core (stdlib only) |
+| `doc/research/` | Hardware research; `prototype/` build plan + platform |
+| `src/yoke/core/` | Sans-I/O control-plane core (stdlib only) |
 | `src/yoke/net/` | Asyncio multicast shell |
-| `src/yoke/drivers/` | Media-plane drivers (sim, igmp, usbip, …) |
-| `src/yoke/` | `cli.py` (yoke), `snoop.py` (decoder) |
-| `tests/` | Offline test suite incl. simulated lossy network |
+| `src/yoke/drivers/` | Media-plane drivers (sim, igmp, usbip, jap, stream) |
+| `src/yoke/media/` | Sans-I/O media pipeline, snooper, runner, `yoke media` CLI |
+| `src/yoke/` | `cli.py` (yoke), `snoop.py` (control-plane decoder) |
+| `tests/` | Offline suites, seeded lossy sims, real-socket loopback |
 
 ## Development
 

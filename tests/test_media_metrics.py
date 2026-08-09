@@ -36,11 +36,16 @@ def _synthetic_stream() -> list[StageEvent]:
     events.append(
         ev("source", EventKind.OUT, 1, 3000, 0.033, stream=S0, frame_bytes=10000)
     )
-    # codec: 4 slices/frame at 1000 compressed bytes each -> ratio 2.5.
+    # codec: 4 slices/frame, each reporting the applied ratio 2.5 (as the
+    # real CodecEncodeStage does in its OUT detail).
     for i in range(4):
-        events.append(ev("codec", EventKind.OUT, i, 0, 0.001, stream=S0, bytes=1000))
+        events.append(
+            ev("codec", EventKind.OUT, i, 0, 0.001, stream=S0, bytes=1000, ratio=2.5)
+        )
     for i in range(4):
-        events.append(ev("codec", EventKind.OUT, i, 3000, 0.034, stream=S0, bytes=1000))
+        events.append(
+            ev("codec", EventKind.OUT, i, 3000, 0.034, stream=S0, bytes=1000, ratio=2.5)
+        )
     # packetize: 10 packets.
     for i in range(10):
         events.append(ev("packetize", EventKind.OUT, i, 0, 0.002, stream=S0, bytes=200))
