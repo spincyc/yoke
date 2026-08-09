@@ -17,11 +17,27 @@ FRL bridge; real USB host+gadget) and **owning the session state** (stable
 cached EDID + deterministic HPD; USB auto-reconnect), with **yoke as the
 supervisor** that keeps it live over days. Build order: **HDMI handshake
 first (M1)** → USB (M2) → integrate behind yoke (M3). Content is
-unprotected (PC output) so **HDCP is out of scope here.** Two open
-decisions block sourcing: transport (dedicated fiber, recommended, vs
-UniFi network) and the monitor's exact max mode + connector. Full detail,
+unprotected (PC output) so **HDCP is out of scope here.** Full detail,
 parts, and milestones are in the build spec. **This supersedes the earlier
 "which resolution/protected-scope" open items for the immediate work.**
+
+**UPDATE 2026-08-09 → `doc/design/EDGE-DEVICES.md` (read it after the
+build spec).** The user resolved transport: **switched UniFi network,
+point-to-point fiber ruled out**, and added a requirement: the USB mesh
+must carry **WinWing flight-sim gear incl. their USB3 video displays**.
+A nine-lane live-web hardware search + three-lens adversarial review
+produced the full HDMI and USB path designs with a buyable BOM. Headlines:
+WinWing's only true-USB3 devices are DisplayLink instrument displays
+(~50–350 Mb/s bulk; everything else is USB2 HID) — USB path = real local
+host at the desk + VirtualHere (bench first, $0 trial) with a PC-side
+watchdog, Icron Raven 3204C Pro as a waivered hardware contingency, and a
+`vhusb` yoke driver as the M3 mesh seam. HDMI path = Lontium GX-class
+FRL RX (L2Tek NDA engagement is the longest lead; D-PHY lane count is the
+top question) + synthesized-EDID/HPD-hysteresis state machine + 25G
+uncompressed 4:2:2-10 v1 (user sign-off pending on desktop-text
+compromise) + tiered TX regen. #1 transport risk: UniFi 25G FEC — probe
+with a ~$70 used ConnectX-4 Lx before buying FPGA boards. Remaining
+user-owned questions: monitor model, switch inventory, 4:2:2 sign-off.
 
 ## What yoke is
 

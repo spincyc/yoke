@@ -82,10 +82,13 @@ CLOSET endpoint                         DESK endpoint
   yoke agent  <----- control channel ----->  yoke agent
 ```
 
-Transport = **DECISION PENDING**: a **dedicated fiber run** closet↔desk
-(recommended for milestone 1 — isolates variables, kills the network as a
-suspect while we nail EDID/USB) **or** the **UniFi 25G network**. The
-endpoint design is identical either way; only the middle changes.
+Transport = **DECIDED 2026-08-09: the switched UniFi network. The user
+ruled out point-to-point fiber.** The full path designs, part selections,
+and network verification checklist live in `EDGE-DEVICES.md` (which
+supersedes this section's transport language). A new requirement arrived
+with the decision: the USB mesh must carry **WinWing flight-sim gear,
+including their USB3 DisplayLink instrument displays** — see
+`EDGE-DEVICES.md` §"The full USB path".
 
 ## Milestones (strict order — HDMI handshake first, it's highest leverage)
 
@@ -134,13 +137,17 @@ Cross-references: `doc/research/prototype/4K120-FLOOR.md` (ingest = Lontium;
 
 ## Open decisions (user owns; confirm before spending)
 
-1. **Transport:** dedicated fiber (recommended first) vs UniFi network.
-2. **"Full bandwidth" exact target + monitor:** 4K120 4:2:2-10bit (fits
-   25G/fiber uncompressed, license-free) vs 4:4:4 (needs 100G or DSC). Get
-   the monitor's max mode + connector (HDMI 2.1 vs DisplayPort 2.1 — a DP
-   monitor changes the TX side).
+1. **Transport: RESOLVED 2026-08-09 — switched UniFi network** (user
+   decision; no point-to-point fiber). See `EDGE-DEVICES.md`.
+2. **"Full bandwidth" exact target + monitor:** still open — get the
+   monitor's exact model (max mode + connector, HDMI 2.1 vs DP). It picks
+   the TX-regen tier in `EDGE-DEVICES.md` and the 4:2:2-vs-4:4:4 format
+   tier.
 3. **HDCP:** out of scope for this build (PC output unprotected). Only
    returns if DRM playback is later required.
+4. **Switch inventory (new):** which UniFi models/firmware sit between
+   closet and desk, and whether both rooms can land on one 25G-capable
+   switch — see `EDGE-DEVICES.md` §network.
 
 ## Immediate next actions for a cold agent
 
