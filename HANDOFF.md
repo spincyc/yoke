@@ -4,6 +4,25 @@ Date: 2026-08-09. Read this first, then `README.md`, `doc/design/`, and
 `doc/research/prototype/`. Everything below is committed on `main`;
 `make verify` is green (ruff + mypy --strict + pytest, ~600 tests).
 
+## ►► ACTIVE BUILD (start here): `doc/design/BUILD-SPEC-CLOSET-KVM.md`
+
+The user committed to a **first concrete build**: a transparent,
+full-bandwidth (target 4K120), low-latency **PC-gaming KVM from an A/V
+closet to a remote monitor + USB peripherals**. Commercial extenders
+failed them with two diagnosed symptoms — **USB wedges over days / needs
+replug** (relayed USB timing, no supervisor) and **video flicker/black/
+minutes-to-stabilize** (EDID/HPD + FRL link-training, not bandwidth). The
+build fixes both by **terminating + regenerating** the signals (Lontium
+FRL bridge; real USB host+gadget) and **owning the session state** (stable
+cached EDID + deterministic HPD; USB auto-reconnect), with **yoke as the
+supervisor** that keeps it live over days. Build order: **HDMI handshake
+first (M1)** → USB (M2) → integrate behind yoke (M3). Content is
+unprotected (PC output) so **HDCP is out of scope here.** Two open
+decisions block sourcing: transport (dedicated fiber, recommended, vs
+UniFi network) and the monitor's exact max mode + connector. Full detail,
+parts, and milestones are in the build spec. **This supersedes the earlier
+"which resolution/protected-scope" open items for the immediate work.**
+
 ## What yoke is
 
 Two planes:
