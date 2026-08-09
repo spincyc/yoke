@@ -77,10 +77,17 @@ Implications, all pointing away from the cheap tier:
   sources. This validates everything except the 4K120 format and HDCP.
 - **Product (4K120):** HDMI 2.1 FRL RX + 25G+ GTY FPGA + JPEG-XS/DSC light
   compression + HDCP 2.3 — the licensed, $k-class tier. **Next research
-  task: a focused search for the cheapest HDMI-2.1-FRL-ingest + 25G board/
-  chipset combo that reaches 4K120, and whether SDVoE/BlueRiver-2000 or an
-  IPMX endpoint is cheaper than a from-scratch FPGA build.** This was NOT
-  yet done — it is the top open item.
+  task:** **DONE 2026-08-09 → `doc/research/prototype/4K120-FLOOR.md`.**
+  Transparent 4K120-over-IP is bleeding-edge (nothing commercial ships it;
+  all AVoIP caps at 4K60/HDMI2.0/10G). The problem reduces to **HDMI 2.1
+  FRL ingest = Lontium** (LT6911GX/GXD ~$15-25/chip, only merchant 4K120
+  FRL RX) or Bitec FMC (€595)+paid IP; letting Lontium do FRL+DSC decode
+  avoids the paid AMD/HDCP IP. Floors/endpoint: **cinematic 4:2:2-10
+  ~$1,650-2,000 license-free** (fits 25G uncompressed), any-source 4:4:4
+  ~$2,500-4,500 (100G or self-DSC), protected product $0.5-2M+licensing,
+  12-24 mo. The live open decision is now **which "4K120 floor" the user
+  means** — cinematic HDR vs bit-exact-any-source vs protected-product — a
+  10x cost lever.
 
 ## Latency: how to measure it honestly
 
