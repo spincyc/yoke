@@ -45,13 +45,17 @@ or for the KVM-grade tier, not for the transparent tier.
 ## Step 2 — the deterministic / cable-feel tier: FPGA
 
 For sub-16 ms, no-OS-jitter, line-based-in-hardware transport (and as the
-base for the licensed product), the entry board is the **Alinx AV7K325**
-(~$780; HDMI via ADV7619/SiI9136 bridge chips, which sidesteps the paid
-Xilinx HDMI IP) or the **QMTech Kintex-7 XC7K325T dual-10G** (~$300) for a
-bring-up bench. Open gateware: litevideo + verilog-ethernet + a
-hand-written RTP framer + a DSC/VC-2/JPEG-XS-class line core. This is a
-multi-month HDL effort — do it only after Step 1 proves the design.
-4K60 uncompressed needs a 25G GTY board ($k class).
+base for the licensed product), the cheapest viable endpoint is the
+**Sipeed Tang Mega 138K Pro (~$175–195)**: native DVI-Rx HDMI capture +
+2× SFP+ at 12.5 Gbps, carrying uncompressed 1080p60. **See FPGA-COST.md
+for the full head-to-head** — the Gowin route is 2.5–4× cheaper than the
+Xilinx route (~$500/endpoint: a ~$377 Kintex-7 board + an FMC HDMI card),
+at the cost of less-mature tooling and a non-hardened TMDS-capture margin
+to bench-pilot first. Open gateware: litevideo + verilog-ethernet + a
+hand-written RTP framer. No free compression core exists, so uncompressed
+1080p60 needs the ≥10G SFP link (Kintex-7 GTX or Gowin GW5A SERDES;
+Artix/ECP5 can't clock it). Multi-month HDL effort — do it only after
+Step 1 proves the design. 4K60 uncompressed needs a 25G GTY board.
 
 ## Step 3 — the product (protected content): licensed foundation
 
