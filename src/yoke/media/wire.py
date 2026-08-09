@@ -38,6 +38,22 @@ class WireError(ValueError):
     """A datagram cannot be parsed as a yoke media packet (caller drops)."""
 
 
+def rtp_header_body(raw: bytes) -> Body:
+    """Adapt ``decode_rtp_header`` to the dict the :class:`MediaSnooper`
+    black-box decoder expects (``{seq, timestamp, marker, pt, ssrc}``).
+    Inject this — not ``decode_rtp_header`` directly, which returns a
+    dataclass — as the snooper's header decoder for on-wire verification.
+    Raises :class:`RtpError` on a malformed header (snooper counts it)."""
+    header = decode_rtp_header(raw)
+    return {
+        "seq": header.sequence,
+        "timestamp": header.timestamp,
+        "marker": header.marker,
+        "pt": header.payload_type,
+        "ssrc": header.ssrc,
+    }
+
+
 def pack_packet(unit: MediaUnit) -> bytes:
     """Serialize a PACKET ``MediaUnit`` to wire bytes.
 
@@ -121,4 +137,11 @@ def unpack_packet(raw: bytes) -> MediaUnit:
     )
 
 
-__all__ = ["TRAILER_LEN", "RtpError", "WireError", "pack_packet", "unpack_packet"]
+__all__ = [
+    "TRAILER_LEN",
+    "RtpError",
+    "WireError",
+    "pack_packet",
+    "rtp_header_body",
+    "unpack_packet",
+]

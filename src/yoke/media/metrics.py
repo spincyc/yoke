@@ -70,18 +70,22 @@ _KIND_SLOT: dict[EventKind, str] = {
 class StageRoles:
     """Names of the stages that mark the end-to-end measurement points.
 
-    Defaults match the canonical pipeline in MEDIA.md (``source → codec →
-    packetize → fec → [wire] → jitter → … → sink``): the wire is crossed
-    between ``fec`` (last sender stage, ``OUT`` = packets launched) and
-    ``jitter`` (first receiver stage, ``IN`` = packets that arrived).
+    Defaults match the canonical pipeline in MEDIA.md. The measurement
+    points are the two stages that always emit exactly one event per
+    packet regardless of FEC: ``packetize`` (``OUT`` = each data packet
+    launched onto the wire) and ``depacketize`` (``IN`` = each data packet
+    that arrived and survived FEC-decode + jitter). ``packet_loss`` =
+    sent minus received is thus the end-to-end packet-delivery shortfall.
+    (The ``jitter`` stage emits ``HOLD``/``LATE`` rather than ``IN``, so it
+    is not a valid receive-count boundary — measure at ``depacketize``.)
     Override for pipelines shaped differently.
     """
 
     source: str = "source"
     codec: str = "codec"
     ratecontrol: str = "ratecontrol"
-    wire_out: str = "fec"
-    wire_in: str = "jitter"
+    wire_out: str = "packetize"
+    wire_in: str = "depacketize"
     sink: str = "sink"
 
 

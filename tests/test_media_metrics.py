@@ -48,9 +48,11 @@ def _synthetic_stream() -> list[StageEvent]:
     for i in range(10):
         events.append(ev("fec", EventKind.OUT, i, 0, 0.003, stream=S0, bytes=200))
     events.append(ev("fec", EventKind.RECOVER, 5, 0, 0.040, stream=S0))
-    # jitter (wire ingress on the receiver): 8 packets arrive, 1 late.
+    # receiver: 8 packets survive jitter (HOLD) through to reassembly
+    # (depacketize IN); 1 arrives late (jitter LATE, never reassembled).
     for i in range(8):
-        events.append(ev("jitter", EventKind.IN, i, 0, 0.041, stream=S0))
+        events.append(ev("jitter", EventKind.HOLD, i, 0, 0.041, stream=S0))
+        events.append(ev("depacketize", EventKind.IN, i, 0, 0.042, stream=S0))
     events.append(ev("jitter", EventKind.LATE, 9, 0, 0.045, stream=S0))
     # ratecontrol: target ratio adjustment.
     events.append(
@@ -128,8 +130,9 @@ def test_per_stage_counters() -> None:
     assert fec["out"] == 10
     assert fec["recover"] == 1
     jitter = collector.stage_report("jitter")
-    assert jitter["in"] == 8
+    assert jitter["hold"] == 8
     assert jitter["late"] == 1
+    assert collector.stage_report("depacketize")["in"] == 8
     assert collector.stage_report("ratecontrol")["adjust"] == 1
     sink = collector.stage_report("sink")
     assert sink["integrity_ok"] == 1

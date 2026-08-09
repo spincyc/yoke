@@ -228,11 +228,17 @@ def test_white_box_and_black_box_agree_on_loss() -> None:
     independent ways (in-process taps vs wire packets) reports the same
     packet loss."""
     snooper = _snooper()
-    # White-box: 10 packets launched (fec OUT), 8 received (jitter IN).
+    # White-box: 10 packets launched (packetize OUT), 8 reassembled
+    # (depacketize IN) — the wire-boundary stages that emit one event per
+    # packet in the real pipeline.
     for i in range(10):
-        snooper.observe_event(ev("fec", EventKind.OUT, seq=i, stream=STREAM), now=0.0)
+        snooper.observe_event(
+            ev("packetize", EventKind.OUT, seq=i, stream=STREAM), now=0.0
+        )
     for i in range(8):
-        snooper.observe_event(ev("jitter", EventKind.IN, seq=i, stream=STREAM), now=0.0)
+        snooper.observe_event(
+            ev("depacketize", EventKind.IN, seq=i, stream=STREAM), now=0.0
+        )
     # Black-box: 8 of 10 contiguous seqs arrive (3 and 7 lost).
     arrived = [s for s in range(10) if s not in (3, 7)]
     for i, seq in enumerate(arrived):
