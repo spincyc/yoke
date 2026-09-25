@@ -25,11 +25,12 @@ gaming latency.
 | HDMI bridges over switched 10G | **Possible; sold today at 4K60** | SDVoE endpoints carry 4K60 4:4:4 at ~1.3:1 with <100 µs latency (V). On 10G they need a site API server (ZeeVee ZMP), so they meet the no-controller rule only with a waiver; per-device commercial control is 1G (Just Add Power) (`HARDWARE.md` §1). |
 | 4K120 over switched 10G | **Possible with ~2.7–3.3:1 visually lossless compression** | Arithmetic below. Buildable with licensed IP or NDA-gated Lontium silicon; no open parts suffice. |
 | USB bridges over switched IP | **Possible** | USB2 is routine; USB 3.2 over a switched LAN ships (Icron Raven 3204C Pro, V); software re-pairable USB3 bulk exists (VirtualHere, V). |
-| HDCP-protected sources | **Only via licensed endpoint silicon** | A legal limit (ADR 0004), not a physics limit. yoke can drive licensed endpoints without touching HDCP. |
+| HDCP-protected sources | **Possible as encrypted pass-through, point-to-point** | A bridge can forward ciphertext and tunnel the handshake without ever decrypting, as HDMI extenders do. It cannot compress, so 10G carries protected content up to ~4K60 4:2:0 or 4K24 (§HDCP). Needs ADR 0011 (proposed). Decrypting, compressing, or one-to-many needs licensed repeater silicon. |
 
-**Impossible:** bit-exact 4K 4:4:4 at 60 Hz or above over 10G (physics), and HDCP in an
-unlicensed DIY endpoint (law). **Not yet sold:** a 4K120 endpoint over
-10G that is near-transparent. Everything else is engineering and money.
+**Impossible:** bit-exact 4K 4:4:4 at 60 Hz or above over 10G
+(physics), and decrypting or compressing HDCP content without a license
+(law). **Not yet sold:** a 4K120 endpoint over 10G that is
+near-transparent. Everything else is engineering and money.
 
 ### Settled concern (2026-09-24)
 
@@ -153,16 +154,68 @@ API). USB3 **DisplayLink** over any USB-over-IP is **unproven** (only a
 USB2 DisplayLink display has been shown working, V). Details in
 `HARDWARE.md` §USB.
 
-## HDCP (unchanged; ADR 0004 governs)
+## HDCP: pass-through, not a repeater
 
-Carrying protected content requires a licensed HDCP repeater: terminate
-as a certified sink, protect the IP hop with HDCP 2.x IIA, re-originate
-downstream. HDCP has no per-unit royalty, only an annual adopter fee,
-but hand-rolled HDCP must pass robustness and compliance testing, which
-is the real gate (Aug 2026 research). yoke's position: drive licensed
-endpoints, never participate. For the mesh this means protected sources
-ride commercial endpoints (4K60 today); DIY endpoints carry unprotected
-content, and protected content correctly shows blank on them.
+HDCP encrypts the pixel data on the link; the source and the sink
+authenticate over HDMI's DDC channel and share the session key. A bridge
+that **forwards the ciphertext unchanged and tunnels the DDC handshake
+verbatim** is invisible to both: the source authenticates the real
+display, and the bridge never decrypts. This is how HDMI extenders,
+fiber HDMI cables, and HDBaseT carry protected content. It is permitted
+for yoke-designed endpoints only if ADR 0011 (proposed) is accepted.
+
+**What it can't do:** ciphertext is effectively random, so it cannot be
+compressed, and every encoding step (DSC, JPEG XS, chroma subsampling)
+needs decrypted pixels. The bridge carries every encrypted bit at full
+rate. With blanking regenerated identically at the far end, the payload
+is roughly the active-pixel rate:
+
+| Protected signal | Ciphertext rate | 10G | 25G |
+|---|---|---|---|
+| 1080p60 / 1080p120 RGB 8-bit | 2.99 / 5.97 Gb/s | yes | yes |
+| 4K24 RGB 8-bit (films at native rate, incl. Dolby Vision) | 4.78 Gb/s | yes | yes |
+| 4K60 4:2:0 10-bit (HDR streaming) | 7.46 Gb/s | yes | yes |
+| 4K60 4:2:2 12-bit or RGB 8-bit (typical HDR menu mode) | 11.9 Gb/s | no | yes |
+| 4K120 | 23.9–29.9 Gb/s | no | 8-bit 4:4:4 only; 40G+ otherwise |
+
+The bridge owns the EDID it presents, so it can steer a source into a
+format that fits (e.g., advertise 4K60 only at 4:2:0); EDID carries no
+HDCP information, so this is not a protection downgrade.
+
+**Engineering requirements:**
+
+- **Raw link capture.** Merchant HDMI receiver chips (including Lontium)
+  are HDCP endpoints that decrypt with licensed keys or output black, so
+  they cannot supply ciphertext. Capture TMDS in FPGA transceivers
+  (feasible for HDMI 2.0-class links); HDMI 2.1 FRL would also need its
+  link layer implemented.
+- **Identical timing, clock-locked.** The HDCP keystream is indexed by
+  frame and pixel position, so the far end must reproduce the source's
+  exact timing. HDCP 2.x uses AES counter mode: a lost packet corrupts
+  only its own pixels, but losing frame sync blanks the screen until the
+  source re-authenticates.
+- **Real-time handshake tunnel.** HDCP 2.x over HDMI is message-based
+  (write/read message buffers plus a status register at DDC address
+  0x74), so a local DDC proxy that forwards writes and mirrors the far
+  sink's replies fits its timeouts. The **locality check allows 20 ms
+  round trip** on HDMI; a switched LAN is ~0.3 ms. HDCP 1.4's register-
+  mirrored link check (Ri' every 128 frames) is more timing-sensitive ⚠.
+- **Strictly one sink per session.** The source authenticates one
+  display; a second display on the same ciphertext cannot decrypt it.
+  One-to-many protected distribution needs a licensed repeater.
+
+**Legal reading, not a legal opinion:** a relay that never decrypts is
+not circumvention (that is what HDCP strippers do), and the HDCP license
+binds licensees implementing HDCP functions, which a pass-through does
+not. Extenders in this class are sold widely. A commercial product needs
+this reviewed, plus HDMI Adopter status.
+
+**Licensed repeaters** (terminate as a certified sink, protect the IP
+hop with HDCP 2.x IIA, re-originate downstream) are only needed to
+decrypt, compress, or fan out. HDCP has no per-unit royalty, only an
+annual adopter fee, but hand-rolled repeater HDCP must pass robustness
+and compliance testing (Aug 2026 research). yoke drives purchased
+repeaters and never participates (ADR 0004).
 
 ## What earlier docs got wrong (corrected here)
 
@@ -176,6 +229,7 @@ content, and protected content correctly shows blank on them.
 | "SDVoE lacks PoE"; "JAP MaxColor 10G SFP option" | Both refuted (V) |
 | "SDVoE/IPMX run ~2–4:1 on purpose" | SDVoE runs 4K60 4:4:4 at ~1.3:1; 4K30 4:4:4 and 4K60 4:2:0 uncompressed (V) |
 | DisplayLink over VirtualHere "field-demonstrated" | Only for a USB2 DisplayLink display |
+| Protected content needs a licensed repeater; the locality check makes a relay impossible | A non-decrypting pass-through works point-to-point; the check allows 20 ms round trip on HDMI vs ~0.3 ms on a LAN. Bandwidth is the real limit (§HDCP). |
 
 Earlier research documents (Aug 2026 lanes, build plan, FPGA cost,
 4K120 floor, platform pick) were removed from the tree on 2026-09-24;

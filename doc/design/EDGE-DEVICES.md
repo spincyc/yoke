@@ -21,7 +21,8 @@ are in `../research/HARDWARE.md`.
 6. **Terminate and regenerate; own session state** (EDID/HPD, USB
    enumeration) at **both** ends of each path.
 7. **HDCP:** out of scope for the gaming link (PC output is unprotected).
-   Protected sources ride licensed commercial endpoints (ADR 0004).
+   Protected sources ride either an HDCP pass-through link (ours, pending
+   ADR 0011) or licensed commercial endpoints (ADR 0004).
 
 ## Why commercial extenders failed the user (do not rebuild these)
 
@@ -63,6 +64,7 @@ surface as `driver-error` (`PROTOCOL.md` §ann).
 | **DSC link** (ours) | 4K120 4:4:4, unprotected, sub-ms | Closet: LT6911GXD + FPGA + SFP+; desk: FPGA + a DSC-forwarding TX (open) | new, after bench |
 | **USB** (ours) | HID + USB3 bulk incl. DisplayLink | NanoPi R76S desk box + VirtualHere; PC-side client | `vhusb` (M3) |
 | **Commercial AVoIP** | 4K60, HDCP, all sources | Just Add Power (1G, per-device API); ZeeVee ZyPer4K-XS (10G, needs a ZMP site server: waives requirement 1) | `jap`, `zmp` (candidate) |
+| **HDCP pass-through** (ours, pending ADR 0011) | Protected HDMI 2.0 sources, ciphertext untouched; ≤4K60 4:2:0 or 4K24 on 10G | FPGA with raw TMDS capture + SFP+ per end | new, after bench |
 | **Unprotected 4K60** | 4K60, no HDCP, no USB | Blackmagic 2110 IP Mini | `nmos` (candidate) |
 
 Which families the first deployment uses is the open v1-trade decision
@@ -154,6 +156,38 @@ is 8.96 Gb/s and needs jumbo frames to fit).
 - **4K60 commercial:** Just Add Power (1G, per-device) or ZeeVee
   ZyPer4K-XS (10G, sub-100 µs, needs a ZMP server): HDCP, no 4K120.
 
+## The protected path: HDCP pass-through (pending ADR 0011)
+
+```
+Apple TV / Shield ── HDMI 2.0 ──►  CLOSET: FPGA transceivers, raw TMDS
+                                    · synthesized EDID (format steering)
+                                    · DDC proxy: HDCP messages tunneled
+                                      verbatim to the display
+                                    ▼ 10G unicast, clock-locked
+                                   DESK: FPGA regenerates identical
+                                    TMDS timing ──► display (HDCP sink)
+```
+
+The bridge forwards encrypted pixels unchanged, and the source
+authenticates the real display. Rates, timing, and handshake
+requirements are in `../research/FEASIBILITY.md` §HDCP; the rules the
+bridge must obey are ADR 0011 clause 3.
+
+- **Format steering.** On 10G the synthesized EDID offers only formats
+  whose ciphertext fits: 4K60 at 4:2:0, any 4K24, 1080p to 120 Hz.
+  HDCP capability registers are never touched; they belong to the
+  display and are read through the tunnel.
+- **HPD and loss.** The DSC link's HPD rules apply, but a transient loss
+  here cannot be hidden by freezing: the display loses encryption sync
+  and the source re-authenticates, a brief blank.
+- **Strictly one consumer per producer**, enforced on the producer side
+  as for USB (`ARCHITECTURE.md` §what yoke is not): a second display
+  cannot decrypt the same session.
+- **Hardware:** an FPGA with at least seven ≥6 Gb/s transceivers per end
+  (3 TMDS lanes in, 3 out, 1 SFP+) plus TMDS retimer front-ends. Open
+  HDMI capture gateware is 1080p-class and abandoned (Aug 2026), so
+  HDMI 2.0 rates mean new gateware. Board choice is open ⚠.
+
 ## The USB path
 
 ### Finding zero: what the WinWing "USB3 video devices" are
@@ -243,3 +277,7 @@ exists, the USB path is one fixed PC↔desk link.
   driver makes the USB mesh real.
 - **M4 — DSC link:** Lontium samples → DSI capture on the FPGA → 10G RTP
   loopback → desk TX → clock-slaved end to end → photodiode acceptance.
+- **M5 — HDCP pass-through (only if ADR 0011 is accepted):** DDC/HDCP
+  2.x message proxy modeled sans-I/O with offline tests → 1080p60
+  pass-through on the bench → 4K60 4:2:0 over 10G with a real protected
+  source.

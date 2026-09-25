@@ -268,6 +268,7 @@ Facts from Aug 2026 research that still hold; a 4K120 DSC stream is
 | 4K60 + HDCP mesh, no controller (buy) | Just Add Power MaxColor (1G, compressed) | Per-device API; `jap` driver exists |
 | 4K60 + HDCP on 10G (buy, waiver) | ZeeVee ZyPer4K-XS, or SDVoE wall plates | <100 µs, PoE, public API, but needs a ZMP site server |
 | Unprotected 4K60 mesh (buy, per-device API) | Blackmagic 2110 IP Mini + separate USB path | NMOS on device, $345–429 |
+| Protected 4K60 4:2:0 / 4K24 on 10G (build, pending ADR 0011) | FPGA with ≥7 transceivers ≥6 Gb/s + TMDS retimers per end; board open ⚠ | HDCP pass-through (`FEASIBILITY.md` §HDCP) |
 | 4K120 near-transparent (build) | Closet: LT6911GXD (NDA) + Tang Mega 138K Pro; desk: Tang Mega + a DSC-forwarding TX (open question) | Route A/B in `FEASIBILITY.md` |
 | 4K120 commodity (~15–32 ms) | MS-A2 + SC750N1-L (send); MS-A2 (receive) | Retail parts, x86 JPEG XS; Zen5 throughput not benchmarked (I) |
 | Bench instruments | HDFury Dr HDMI 8K ($199, EDID/HPD scripting), Elgato 4K X (FRL sink), photodiode glass-to-glass rig | Aug 2026 picks, still valid |
@@ -285,3 +286,4 @@ Facts from Aug 2026 research that still hold; a 4K120 DSC stream is
 | `nmos` | Blackmagic 2110, Matrox, IPMX | IS-05 PATCH on the device | candidate |
 | `zmp` | ZeeVee SDVoE via a ZMP sidecar | Telnet `join` | candidate |
 | DSC-link endpoint | our 4K120 endpoints | register/API of our gateware | candidate, after bench |
+| pass-through endpoint | our HDCP pass-through endpoints | register/API of our gateware | candidate, pending ADR 0011 |

@@ -15,7 +15,10 @@ floor, competitive-gaming latency) to a desk monitor + USB peripherals
 including WinWing flight-sim gear.
 
 **Verdict: possible** (`doc/research/FEASIBILITY.md`). Impossible only:
-bit-exact 4K 4:4:4 at 60 Hz or above over 10G (physics) and HDCP in a DIY endpoint (law).
+bit-exact 4K 4:4:4 at 60 Hz or above over 10G (physics) and decrypting or
+compressing HDCP content without a license (law). Protected sources can
+still cross the mesh as untouched ciphertext (HDCP pass-through, like an
+HDMI extender) up to ~4K60 4:2:0 or 4K24 on 10G, pending ADR 0011.
 The leading 4K120-over-10G route carries the **GPU's own DSC stream**
 compressed over DisplayPort, ~8 Gb/s, sub-ms, gated on Lontium NDA
 silicon. An earlier session's "not possible" conclusion is settled
@@ -55,8 +58,9 @@ Nothing has touched real endpoint hardware yet.
 
 1. **The v1 trade.** On 10G, something gives: (a) staged — buy 4K60
    HDCP-capable commercial endpoints for the mesh now (controller-free
-   only at 1G, Just Add Power; 10G ZeeVee needs a site server) and build
-   the 4K120 DSC link in parallel; (b) 4K120 build only, unprotected; (c) 4K60 buy
+   only at 1G, Just Add Power; 10G ZeeVee needs a site server; or build
+   HDCP pass-through, pending ADR 0011) and build the 4K120 DSC link in
+   parallel; (b) 4K120 build only, unprotected; (c) 4K60 buy
    only; or (d) add 25G ports after all. The user asked to clarify before
    answering; **ask what they want to clarify first.**
 2. **Desk monitor model:** connector and max mode; for route A it must
@@ -65,16 +69,16 @@ Nothing has touched real endpoint hardware yet.
    side stay HDMI (route B, Lontium re-encode)?
 4. **Switch inventory:** which 10G SFP+ ports serve closet and desk, and
    can both land on one switch?
-5. **Scope of the media invariant (ADRs 0002/0004).** `AGENTS.md` and
-   the ADRs say no yoke code path or component may receive, inspect, or
-   relay media payload. The `stream` driver honors that by running
-   pipelines as separate processes, but `yoke.media` (runner, snooper)
-   receives and inspects payload, and the DSC-link endpoint's gateware
-   (`EDGE-DEVICES.md`) would relay it. Either amend the invariants' scope
-   by ADR (the agent and control plane never touch media; yoke-designed
-   media code and gateware may, on unprotected content only; HDCP stays
-   forbidden) or keep yoke strictly a control plane and treat endpoints
-   as a separate project. Needs the user's call before M4.
+5. **Accept ADR 0011 (proposed) or its alternative.** `AGENTS.md` and
+   ADRs 0002/0004 forbid any yoke component from receiving or relaying
+   media payload or taking part in HDCP. `yoke.media` already receives
+   and inspects payload, and the DSC link and HDCP pass-through endpoints
+   would relay it. ADR 0011 scopes the invariants: the agent and control
+   plane never touch media; yoke-designed media code and gateware may;
+   HDCP ciphertext may be forwarded and its handshake tunneled verbatim,
+   never decrypted or altered. The alternative keeps yoke strictly a
+   control plane and moves endpoints to a separate project. On
+   acceptance, update `AGENTS.md` as the ADR states. Needed before M4/M5.
 
 ## Next actions
 

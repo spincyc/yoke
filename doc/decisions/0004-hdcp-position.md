@@ -1,6 +1,6 @@
 # 0004 — HDCP position: endpoint hardware's concern, never yoke's
 
-Date: 2026-08-08. Status: accepted.
+Date: 2026-08-08. Status: accepted; a scope amendment is proposed in ADR 0011.
 
 HDCP-protected HDMI cannot be captured, re-encoded, or forwarded by
 unlicensed software without either breaking the law (stripping) or
