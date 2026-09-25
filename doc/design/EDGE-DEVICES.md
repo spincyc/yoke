@@ -21,7 +21,7 @@ are in `../research/HARDWARE.md`.
 6. **Terminate and regenerate; own session state** (EDID/HPD, USB
    enumeration) at **both** ends of each path.
 7. **HDCP:** out of scope for the gaming link (PC output is unprotected).
-   Protected sources ride either an HDCP pass-through link (ours, pending
+   Protected sources ride either an HDCP pass-through link (ours,
    ADR 0011) or licensed commercial endpoints (ADR 0004).
 
 ## Why commercial extenders failed the user (do not rebuild these)
@@ -64,7 +64,7 @@ surface as `driver-error` (`PROTOCOL.md` §ann).
 | **DSC link** (ours) | 4K120 4:4:4, unprotected, sub-ms | Closet: LT6911GXD + FPGA + SFP+; desk: FPGA + a DSC-forwarding TX (open) | new, after bench |
 | **USB** (ours) | HID + USB3 bulk incl. DisplayLink | NanoPi R76S desk box + VirtualHere; PC-side client | `vhusb` (M3) |
 | **Commercial AVoIP** | 4K60, HDCP, all sources | Just Add Power (1G, per-device API); ZeeVee ZyPer4K-XS (10G, needs a ZMP site server: waives requirement 1) | `jap`, `zmp` (candidate) |
-| **HDCP pass-through** (ours, pending ADR 0011) | Protected HDMI 2.0 sources, ciphertext untouched; ≤4K60 4:2:0 or 4K24 on 10G | FPGA with raw TMDS capture + SFP+ per end | new, after bench |
+| **HDCP pass-through** (ours, ADR 0011) | Protected HDMI 2.0 sources, ciphertext untouched; ≤4K60 4:2:0 or 4K24 on 10G | FPGA with raw TMDS capture + SFP+ per end | new, after bench |
 | **Unprotected 4K60** | 4K60, no HDCP, no USB | Blackmagic 2110 IP Mini | `nmos` (candidate) |
 
 Which families the first deployment uses is the open v1-trade decision
@@ -156,7 +156,7 @@ is 8.96 Gb/s and needs jumbo frames to fit).
 - **4K60 commercial:** Just Add Power (1G, per-device) or ZeeVee
   ZyPer4K-XS (10G, sub-100 µs, needs a ZMP server): HDCP, no 4K120.
 
-## The protected path: HDCP pass-through (pending ADR 0011)
+## The protected path: HDCP pass-through (ADR 0011)
 
 ```
 Apple TV / Shield ── HDMI 2.0 ──►  CLOSET: FPGA transceivers, raw TMDS
@@ -277,7 +277,7 @@ exists, the USB path is one fixed PC↔desk link.
   driver makes the USB mesh real.
 - **M4 — DSC link:** Lontium samples → DSI capture on the FPGA → 10G RTP
   loopback → desk TX → clock-slaved end to end → photodiode acceptance.
-- **M5 — HDCP pass-through (only if ADR 0011 is accepted):** DDC/HDCP
+- **M5 — HDCP pass-through:** DDC/HDCP
   2.x message proxy modeled sans-I/O with offline tests → 1080p60
   pass-through on the bench → 4K60 4:2:0 over 10G with a real protected
   source.

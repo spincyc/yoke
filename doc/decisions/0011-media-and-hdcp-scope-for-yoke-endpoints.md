@@ -1,9 +1,7 @@
 # 0011 — Media and HDCP invariants: scope for yoke-designed endpoints
 
-Date: 2026-09-24. Status: **proposed** (drafted at the user's request;
-takes effect only when the user accepts it). Amends ADR 0002 and
-ADR 0004; on acceptance, `AGENTS.md`'s invariant text changes as stated
-below.
+Date: 2026-09-24. Status: accepted (user, 2026-09-24). Amends ADR 0002
+and ADR 0004; `AGENTS.md` carries the amended invariants.
 
 ## Context
 
@@ -29,7 +27,7 @@ HDMI, and a switched LAN is ~0.3 ms (`doc/research/FEASIBILITY.md`
 §HDCP). The real limits are bandwidth (ciphertext cannot be compressed)
 and exact timing, which are engineering, not legal, constraints.
 
-## Decision (proposed)
+## Decision
 
 1. **The agent and control plane never touch media.** `yoke.core`,
    `yoke.net`, the drivers, the CLI, and the control-plane snooper never
@@ -58,7 +56,7 @@ and exact timing, which are engineering, not legal, constraints.
    notably one-to-many protected distribution. yoke drives purchased
    repeaters per ADR 0004.
 
-On acceptance, the `AGENTS.md` invariants read: "the yoke agent and
+The `AGENTS.md` invariants read: "the yoke agent and
 control plane never receive or inspect media payload (ADRs 0002, 0011);
 no component may decrypt HDCP content, hold HDCP secrets, alter HDCP
 messages or capabilities, or instruct an endpoint to disable or
@@ -82,10 +80,17 @@ downgrade protection (ADRs 0004, 0011)."
 - The snooper sees ciphertext on protected links and verifies flow and
   framing only, as ADR 0004 already anticipates.
 
-## Alternative the user may choose instead
+## Alternative considered
 
 Keep yoke strictly a control plane: `yoke.media` becomes test and
 tooling code only, and the DSC-link and pass-through endpoints become a
 separate project with its own policy, driven by yoke like any purchased
 endpoint. That keeps ADRs 0002 and 0004 verbatim and moves the same
 questions into the endpoint project.
+
+Chosen against because the user does not plan to sell anything
+(2026-09-24): the alternative's one advantage, a clean licensing and
+legal-review boundary for a product, does not apply, and splitting the
+project adds coordination without adding safety — the lines that matter
+(never decrypt, never hold keys, never weaken protection) are the same
+either way.

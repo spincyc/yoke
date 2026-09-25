@@ -1,6 +1,6 @@
 # 0002 — Yoke is a control plane; the media plane is endpoint hardware
 
-Date: 2026-08-08. Status: accepted; a scope amendment is proposed in ADR 0011.
+Date: 2026-08-08. Status: accepted; scope amended by ADR 0011.
 
 Transparent transport of HDMI (up to 18 Gb/s TMDS) or USB over switched
 Ethernet cannot be done in our software on PoE-class hardware, and any

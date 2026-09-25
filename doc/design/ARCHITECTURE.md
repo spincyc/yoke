@@ -39,7 +39,7 @@ Where no commercial endpoint meets the requirement (4K120 over 10G, a
 supervised USB3 mesh), yoke's own endpoint designs fill the media-plane
 role (`EDGE-DEVICES.md`). They keep the same split: the agent drives the
 endpoint through a driver, and gateware or an external process carries
-the media.
+the media (ADR 0011).
 
 Yoke never touches the media payload. HDCP is negotiated hop-by-hop by
 licensed endpoint silicon (encoder acts as HDCP sink, decoder as HDCP

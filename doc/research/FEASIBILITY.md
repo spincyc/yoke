@@ -25,7 +25,7 @@ gaming latency.
 | HDMI bridges over switched 10G | **Possible; sold today at 4K60** | SDVoE endpoints carry 4K60 4:4:4 at ~1.3:1 with <100 µs latency (V). On 10G they need a site API server (ZeeVee ZMP), so they meet the no-controller rule only with a waiver; per-device commercial control is 1G (Just Add Power) (`HARDWARE.md` §1). |
 | 4K120 over switched 10G | **Possible with ~2.7–3.3:1 visually lossless compression** | Arithmetic below. Buildable with licensed IP or NDA-gated Lontium silicon; no open parts suffice. |
 | USB bridges over switched IP | **Possible** | USB2 is routine; USB 3.2 over a switched LAN ships (Icron Raven 3204C Pro, V); software re-pairable USB3 bulk exists (VirtualHere, V). |
-| HDCP-protected sources | **Possible as encrypted pass-through, point-to-point** | A bridge can forward ciphertext and tunnel the handshake without ever decrypting, as HDMI extenders do. It cannot compress, so 10G carries protected content up to ~4K60 4:2:0 or 4K24 (§HDCP). Needs ADR 0011 (proposed). Decrypting, compressing, or one-to-many needs licensed repeater silicon. |
+| HDCP-protected sources | **Possible as encrypted pass-through, point-to-point** | A bridge can forward ciphertext and tunnel the handshake without ever decrypting, as HDMI extenders do. It cannot compress, so 10G carries protected content up to ~4K60 4:2:0 or 4K24 (§HDCP). Permitted by ADR 0011. Decrypting, compressing, or one-to-many needs licensed repeater silicon. |
 
 **Impossible:** bit-exact 4K 4:4:4 at 60 Hz or above over 10G
 (physics), and decrypting or compressing HDCP content without a license
@@ -162,7 +162,7 @@ that **forwards the ciphertext unchanged and tunnels the DDC handshake
 verbatim** is invisible to both: the source authenticates the real
 display, and the bridge never decrypts. This is how HDMI extenders,
 fiber HDMI cables, and HDBaseT carry protected content. It is permitted
-for yoke-designed endpoints only if ADR 0011 (proposed) is accepted.
+for yoke-designed endpoints by ADR 0011.
 
 **What it can't do:** ciphertext is effectively random, so it cannot be
 compressed, and every encoding step (DSC, JPEG XS, chroma subsampling)

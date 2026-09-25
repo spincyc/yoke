@@ -4,10 +4,13 @@
   changes require editing it (with an ADR in `doc/decisions/`) before
   code. `doc/design/ARCHITECTURE.md` explains why the shape is what it
   is; read it before proposing structural change.
-- Two invariants are load-bearing and non-negotiable (ADRs 0002, 0004):
-  no yoke code path may receive or inspect media payload, and no
-  component may participate in HDCP in any way — including never
-  instructing an endpoint to disable or downgrade protection.
+- Two invariants are load-bearing and non-negotiable: the yoke agent
+  and control plane never receive or inspect media payload (ADRs 0002,
+  0011); no component may decrypt HDCP content, hold HDCP secrets,
+  alter HDCP messages or capabilities, or instruct an endpoint to
+  disable or downgrade protection (ADRs 0004, 0011). Yoke-designed media
+  code and endpoint gateware may carry unprotected media and forward
+  HDCP ciphertext untouched, point-to-point only (ADR 0011).
 - The `yoke.core` package is sans-I/O: no sockets, no clock reads, no
   filesystem. All I/O belongs in `yoke.net`, drivers, or the CLI shell.
 - Every code path must be exercisable offline. Error conditions

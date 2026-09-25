@@ -18,10 +18,11 @@ yoke snoop                             # passively watch the control plane
 - **No resident controller.** Pairing state lives in the endpoints and is
   changed by signed datagrams on a well-known multicast group. The CLI is
   ephemeral: it sends an intent, waits for the acknowledgement, and exits.
-- **Transparent payload.** Yoke never decodes, re-encodes, or even parses
-  the media it routes. HDMI and USB transport — including HDCP — is the
-  endpoint hardware's job. Yoke is the control plane that tells endpoints
-  who feeds whom.
+- **Transparent payload.** The yoke agent never decodes, re-encodes, or
+  even parses the media it routes. HDMI and USB transport is the
+  endpoint's job — purchased boxes, or yoke-designed endpoints that
+  forward protected content as untouched ciphertext (ADR 0011). Yoke is
+  the control plane that tells endpoints who feeds whom.
 - **Observable by design.** All control traffic, including state-change
   events from every endpoint, flows on the multicast group. `yoke snoop`
   joins passively and verifies the system without touching it.

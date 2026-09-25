@@ -12,13 +12,15 @@ baseline, and **endpoint hardware as small as possible**. Deliverables
 the user asked for: the hardware to buy, and the code driven to
 completion. The first concrete link is a closet RTX 5090 gaming PC (4K120
 floor, competitive-gaming latency) to a desk monitor + USB peripherals
-including WinWing flight-sim gear.
+including WinWing flight-sim gear. Personal use: nothing will be sold (user,
+2026-09-24), so product licensing (HDMI Adopter, commercial legal
+review) is out of scope.
 
 **Verdict: possible** (`doc/research/FEASIBILITY.md`). Impossible only:
 bit-exact 4K 4:4:4 at 60 Hz or above over 10G (physics) and decrypting or
 compressing HDCP content without a license (law). Protected sources can
 still cross the mesh as untouched ciphertext (HDCP pass-through, like an
-HDMI extender) up to ~4K60 4:2:0 or 4K24 on 10G, pending ADR 0011.
+HDMI extender) up to ~4K60 4:2:0 or 4K24 on 10G, per ADR 0011.
 The leading 4K120-over-10G route carries the **GPU's own DSC stream**
 compressed over DisplayPort, ~8 Gb/s, sub-ms, gated on Lontium NDA
 silicon. An earlier session's "not possible" conclusion is settled
@@ -58,27 +60,18 @@ Nothing has touched real endpoint hardware yet.
 
 1. **The v1 trade.** On 10G, something gives: (a) staged — buy 4K60
    HDCP-capable commercial endpoints for the mesh now (controller-free
-   only at 1G, Just Add Power; 10G ZeeVee needs a site server; or build
-   HDCP pass-through, pending ADR 0011) and build the 4K120 DSC link in
-   parallel; (b) 4K120 build only, unprotected; (c) 4K60 buy
-   only; or (d) add 25G ports after all. The user asked to clarify before
-   answering; **ask what they want to clarify first.**
+   only at 1G, Just Add Power; 10G ZeeVee needs a site server) and build
+   the 4K120 DSC link in parallel; (b) build only: the 4K120 DSC link
+   for the PC plus HDCP pass-through (ADR 0011) for protected sources
+   up to 4K60 4:2:0 / 4K24; (c) 4K60 buy only; or (d) add 25G ports
+   after all. The user's pending clarification was the HDCP question,
+   now answered by ADR 0011; the trade itself is still unanswered.
 2. **Desk monitor model:** connector and max mode; for route A it must
    accept DSC over DisplayPort.
 3. **DisplayPort from the 5090:** acceptable (route A), or must the PC
    side stay HDMI (route B, Lontium re-encode)?
 4. **Switch inventory:** which 10G SFP+ ports serve closet and desk, and
    can both land on one switch?
-5. **Accept ADR 0011 (proposed) or its alternative.** `AGENTS.md` and
-   ADRs 0002/0004 forbid any yoke component from receiving or relaying
-   media payload or taking part in HDCP. `yoke.media` already receives
-   and inspects payload, and the DSC link and HDCP pass-through endpoints
-   would relay it. ADR 0011 scopes the invariants: the agent and control
-   plane never touch media; yoke-designed media code and gateware may;
-   HDCP ciphertext may be forwarded and its handshake tunneled verbatim,
-   never decrypted or altered. The alternative keeps yoke strictly a
-   control plane and moves endpoints to a separate project. On
-   acceptance, update `AGENTS.md` as the ADR states. Needed before M4/M5.
 
 ## Next actions
 
