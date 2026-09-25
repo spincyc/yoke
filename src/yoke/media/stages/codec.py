@@ -2,7 +2,7 @@
 
 A :class:`Codec` turns one whole :class:`~yoke.media.types.MediaUnit`
 frame into a list of line-based ``SLICE`` units and back, modelling the
-compression *sweet spot* (doc/research/prototype/COMPRESSION.md): a
+compression *sweet spot* (doc/research/COMPRESSION.md): a
 line-based, visually-lossless codec running at a target ratio in the
 ``[RATIO_MIN, RATIO_MAX]`` band — never the frame-based cliff.
 

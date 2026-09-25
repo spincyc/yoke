@@ -18,7 +18,7 @@ system out of band. This must hold up in production, not as a lab toy.
 
 Yoke is a **control plane**, deliberately separated from the media plane.
 
-### Media plane (not ours)
+### Media plane (endpoint hardware)
 
 The media plane is whatever the endpoint hardware does natively:
 
@@ -34,6 +34,12 @@ The media plane is whatever the endpoint hardware does natively:
   USB devices; the consumer side attaches to one producer and presents its
   devices to the downstream computer. Sessions are consumer-initiated,
   which matches the pairing model below.
+
+Where no commercial endpoint meets the requirement (4K120 over 10G, a
+supervised USB3 mesh), yoke's own endpoint designs fill the media-plane
+role (`EDGE-DEVICES.md`). They keep the same split: the agent drives the
+endpoint through a driver, and gateware or an external process carries
+the media.
 
 Yoke never touches the media payload. HDCP is negotiated hop-by-hop by
 licensed endpoint silicon (encoder acts as HDCP sink, decoder as HDCP
@@ -106,7 +112,9 @@ src/yoke/
     igmp.py      decoder-side multicast join/leave (reference software path)
     usbip.py     usbip attach/detach + producer bind/unbind
     jap.py       Just Add Power decoder API driver (channel switching)
+    stream.py    starts/stops an out-of-process media pipeline (RTP)
     shellcmd.py  command-runner abstraction (mockable; never shell=True)
+  media/         software media pipeline + yoke-media CLI (MEDIA.md)
   config.py      per-agent TOML config with fail-fast validation
   statefile.py   atomic (write-fsync-rename) persisted-state load/save
   cli.py         yoke pair|unpair|status|snoop|agent
@@ -175,6 +183,25 @@ hardware's (VLAN isolation is the recommended deployment posture).
   through the same code paths production uses (only the shell is swapped).
 - **Loopback smoke**: the asyncio shell exercised over 127.0.0.1
   multicast, still no external network.
+
+## Known limitations
+
+- **Pre-shared-key security.** One site-wide key authenticates all
+  control frames (ADR 0005). A compromised endpoint holding the key can
+  forge intents; the DoS hardening (ADR 0010) caps the blast radius of
+  unauthenticated and buggy senders but does not make a key-holder
+  harmless. Per-device keys are the v2 answer and need an ADR (enrollment
+  touches the no-controller principle).
+- **Two minor async races in `net/runner.py`.** The driver-poll loop can
+  publish a status captured between an intent's application and its
+  attach task running (a brief spurious `media-down`/`media-up` blip that
+  self-corrects on the next poll), and a driver call's worker thread can
+  outlive task cancellation. Fix: a single-thread driver executor with
+  generation-tagged statuses.
+- **HDCP position is a well-supported reading, not a legal opinion**
+  (ADR 0004); a commercial launch should get it reviewed.
+- **No real endpoint hardware has been touched.** Driver assumptions are
+  isolated and marked ⚠ in `doc/research/HARDWARE.md`.
 
 ## What yoke is not
 

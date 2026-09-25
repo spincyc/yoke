@@ -1,8 +1,9 @@
 # The compression sweet spot: what a little costs in time, buys in transit
 
-Status: design analysis, 2026-08-09. The question this answers: on a fast
-switched network, exactly how much compression should we apply — and the
-answer is a real optimization, not "none" or "a lot."
+Status: design analysis, 2026-08-09; corrected 2026-09-24 against the
+live research in `FEASIBILITY.md` and `HARDWARE.md`. The question this
+answers: on a fast switched network, exactly how much compression should
+we apply — and the answer is a real optimization, not "none" or "a lot."
 
 ## The dial has five axes, and one of them is not linear
 
@@ -25,9 +26,9 @@ buffers a whole frame. Latency is a few lines to a fraction of a frame —
 
 | Codec | Latency | Ratio range | Quality | License |
 |---|---|---|---|---|
-| JPEG-XS | <1 ms (≈8–32 lines) | ~1.5:1 to ~10:1 | visually lossless to ~6:1 | patent-pooled (free code exists) |
+| JPEG-XS | <1 ms (≈8–32 lines) | ~1.5:1 to ~10:1 | visually lossless to ~6:1 | patent pool, ~$5 per 4K instance (free x86 code exists) |
 | VC-2 LD (Dirac) | few lines, sub-ms | ~2:1 to ~4:1 | visually lossless | **royalty-free** |
-| VESA DSC | <1 line | ~3:1 (to 3.75:1) | visually lossless (VESA-tested) | open spec, RAND IP |
+| VESA DSC | <1 line | ~3:1 (to 3.75:1) | visually lossless at 3:1 (VESA-tested) | open spec, RAND IP; the GPU already encodes it (see below) |
 
 Within Regime 1 the latency cost of turning the dial from 1:1 to ~6:1 is
 **flat and negligible**. The transit benefit is linear (2:1 = half the
@@ -50,7 +51,7 @@ visually-lossless limit, never touch the cliff.**
 
 | Operating point | Ratio | Bitrate | Added latency | Quality | On 10G | Headroom | Loss resilience |
 |---|---|---|---|---|---|---|---|
-| Uncompressed | 1:1 | ~10 Gb/s | ~0 (packetize) | bit-exact | at line rate | **none** | **none — every drop glitches** |
+| Uncompressed | 1:1 | ~10 Gb/s | ~0 (packetize) | bit-exact | **does not fit** (9.95 > ~9.4–9.9 usable) | **none** | **none — every drop glitches** |
 | Near-lossless | 1.5:1 | ~6.7 Gb/s | <0.5 ms | ~mathematically lossless | tight | ~33% | poor |
 | **Sweet spot** | **2.5:1** | **~4 Gb/s** | **<1 ms** | **imperceptible loss** | **easy** | **~60%** | **good — FEC affordable** |
 | Sweet spot, aggressive | 4:1 | ~2.5 Gb/s | <1 ms | imperceptible (most content) | easy | ~75% | very good |
@@ -91,8 +92,9 @@ So compression, QoS, and FEC are **one integrated answer**: a little
 compression buys the headroom that makes QoS effortless and funds the FEC
 that makes the stream robust on a real, shared, switched network. This is
 not a compromise away from transparent — it's what makes transparent
-*reliable* off the bench. It is exactly what SDVoE and IPMX ship: they run
-~2–4:1 light compression on 10G on purpose, not because they must.
+*reliable* off the bench. Commercial 10G gear is lighter than this:
+SDVoE sends 4K60 4:4:4 at ~1.3:1 and 4K30 4:4:4 / 4K60 4:2:0
+uncompressed, trading headroom for fidelity (`HARDWARE.md` §1).
 
 ## The sliding scale, made dynamic (the genuinely clever version)
 
@@ -102,8 +104,8 @@ is literally the "sliding scale + QoS" you asked for:
 
 - **Input:** live network state — ECN congestion marks, one-way-delay
   variation, loss, and the QoS-guaranteed headroom on the AV VLAN.
-- **Law:** when the fabric is quiet, run near the top of the
-  visually-lossless band (~2:1, closest to transparent). When contention
+- **Law:** when the fabric is quiet, rest at the transparent end of the
+  visually-lossless band (~2.5:1, `RATIO_TRANSPARENT` in the code). When contention
   appears, slide down toward 4:1–6:1 to shrink the stream and ride out
   the congestion — still line-based, still sub-ms, still visually
   lossless. **Never cross into the frame-based cliff.**
@@ -115,7 +117,8 @@ is literally the "sliding scale + QoS" you asked for:
 
 ### Free notches below the codec (spend these first)
 - **4:4:4 → 4:2:2 chroma subsampling:** ~1.5:1 for free, imperceptible on
-  video and most content — the first notch, no codec engaged.
+  video, **visible on desktop text and fine UI** — the first notch for
+  video content only, no codec engaged.
 - **Desktop/KVM: build-to-lossless** (Teradici's trick): send a
   light-compressed frame the instant pixels move, then progressively
   refine static regions to bit-exact. Text feels instant *and* ends up
@@ -138,26 +141,34 @@ slides within the visually-lossless band under QoS pressure.**
 - **Robustness:** with the FEC the headroom funds, it survives a shared,
   contended switched fabric instead of demanding a perfect one.
 
-## How it maps to the build tiers
+## How it maps to the 4K120-over-10G routes
 
-- **x86 + MTL (Phase 2a):** SVT-JPEG-XS (x86/AVX-512) at 2–4:1 over ST
-  2110-22, with ST 2022-7 dual-path FEC. This is the software SDVoE-lite
-  running *at the sweet spot*, today, on your 10/25G fabric.
-- **FPGA (Phase 2b / product):** a DSC- or VC-2- or JPEG-XS-class
-  line-based core in fabric — sub-line latency, the sweet spot in
-  hardware, deterministic, no OS jitter. The rate-control input comes from
-  the NIC's congestion signals.
-- **SBC (Phase 1):** RK3588 has no line-based visually-lossless codec —
-  only frame-based H.265. So the SBC path *cannot* reach this sweet spot;
-  it lives one regime up (the ~35–55 ms tier). That's the concrete reason
-  the transparent tier is x86-MTL or FPGA, not the SBC.
+At 4K120 on 10G the dial has less room than the 4K60 anchor above:
+4:4:4 needs 2.7–3.3:1 just to fit (`FEASIBILITY.md` §arithmetic), so the
+operating point sits at the visually-lossless limit, not below it.
+
+- **DSC passthrough (route A):** the GPU is the encoder. It fixes the bpp
+  at modeset from the sink's advertised caps (8 bpp ⇒ ~7.96 Gb/s), so
+  there is **no closed-loop rate control** and only ~15% headroom — too
+  little for 2022-7 duplication. Loss resilience must come from a clean
+  dedicated path and light parity FEC; an unrecovered loss corrupts the
+  rest of its DSC slice for that frame (slices decode independently).
+- **Lontium re-encode (route B):** same shape, but the bpp is ours to set
+  (1/16-bpp steps), so a coarse, modeset-time version of the dial exists.
+- **FPGA codec IP (route C):** the full dial — per-slice rate control,
+  sub-ms, deterministic. Licensed IP.
+- **x86 + SVT-JPEG-XS (route D):** the full dial in software. Measured on
+  a Core Ultra 9 285K: 4K 4:2:2 10-bit at 4 bpp encodes at 167 fps on 8
+  P-cores and decodes at 246 fps; four P-cores fail 120 fps. The codec is
+  sub-frame but the pipeline around it (whole-frame capture, present)
+  costs ~15–32 ms end to end.
 
 ## The unifying point
 
-This sweet-spot transport is the **design center for the whole product**,
-both forks: it delivers a transparent-feeling, QoS-robust, any-medium
-point-to-point experience on your switched network for unprotected content
-with **no license**, and it is the *identical* transport a licensed
-repeater uses for protected content. Same dial, same sweet spot. The
-compression knob — set to line-based, visually-lossless, ~2–4:1, adaptive,
-FEC-protected — is the answer that delivers what you're asking for.
+The adaptive sweet spot — line-based, visually lossless, ~2–4:1,
+FEC-protected — is the model behind yoke's software pipeline
+(`ratecontrol`, `fec`) and the design center for routes C and D. Route A
+has no dial: the GPU fixes the bpp, so its robustness comes from a clean
+dedicated path rather than headroom. None of the routes is license-free
+end to end: JPEG XS carries a pool fee, codec IP is licensed, and the
+DSC-link silicon is NDA-gated.

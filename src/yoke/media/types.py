@@ -23,7 +23,7 @@ Body = dict[str, Any]
 # (pts) are in these ticks so packetizers/jitter buffers share one unit.
 MEDIA_CLOCK_HZ = 90_000
 # Default network MTU for packetization; jumbo frames raise this and cut
-# packet rate ~6x (see doc/research/prototype/COMPRESSION.md).
+# packet rate ~6x (9000 vs 1500 bytes).
 DEFAULT_MTU = 1500
 JUMBO_MTU = 9000
 # RTP payload types we assign (dynamic range 96-127).
@@ -31,8 +31,9 @@ PT_RAW = 96  # RFC 4175 uncompressed
 PT_JPEGXS = 97
 PT_VC2 = 98
 PT_GENERIC = 99
-# Visually-lossless band the rate controller slides within (ADR: never
-# cross into frame-based coding). Ratio = uncompressed/compressed bytes.
+# Visually-lossless band the rate controller slides within (never cross
+# into frame-based coding; doc/research/COMPRESSION.md). Ratio =
+# uncompressed/compressed bytes.
 RATIO_MIN = 1.0
 RATIO_TRANSPARENT = 2.5
 RATIO_MAX = 6.0

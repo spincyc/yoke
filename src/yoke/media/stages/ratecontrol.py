@@ -1,7 +1,7 @@
 """Closed-loop rate controller: slide the codec target within the band.
 
 Implements the dynamic sliding-scale law from
-doc/research/prototype/COMPRESSION.md. The controller consumes receiver
+doc/research/COMPRESSION.md. The controller consumes receiver
 :class:`~yoke.media.types.NetworkReport` feedback and picks a compression
 *ratio* for the codec, always inside the visually-lossless band
 ``[RATIO_MIN, RATIO_MAX]``:

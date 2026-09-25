@@ -61,14 +61,14 @@ codec target within the visually-lossless band.
 
 ## Verification / debugging tools (first-class)
 
-- `yoke media probe` — push a known pattern through a pipeline (or over
+- `yoke-media probe` — push a known pattern through a pipeline (or over
   the wire), report end-to-end integrity, effective ratio, loss, FEC
   recoveries, and simulated glass-to-glass latency.
-- `yoke media snoop` — passive verifier: join the media group (or read a
+- `yoke-media snoop` — passive verifier: join the media group (or read a
   tap stream), render per-stage health and topology, transmit nothing.
-- `yoke media trace` — dump a single unit's journey through every stage
+- `yoke-media trace` — dump a single unit's journey through every stage
   (JSON), for debugging.
-- `yoke media simulate` — run the pipeline over the seeded sim with a
+- `yoke-media simulate` — run the pipeline over the seeded sim with a
   fault script; report survival and where units died.
 
 Metrics are computed only from `StageEvent`s (white-box) or wire packets

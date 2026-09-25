@@ -3,18 +3,22 @@
 ## Topology
 
 One agent per endpoint. Where the endpoint is embeddable Linux, the agent
-runs onboard; for closed appliances (JAP, Visionary, IPMX boxes) the
-agent runs as that device's *warden* on any always-on box — one process
-per device, no shared state, no global knowledge (ARCHITECTURE.md,
+runs onboard; for closed appliances with a device API (Just Add Power,
+NMOS devices) the agent runs as that device's *warden* on any always-on
+box. SDVoE is reachable only through its ZMP site server, a central
+controller (`doc/research/HARDWARE.md` §1). A warden is one process per
+device, with no shared state and no global knowledge (ARCHITECTURE.md,
 "Where the agent runs"). The CLI and snooper run anywhere on the LAN.
 
 ## Network (summary of doc/research/HARDWARE.md prerequisites)
 
 Dedicated AV VLAN; IGMP snooping on; exactly one pinned querier;
 fast-leave on; jumbo frames on all AV ports and trunks; one endpoint per
-1G access port; 10G uplinks between switches carrying multiple streams;
-PoE budget ≈13 W per endpoint. The control group (`239.121.111.107:9753`)
-is tiny traffic and rides the same VLAN so the snooper sees everything.
+access port, sized above its stream (a 4K120 DSC stream is ~8 Gb/s and
+needs a dedicated 10G port); unicast for high-rate flows until the
+flood-containment drill passes; PoE budget per the endpoint's datasheet.
+The control group (`239.121.111.107:9753`) is tiny traffic and rides the
+same VLAN so the snooper sees everything.
 
 Run `yoke snoop` on a wired host in that VLAN during bring-up: it will
 show announces from every healthy agent within ~2 s, every intent/ack
@@ -72,5 +76,5 @@ moment is safe by design and is exercised in the simulation tests.
 | `rx-drop {auth: n}` rising | key mismatch or an intruder | compare PSK provisioning; snoop for the origin id |
 | `rx-drop {stale: n}` rising on one origin | clock far behind + state loss (ADR 0007), or replay attack | check that node's NTP; snoop its seq values |
 | Video dies ~4 min after working | querier lost, snooping state aged out | pin the querier (HARDWARE.md §network) |
-| Re-pair glitches for seconds | fast-leave off (old+new stream > 1G port) | enable fast-leave |
+| Re-pair glitches for seconds | fast-leave off (old+new stream > port speed) | enable fast-leave |
 | Everything works except one trunk | jumbo-frame mismatch on that trunk | verify MTU end-to-end |

@@ -34,12 +34,13 @@ yoke snoop                             # passively watch the control plane
 
 Beyond routing, yoke ships a **software AV-over-IP pipeline** that runs the
 compression sweet spot (line-based, visually-lossless, ~2–4:1, sub-1 ms —
-`doc/research/prototype/COMPRESSION.md`). It is built like the control
+`doc/research/COMPRESSION.md`). It is built like the control
 plane: sans-I/O stages (source → codec → packetize → FEC → jitter → sink)
 that a passive snooper verifies **without touching the stream**, a seeded
-network simulator, and a real-UDP runner. The production datapath is
-GStreamer/MTL behind the `stream` driver; this pipeline is the reference
-model, the test oracle, and the debugging toolkit.
+network simulator, and a real-UDP runner. Production datapaths are
+endpoint hardware or gateware (`doc/design/EDGE-DEVICES.md`) or external
+processes behind drivers; this pipeline is the reference model, the test
+oracle, and the debugging toolkit.
 
 ```
 yoke-media simulate --drop 0.05 --fec xor   # run over a seeded lossy link, report health
@@ -62,11 +63,12 @@ host, then two hosts — and gated by one command (`make verify`). See
 | `doc/design/PROTOCOL.md` | Yoke Wire Protocol v1 (normative) |
 | `doc/design/MEDIA.md` | Media pipeline design; `MEDIA-TESTING.md` verification |
 | `doc/decisions/` | Architecture decision records |
-| `doc/research/` | Hardware research; `prototype/` build plan + platform |
+| `doc/design/EDGE-DEVICES.md` | Endpoint design for the 10G mesh (video + USB) |
+| `doc/research/` | Feasibility verdict, hardware survey, compression analysis |
 | `src/yoke/core/` | Sans-I/O control-plane core (stdlib only) |
 | `src/yoke/net/` | Asyncio multicast shell |
 | `src/yoke/drivers/` | Media-plane drivers (sim, igmp, usbip, jap, stream) |
-| `src/yoke/media/` | Sans-I/O media pipeline, snooper, runner, `yoke media` CLI |
+| `src/yoke/media/` | Sans-I/O media pipeline, snooper, runner, `yoke-media` CLI |
 | `src/yoke/` | `cli.py` (yoke), `snoop.py` (control-plane decoder) |
 | `tests/` | Offline suites, seeded lossy sims, real-socket loopback |
 

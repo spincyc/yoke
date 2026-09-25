@@ -97,8 +97,8 @@ def _validate_media(media: Body) -> tuple[str, int, int, str]:
 
 def default_receiver_command(role: str, media: Body) -> list[str]:
     """Reference GStreamer receive pipeline for a consumer. Bench-tunable;
-    the exact caps/decoder per encoding are confirmed on hardware (see
-    doc/research/prototype/BUILD-PLAN.md). Isolated here so a firmware/
+    the exact caps/decoder per encoding are bench-unverified. Isolated
+    here so a firmware/
     tooling change touches one function."""
     group, port, pt, encoding = _validate_media(media)
     depay = {

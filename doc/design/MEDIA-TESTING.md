@@ -67,6 +67,7 @@ frame integrity from the wire alone.
 format, FEC recovery, jitter handling, rate adaptation, and the real
 socket path on one host — everything except the physical media front-end
 (capture/display) and the real fabric's behavior under load. Those are the
-bench items in `doc/research/prototype/` (§risks). The two-host run
-closes the gap to the real network; the glass-to-glass rig
-(BUILD-PLAN.md §verification) closes it to physical latency.
+⚠ bench items in `doc/research/HARDWARE.md` and the milestones in
+`doc/design/EDGE-DEVICES.md`. The two-host run closes the gap to the real
+network; the photodiode glass-to-glass rig closes it to physical
+latency.
