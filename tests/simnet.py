@@ -28,6 +28,7 @@ from yoke.core.types import (
     AttachMedia,
     Body,
     DetachMedia,
+    DriverStatus,
     Effect,
     Frame,
     FrameType,
@@ -505,6 +506,7 @@ class SimNet:
         self._process(sn, sn.node.on_frame(frame, raw, now), now)
 
     def _process(self, sn: SimNode, effects: list[Effect], now: float) -> None:
+        status: DriverStatus | None = None
         for effect in effects:
             if isinstance(effect, SendFrame):
                 raw = encode(
@@ -517,14 +519,21 @@ class SimNet:
                 sn.stored = PersistedState(
                     seq=effect.state.seq, pairing=effect.state.pairing
                 )
+                self._process(
+                    sn, sn.node.on_persist_result(effect.request_id, True, now), now
+                )
             elif isinstance(effect, AttachMedia):
-                self._drive(sn, effect, now)
+                status = self._drive(sn, effect, now)
             elif isinstance(effect, DetachMedia):
-                self._drive(sn, None, now)
+                status = self._drive(sn, None, now)
             elif isinstance(effect, Log):
                 self._trace(f"{sn.node_id} log: {effect.message}")
+        if status is not None:
+            self._process(sn, sn.node.on_driver_status(status, now), now)
 
-    def _drive(self, sn: SimNode, attach: AttachMedia | None, now: float) -> None:
+    def _drive(
+        self, sn: SimNode, attach: AttachMedia | None, now: float
+    ) -> DriverStatus:
         """Run one driver command, then feed the resulting DriverStatus
         back into the node (scripted failures surface as ERROR)."""
         try:
@@ -537,7 +546,7 @@ class SimNet:
         status = sn.driver.poll()
         verb = "attach" if attach is not None else "detach"
         self._trace(f"  {sn.node_id} driver {verb} -> {status.state.value}")
-        self._process(sn, sn.node.on_driver_status(status, now), now)
+        return status
 
     def _fmt_send(
         self,
@@ -581,12 +590,18 @@ def replay_into_fresh(net: SimNet, consumer_id: str) -> Pairing:
         media=None,
         seed=sn.seed + 1,
     )
-    node.start(T0)
+
+    def persist(effects: list[Effect], now: float) -> None:
+        for effect in effects:
+            if isinstance(effect, Persist):
+                persist(node.on_persist_result(effect.request_id, True, now), now)
+
+    persist(node.start(T0), T0)
     for t, raw in sn.delivered:
         try:
             frame = decode(raw, net.psk)
         except FrameDrop as drop:
             node.on_drop(drop.reason, t)
             continue
-        node.on_frame(frame, raw, t)
+        persist(node.on_frame(frame, raw, t), t)
     return node.pairing

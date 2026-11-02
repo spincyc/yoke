@@ -14,7 +14,7 @@ drops in behind the same protocol and is invoked out-of-process:
 * :class:`RatioCodec` — models a visually-lossless codec at a target
   ratio. The *actual* payload bytes are preserved so ``decode`` can still
   reassemble and a sink can verify the embedded frame-id structurally;
-  the on-wire *size* is modelled in ``meta["frame_bytes"]`` rather than by
+  the compressed raster *size* is modelled in ``meta["frame_bytes"]`` rather than by
   discarding bytes, which keeps the whole thing deterministic and sans-I/O.
 
 Slice identity
@@ -28,8 +28,8 @@ meta keys exactly:
 ===============  ==========================================================
 ``slice_index``  0-based position of this slice within its frame
 ``slice_count``  total number of slices the frame was split into
-``frame_bytes``  modelled on-wire size of the *whole* frame (bytes); the
-                 uncompressed size divided by ``ratio`` (int). Present and
+``frame_bytes``  modelled size of the *whole* frame (bytes); the source's
+                 raster size (or payload size) divided by ``ratio`` (int). Present and
                  identical on every slice of the frame.
 ``ratio``        the applied compression ratio (clamped to the band)
 ``lossless``     whether the path is bit-exact (True) or lossy-modelled
@@ -45,11 +45,17 @@ lossless frame that means the reconstruction is not bit-exact).
 
 from __future__ import annotations
 
+import math
+from collections import OrderedDict
+from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
 from yoke.media.pipeline import StageBase
 from yoke.media.stages.ratecontrol import RateState
 from yoke.media.types import (
+    MAX_BUFFER_BYTES,
+    MAX_FRAME_BYTES,
+    MAX_PENDING_FRAMES,
     PT_JPEGXS,
     PT_RAW,
     RATIO_MAX,
@@ -60,6 +66,8 @@ from yoke.media.types import (
     StageEvent,
     StageOutcome,
     UnitKind,
+    is_digest,
+    require_uint,
 )
 
 DEFAULT_SLICES = 4
@@ -88,7 +96,57 @@ class Codec(Protocol):
 
 def _clamp_ratio(ratio: float) -> float:
     """Keep the target inside the visually-lossless band."""
+    if type(ratio) not in (int, float) or (
+        isinstance(ratio, float) and not math.isfinite(ratio)
+    ):
+        raise ValueError("target ratio must be finite")
     return min(RATIO_MAX, max(RATIO_MIN, ratio))
+
+
+def _frame_bytes(frame: MediaUnit) -> int:
+    """Account modeled rasters separately from the small verification payload."""
+    if frame.kind is not UnitKind.FRAME:
+        raise ValueError("codec input must be a frame")
+    if len(frame.payload) > MAX_FRAME_BYTES:
+        raise ValueError("frame exceeds byte budget")
+    value = frame.meta.get("frame_bytes", len(frame.payload))
+    return require_uint(value, "frame_bytes", MAX_FRAME_BYTES)
+
+
+def _slice_identity(unit: MediaUnit) -> tuple[int, int]:
+    if unit.kind is not UnitKind.SLICE:
+        raise ValueError("codec input must be a slice")
+    require_uint(unit.seq, "seq", 0xFFFF_FFFF_FFFF_FFFF)
+    require_uint(unit.pts, "pts", 0xFFFF_FFFF_FFFF_FFFF)
+    index = require_uint(unit.meta.get("slice_index"), "slice_index", 0xFFFF)
+    count = require_uint(unit.meta.get("slice_count"), "slice_count", 0xFFFF)
+    if index >= count:
+        raise ValueError("slice index/count out of range")
+    if not is_digest(unit.source_digest):
+        raise ValueError("source_digest is not a SHA-256 digest")
+    if "frame_bytes" in unit.meta:
+        require_uint(unit.meta["frame_bytes"], "frame_bytes", MAX_FRAME_BYTES)
+    if "ratio" in unit.meta:
+        ratio = unit.meta["ratio"]
+        if _clamp_ratio(ratio) != ratio:
+            raise ValueError("slice ratio outside band")
+    if "lossless" in unit.meta and type(unit.meta["lossless"]) is not bool:
+        raise ValueError("lossless must be boolean")
+    return index, count
+
+
+def _signature(unit: MediaUnit) -> tuple[object, ...]:
+    """Fields which must agree across all slices in one frame."""
+    return (
+        unit.seq,
+        unit.pts,
+        unit.source_digest,
+        unit.meta.get("slice_count"),
+        unit.meta.get("frame_bytes"),
+        unit.meta.get("ratio"),
+        unit.meta.get("lossless"),
+        unit.meta.get("capture_now"),
+    )
 
 
 def _slice_frame(
@@ -144,27 +202,40 @@ def _reassemble(slices: list[MediaUnit], *, lossless: bool) -> MediaUnit:
     """
     if not slices:
         raise ValueError("cannot reassemble a frame from zero slices")
-    ordered = sorted(slices, key=lambda unit: int(unit.meta["slice_index"]))
-    count = max(int(unit.meta["slice_count"]) for unit in ordered)
-    present = {int(unit.meta["slice_index"]) for unit in ordered}
-    incomplete = len(present) < count
+    slots: dict[int, MediaUnit] = {}
+    signature = _signature(slices[0])
+    for unit in slices:
+        index, count = _slice_identity(unit)
+        if _signature(unit) != signature:
+            raise ValueError("conflicting frame metadata")
+        if index in slots and slots[index] != unit:
+            raise ValueError("conflicting duplicate slice")
+        slots[index] = unit
+    ordered = [slots[index] for index in sorted(slots)]
+    count = int(ordered[0].meta["slice_count"])
+    incomplete = len(slots) < count
+    if sum(len(unit.payload) for unit in ordered) > MAX_FRAME_BYTES:
+        raise ValueError("frame exceeds byte budget")
     payload = b"".join(unit.payload for unit in ordered)
     head = ordered[0]
     ratio = head.meta.get("ratio", RATIO_MIN)
     frame_bytes = head.meta.get("frame_bytes", len(payload))
+    meta = {
+        "slice_count": count,
+        "frame_bytes": frame_bytes,
+        "ratio": ratio,
+        "lossless": lossless,
+        "incomplete": incomplete,
+    }
+    if "capture_now" in head.meta:
+        meta["capture_now"] = head.meta["capture_now"]
     return MediaUnit(
         kind=UnitKind.FRAME,
         seq=head.seq,
         pts=head.pts,
         payload=payload,
         source_digest=head.source_digest,
-        meta={
-            "slice_count": count,
-            "frame_bytes": frame_bytes,
-            "ratio": ratio,
-            "lossless": lossless,
-            "incomplete": incomplete,
-        },
+        meta=meta,
     )
 
 
@@ -178,7 +249,7 @@ class PassthroughCodec:
     lossless: bool = True
 
     def __init__(self, n_slices: int = DEFAULT_SLICES) -> None:
-        if n_slices < 1:
+        if require_uint(n_slices, "n_slices", 0xFFFF) < 1:
             raise ValueError("n_slices must be >= 1")
         self._n_slices = n_slices
 
@@ -186,7 +257,7 @@ class PassthroughCodec:
         return _slice_frame(
             frame,
             self._n_slices,
-            frame_bytes=len(frame.payload),
+            frame_bytes=_frame_bytes(frame),
             ratio=RATIO_MIN,
             lossless=True,
         )
@@ -210,13 +281,13 @@ class RatioCodec:
     lossless: bool = False
 
     def __init__(self, n_slices: int = DEFAULT_SLICES) -> None:
-        if n_slices < 1:
+        if require_uint(n_slices, "n_slices", 0xFFFF) < 1:
             raise ValueError("n_slices must be >= 1")
         self._n_slices = n_slices
 
     def encode(self, frame: MediaUnit, target_ratio: float) -> list[MediaUnit]:
         ratio = _clamp_ratio(target_ratio)
-        frame_bytes = int(len(frame.payload) / ratio)
+        frame_bytes = int(_frame_bytes(frame) / ratio)
         return _slice_frame(
             frame,
             self._n_slices,
@@ -296,72 +367,154 @@ class CodecEncodeStage(StageBase):
         return StageOutcome(emit=slices, events=events)
 
 
-class CodecDecodeStage(StageBase):
-    """Wrap a :class:`Codec` as a pipeline stage: N SLICEs -> one FRAME.
+@dataclass
+class _FrameBuffer:
+    signature: tuple[object, ...]
+    count: int
+    slices: dict[int, MediaUnit] = field(default_factory=dict)
+    bytes: int = 0
 
-    Slices are buffered per frame key ``(seq, pts)`` and may arrive in any
-    order; the frame is decoded and emitted as soon as all of its slices
-    are present. :meth:`flush` force-emits any partially-buffered frames
-    (marked ``incomplete``) — useful when a completeness deadline passes.
+
+class CodecDecodeStage(StageBase):
+    """Bounded, consistent assembly of slices, with a recent replay window.
+
+    Frames emit when every distinct slice is present. Capacity evicts the
+    oldest partial frame; malformed/conflicting slices cannot overwrite
+    accepted bytes. ``flush`` explicitly emits best-effort incomplete frames.
     """
 
     name = "codec-decode"
 
-    def __init__(self, codec: Codec) -> None:
+    def __init__(
+        self,
+        codec: Codec,
+        *,
+        max_frames: int = MAX_PENDING_FRAMES,
+        max_bytes: int = MAX_BUFFER_BYTES,
+        max_frame_bytes: int = MAX_FRAME_BYTES,
+        done_window: int = 1024,
+    ) -> None:
+        for name, value in (
+            ("max_frames", max_frames),
+            ("max_bytes", max_bytes),
+            ("max_frame_bytes", max_frame_bytes),
+            ("done_window", done_window),
+        ):
+            if type(value) is not int or value < 1:
+                raise ValueError(f"{name} must be a positive integer")
         self._codec = codec
-        self._buffers: dict[tuple[int, int], dict[int, MediaUnit]] = {}
+        self._max_frames = max_frames
+        self._max_bytes = max_bytes
+        self._max_frame_bytes = max_frame_bytes
+        self._done_window = done_window
+        self._buffers: OrderedDict[tuple[int, int], _FrameBuffer] = OrderedDict()
+        self._done: OrderedDict[tuple[int, int], None] = OrderedDict()
+        self._bytes = 0
 
     def process(self, unit: MediaUnit, now: float) -> StageOutcome:
+        out = StageOutcome()
+        try:
+            index, count = _slice_identity(unit)
+        except (TypeError, ValueError) as exc:
+            self._drop(out, unit.seq, unit.pts, now, f"bad-slice: {exc}")
+            return out
         key = (unit.seq, unit.pts)
-        index = int(unit.meta["slice_index"])
-        count = int(unit.meta["slice_count"])
-        slots = self._buffers.setdefault(key, {})
-        slots[index] = unit
-        events = [
+        if key in self._done:
+            self._drop(out, *key, now, "frame-already-emitted")
+            return out
+        size = len(unit.payload)
+        if size > min(self._max_frame_bytes, self._max_bytes):
+            self._drop(out, *key, now, "frame-byte-budget")
+            return out
+        frame = self._buffers.get(key)
+        if frame is None:
+            while len(self._buffers) >= self._max_frames:
+                self._retire(next(iter(self._buffers)), now, out, "frame-capacity")
+            frame = _FrameBuffer(_signature(unit), count)
+            self._buffers[key] = frame
+        elif frame.signature != _signature(unit):
+            self._retire(key, now, out, "conflicting-frame-meta")
+            return out
+        previous = frame.slices.get(index)
+        if previous is not None:
+            if previous != unit:
+                self._retire(key, now, out, "conflicting-slice")
+            else:
+                self._drop(out, *key, now, "duplicate-slice")
+            return out
+        if frame.bytes + size > self._max_frame_bytes:
+            self._retire(key, now, out, "frame-byte-budget")
+            return out
+        while self._bytes + size > self._max_bytes:
+            victim = next(iter(self._buffers))
+            self._retire(victim, now, out, "buffer-byte-budget")
+            if victim == key:
+                return out
+        frame.slices[index] = unit
+        frame.bytes += size
+        self._bytes += size
+        out.events.append(
             StageEvent(
                 stage=self.name,
                 kind=EventKind.IN,
                 seq=unit.seq,
                 pts=unit.pts,
                 now=now,
-                detail={"slice_index": index, "have": len(slots), "of": count},
-            )
-        ]
-        if len(slots) < count:
-            return StageOutcome(events=events)
-        frame = self._codec.decode(list(slots.values()))
-        del self._buffers[key]
-        events.append(
-            StageEvent(
-                stage=self.name,
-                kind=EventKind.OUT,
-                seq=frame.seq,
-                pts=frame.pts,
-                now=now,
-                detail={"bytes": len(frame.payload), "incomplete": False},
+                detail={"slice_index": index, "have": len(frame.slices), "of": count},
             )
         )
-        return StageOutcome(emit=[frame], events=events)
+        if len(frame.slices) == count:
+            decoded = self._codec.decode(list(frame.slices.values()))
+            self._remove(key)
+            out.emit.append(decoded)
+            out.events.append(self._out_event(decoded, now))
+        return out
 
     def flush(self, now: float) -> StageOutcome:
-        """Emit every partially-buffered frame, flagged ``incomplete``."""
+        """Emit partial frames in identity order, flagged ``incomplete``."""
         out = StageOutcome()
         for key in sorted(self._buffers):
-            slots = self._buffers[key]
-            frame = self._codec.decode(list(slots.values()))
+            frame = self._codec.decode(list(self._buffers[key].slices.values()))
             out.emit.append(frame)
-            out.events.append(
-                StageEvent(
-                    stage=self.name,
-                    kind=EventKind.OUT,
-                    seq=frame.seq,
-                    pts=frame.pts,
-                    now=now,
-                    detail={
-                        "bytes": len(frame.payload),
-                        "incomplete": frame.meta["incomplete"],
-                    },
-                )
-            )
-        self._buffers.clear()
+            out.events.append(self._out_event(frame, now))
+            self._remove(key)
         return out
+
+    def _remove(self, key: tuple[int, int]) -> None:
+        self._bytes -= self._buffers.pop(key).bytes
+        self._done[key] = None
+        while len(self._done) > self._done_window:
+            self._done.popitem(last=False)
+
+    def _retire(
+        self, key: tuple[int, int], now: float, out: StageOutcome, why: str
+    ) -> None:
+        self._remove(key)
+        self._drop(out, *key, now, why)
+
+    def _drop(
+        self, out: StageOutcome, seq: int, pts: int, now: float, why: str
+    ) -> None:
+        out.events.append(
+            StageEvent(
+                stage=self.name,
+                kind=EventKind.DROP,
+                seq=seq,
+                pts=pts,
+                now=now,
+                detail={"why": why},
+            )
+        )
+
+    def _out_event(self, frame: MediaUnit, now: float) -> StageEvent:
+        return StageEvent(
+            stage=self.name,
+            kind=EventKind.OUT,
+            seq=frame.seq,
+            pts=frame.pts,
+            now=now,
+            detail={
+                "bytes": len(frame.payload),
+                "incomplete": frame.meta["incomplete"],
+            },
+        )

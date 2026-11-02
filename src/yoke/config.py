@@ -12,7 +12,7 @@ Example::
     port = 9753                          # optional override
 
     [driver]
-    type = "jap"               # sim | igmp | usbip | jap
+    type = "jap"               # sim | igmp | usbip | jap | stream
     decoder_host = "10.0.0.20" # driver-specific keys follow the type
 
 Fail-fast: every problem raises :class:`ConfigError` with the offending
@@ -21,6 +21,8 @@ key, before any socket is opened.
 
 from __future__ import annotations
 
+import os
+import stat
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -33,6 +35,7 @@ from yoke.core.types import (
     NodeConfig,
     Role,
 )
+from yoke.net.mcast import validate_multicast
 
 
 class ConfigError(ValueError):
@@ -48,11 +51,39 @@ class AgentConfig:
     port: int = CONTROL_PORT
     interface: str = "0.0.0.0"
     driver: Body = field(default_factory=dict)
+    allow_new_state: bool = False
+
+
+def read_psk(path: Path) -> bytes:
+    """Read bounded private key bytes from one verified regular descriptor."""
+    flags = os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError("PSK must be a regular file")
+        if info.st_mode & 0o077:
+            raise ValueError(
+                f"PSK is group/other-accessible (mode {info.st_mode & 0o777:o}); "
+                "chmod 600 it"
+            )
+        if info.st_size > 4096:
+            raise ValueError("PSK exceeds 4096 bytes")
+        with os.fdopen(fd, "rb", closefd=False) as fh:
+            raw = fh.read(4097)
+        if len(raw) > 4096:
+            raise ValueError("PSK exceeds 4096 bytes")
+    finally:
+        os.close(fd)
+    psk = raw[:-1] if raw.endswith(b"\n") else raw
+    if not psk:
+        raise ValueError("PSK is empty")
+    return psk
 
 
 def _require_str(data: Body, key: str, path: Path) -> str:
     value = data.get(key)
-    if not isinstance(value, str) or not value:
+    if not isinstance(value, str) or not value or "\x00" in value:
         raise ConfigError(f"{path}: missing or invalid {key!r}")
     return value
 
@@ -63,8 +94,14 @@ def load(path: Path) -> AgentConfig:
             data = tomllib.load(fh)
     except FileNotFoundError as exc:
         raise ConfigError(f"{path}: not found") from exc
+    except OSError as exc:
+        raise ConfigError(f"{path}: cannot read config: {exc}") from exc
     except tomllib.TOMLDecodeError as exc:
         raise ConfigError(f"{path}: invalid TOML: {exc}") from exc
+    except UnicodeDecodeError as exc:
+        raise ConfigError(f"{path}: config must be UTF-8") from exc
+    except ValueError as exc:
+        raise ConfigError(f"{path}: cannot read config: {exc}") from exc
 
     node_id = _require_str(data, "node_id", path)
     try:
@@ -86,30 +123,17 @@ def load(path: Path) -> AgentConfig:
     if "psk_file" in data:
         psk_path = Path(_require_str(data, "psk_file", path))
         try:
-            raw_psk = psk_path.read_bytes()
-            mode = psk_path.stat().st_mode
-        except OSError as exc:
+            psk = read_psk(psk_path)
+        except (OSError, ValueError) as exc:
             raise ConfigError(f"{path}: psk_file {psk_path}: {exc}") from exc
-        if mode & 0o077:
-            raise ConfigError(
-                f"{path}: psk_file {psk_path} is group/other-accessible "
-                f"(mode {mode & 0o777:o}); chmod 600 it"
-            )
-        # Strip at most one trailing newline (editors add it); preserve
-        # every other byte so raw key material is not silently weakened.
-        psk = raw_psk[:-1] if raw_psk.endswith(b"\n") else raw_psk
-        if not psk:
-            raise ConfigError(f"{path}: psk_file {psk_path} is empty")
 
     group = data.get("group", CONTROL_GROUP)
     port = data.get("port", CONTROL_PORT)
     interface = data.get("interface", "0.0.0.0")
-    if not isinstance(group, str):
-        raise ConfigError(f"{path}: invalid 'group'")
-    if not isinstance(port, int) or isinstance(port, bool) or not 1 <= port <= 65535:
-        raise ConfigError(f"{path}: invalid 'port'")
-    if not isinstance(interface, str):
-        raise ConfigError(f"{path}: invalid 'interface'")
+    try:
+        validate_multicast(group, port, interface=interface)
+    except ValueError as exc:
+        raise ConfigError(f"{path}: {exc}") from exc
 
     driver = data.get("driver", {})
     if not isinstance(driver, dict):

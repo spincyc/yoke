@@ -40,12 +40,15 @@ are skipped (tapped ``DROP``) so the stream keeps flowing.
 
 from __future__ import annotations
 
+import heapq
+import math
 from collections import deque
 from dataclasses import dataclass
 from typing import Final
 
 from yoke.media.pipeline import StageBase
 from yoke.media.types import (
+    MAX_BUFFER_BYTES,
     MEDIA_CLOCK_HZ,
     Body,
     EventKind,
@@ -53,6 +56,7 @@ from yoke.media.types import (
     StageEvent,
     StageOutcome,
     UnitKind,
+    require_uint,
 )
 
 # 16-bit RTP sequence space (RFC 3550 / serial arithmetic RFC 1982).
@@ -71,25 +75,6 @@ _MAX_GAP: Final = 4096
 # copy of a released packet is recognised as a duplicate (not a late
 # first arrival). Bounds memory across the wrap.
 _RELEASED_WINDOW: Final = 1024
-
-
-def _seq_lt(a: int, b: int) -> bool:
-    """RFC 1982 serial "less than" for 16-bit sequence numbers."""
-    return 0 < ((b - a) % _SEQ_MOD) < _SEQ_HALF
-
-
-def _seq_dist(a: int, b: int) -> int:
-    """Forward distance from ``a`` to ``b`` in serial arithmetic."""
-    return (b - a) % _SEQ_MOD
-
-
-def _serial_min(seqs: list[int]) -> int:
-    """The serial-smallest sequence number in a cluster (span < half)."""
-    candidate = seqs[0]
-    for s in seqs[1:]:
-        if _seq_lt(s, candidate):
-            candidate = s
-    return candidate
 
 
 @dataclass(frozen=True)
@@ -112,11 +97,32 @@ class JitterBuffer(StageBase):
         min_delay: float = 0.005,
         max_delay: float = 0.2,
         stat_interval: float = 1.0,
+        max_packets: int = _SEQ_HALF - 1,
+        max_bytes: int = MAX_BUFFER_BYTES,
     ) -> None:
+        if not all(
+            math.isfinite(v)
+            for v in (playout_delay, min_delay, max_delay, stat_interval)
+        ):
+            raise ValueError("jitter delays and interval must be finite")
+        if playout_delay < 0:
+            raise ValueError("playout_delay must be nonnegative")
         if not 0.0 <= min_delay <= max_delay:
             raise ValueError("require 0 <= min_delay <= max_delay")
         if stat_interval <= 0:
             raise ValueError("stat_interval must be positive")
+        if require_uint(max_packets, "max_packets", _SEQ_HALF - 1) == 0:
+            raise ValueError("max_packets must be positive")
+        if type(max_bytes) is not int or max_bytes < 1:
+            raise ValueError("max_bytes must be a positive integer")
+        self._max_packets = max_packets
+        self._max_bytes = max_bytes
+        self._bytes = 0
+        self._heap: list[int] = []
+        self._reference: int | None = None
+        self._source_ssrc: int | None = None
+        self._source_frame: int | None = None
+        self._released_source_frame: int | None = None
         self._min_delay = min_delay
         self._max_delay = max_delay
         self._stat_interval = stat_interval
@@ -133,6 +139,7 @@ class JitterBuffer(StageBase):
         self._late = 0
         self._dropped_gap = 0
         self._duplicates = 0
+        self._discontinuities = 0
 
     # -- introspection -------------------------------------------------------
 
@@ -151,6 +158,7 @@ class JitterBuffer(StageBase):
             "late": self._late,
             "dropped_gap": self._dropped_gap,
             "duplicates": self._duplicates,
+            "discontinuities": self._discontinuities,
             "playout_delay": self._playout,
             "jitter_estimate": self._jitter,
         }
@@ -163,11 +171,125 @@ class JitterBuffer(StageBase):
         if unit.kind is not UnitKind.PACKET:
             return StageOutcome(emit=[unit])  # not ours to buffer
 
-        seq = unit.seq % _SEQ_MOD
+        try:
+            require_uint(unit.seq, "sequence", _SEQ_MOD - 1)
+            require_uint(unit.pts, "pts", 0xFFFF_FFFF_FFFF_FFFF)
+        except ValueError:
+            return StageOutcome(
+                events=[
+                    self._event(
+                        EventKind.DROP,
+                        unit.seq,
+                        unit.pts,
+                        now,
+                        {"reason": "bad-identity"},
+                    )
+                ]
+            )
+        identity = self._source_identity(unit)
+        if len(unit.payload) > self._max_bytes:
+            return StageOutcome(
+                events=[
+                    self._event(
+                        EventKind.DROP,
+                        unit.seq,
+                        unit.pts,
+                        now,
+                        {"reason": "buffer-capacity"},
+                    )
+                ]
+            )
+        if (
+            identity is not None
+            and self._source_ssrc is not None
+            and identity[0] != self._source_ssrc
+        ):
+            return StageOutcome(
+                events=[
+                    self._event(
+                        EventKind.DROP,
+                        unit.seq,
+                        unit.pts,
+                        now,
+                        {
+                            "reason": "source-changed",
+                            "expected_ssrc": self._source_ssrc,
+                        },
+                    )
+                ]
+            )
+        if (
+            identity is not None
+            and self._released_source_frame is not None
+            and identity[1] < self._released_source_frame
+        ):
+            self._late += 1
+            return StageOutcome(
+                events=[
+                    self._event(
+                        EventKind.LATE,
+                        unit.seq,
+                        unit.pts,
+                        now,
+                        {"reason": "older-source-frame"},
+                    )
+                ]
+            )
+        events: list[StageEvent] = []
+        reference = self._reference if self._reference is not None else unit.seq
+        distance = (unit.seq - reference) % _SEQ_MOD
+        seq = reference + (distance if distance < _SEQ_HALF else distance - _SEQ_MOD)
+        if (
+            identity is not None
+            and self._source_frame is not None
+            and identity[1] > self._source_frame
+            and (distance == _SEQ_HALF or seq <= reference)
+        ):
+            # The full source frame identity proves forward progress even
+            # when 16-bit serial arithmetic cannot select the RTP epoch.
+            # Restart the ordering window; the number of skipped cycles
+            # cannot be recovered from this framing, so do not invent it.
+            released_source_frame = self._released_source_frame
+            events.extend(self.reset(now, reason="newer-frame-discontinuity").events)
+            # This is the same source, so already played frames remain
+            # retired even while its new RTP ordering window is empty.
+            self._released_source_frame = released_source_frame
+            events[-1].detail.update(frame_seq=identity[1], rtp_seq=unit.seq)
+            reference, distance, seq = unit.seq, 0, unit.seq
+        elif (
+            identity is not None
+            and self._source_frame is not None
+            and identity[1] < self._source_frame
+            and seq >= reference
+        ):
+            self._late += 1
+            return StageOutcome(
+                events=[
+                    self._event(
+                        EventKind.LATE,
+                        unit.seq,
+                        unit.pts,
+                        now,
+                        {"reason": "older-source-frame"},
+                    )
+                ]
+            )
+        if distance == _SEQ_HALF:
+            return StageOutcome(
+                events=[
+                    self._event(
+                        EventKind.DROP,
+                        unit.seq,
+                        unit.pts,
+                        now,
+                        {"reason": "ambiguous-sequence"},
+                    )
+                ]
+            )
         if seq in self._buffer:
             self._duplicates += 1  # second copy, still held
             return StageOutcome()
-        if self._watermark is not None and not _seq_lt(self._watermark, seq):
+        if self._watermark is not None and seq <= self._watermark:
             # At or behind the watermark: its slot has already been released.
             if seq in self._released_set:
                 self._duplicates += 1  # second copy of a released packet
@@ -177,26 +299,106 @@ class JitterBuffer(StageBase):
                 events=[
                     self._event(
                         EventKind.LATE,
-                        seq,
+                        unit.seq,
                         unit.pts,
                         now,
-                        {"watermark": self._watermark},
+                        {"watermark": self._watermark % _SEQ_MOD},
                     )
                 ]
             )
 
-        # Accept: buffer, update jitter/playout, hold for playout.
+        if (
+            len(self._buffer) >= self._max_packets
+            or self._bytes + len(unit.payload) > self._max_bytes
+            or (
+                self._heap
+                and max(reference, seq) - min(self._heap[0], seq) >= _SEQ_HALF
+            )
+        ):
+            return StageOutcome(
+                events=[
+                    self._event(
+                        EventKind.DROP,
+                        unit.seq,
+                        unit.pts,
+                        now,
+                        {"reason": "buffer-capacity"},
+                    )
+                ]
+            )
+        # Heap keys are unwrapped sequences: release is O(log n), and
+        # later sequence cycles never collide with remembered duplicates.
         self._buffer[seq] = _Held(unit=unit, arrival=now)
+        heapq.heappush(self._heap, seq)
+        self._bytes += len(unit.payload)
+        self._reference = max(reference, seq)
+        if identity is not None:
+            self._source_ssrc = identity[0]
+            self._source_frame = max(
+                self._source_frame if self._source_frame is not None else identity[1],
+                identity[1],
+            )
         self._update_jitter(now, unit.pts)
         self._adapt_playout()
         return StageOutcome(
             events=[
+                *events,
                 self._event(
                     EventKind.HOLD,
-                    seq,
+                    unit.seq,
                     unit.pts,
                     now,
                     {"deadline": now + self._playout, "playout_delay": self._playout},
+                ),
+            ]
+        )
+
+    @staticmethod
+    def _source_identity(unit: MediaUnit) -> tuple[int, int] | None:
+        try:
+            return (
+                require_uint(unit.meta["rtp_ssrc"], "ssrc", 0xFFFF_FFFF),
+                require_uint(
+                    unit.meta["frame_seq"], "frame_seq", 0xFFFF_FFFF_FFFF_FFFF
+                ),
+            )
+        except (KeyError, ValueError):
+            return None
+
+    def reset(self, now: float, *, reason: str = "explicit-reset") -> StageOutcome:
+        """Start a new ordering/source window, retaining cumulative stats.
+
+        Call on a known source/session restart. Bare RTP cannot prove a
+        new sequence epoch after a half-space outage. Reference inputs can
+        instead prove progress with a newer full frame identity.
+        This resets this stage only: a new source/session also requires
+        rebuilding downstream reassembly and deduplication state.
+        """
+        discarded = len(self._buffer)
+        last_seq = (self._watermark or 0) % _SEQ_MOD
+        self._buffer.clear()
+        self._heap.clear()
+        self._bytes = 0
+        self._reference = self._watermark = None
+        self._source_ssrc = self._source_frame = None
+        self._released_source_frame = None
+        self._released_set.clear()
+        self._released_order.clear()
+        self._prev_transit = None
+        self._jitter = 0.0
+        self._discontinuities += 1
+        return StageOutcome(
+            events=[
+                self._event(
+                    EventKind.ADJUST,
+                    last_seq,
+                    0,
+                    now,
+                    {
+                        "reason": reason,
+                        "discarded_packets": discarded,
+                        "unknown_gap": True,
+                    },
                 )
             ]
         )
@@ -204,6 +406,30 @@ class JitterBuffer(StageBase):
     def tick(self, now: float) -> StageOutcome:
         out = StageOutcome()
         self._release_due(now, out)
+        self._maybe_stat(now, out)
+        return out
+
+    def flush(self, now: float) -> StageOutcome:
+        """At terminal input, release held packets at the real finish time.
+
+        No more packets can fill a gap, so terminal release need not wait
+        for playout deadlines. The ADJUST event makes this forced drain
+        explicit; OUT timestamps and delays retain the supplied clock.
+        """
+        if not self._buffer:
+            return StageOutcome()
+        out = StageOutcome(
+            events=[
+                self._event(
+                    EventKind.ADJUST,
+                    self._head_seq() % _SEQ_MOD,
+                    0,
+                    now,
+                    {"reason": "finalize", "forced_packets": len(self._buffer)},
+                )
+            ]
+        )
+        self._release_due(now, out, force=True)
         self._maybe_stat(now, out)
         return out
 
@@ -215,23 +441,35 @@ class JitterBuffer(StageBase):
 
     # -- release -------------------------------------------------------------
 
-    def _release_due(self, now: float, out: StageOutcome) -> None:
+    def _release_due(
+        self, now: float, out: StageOutcome, *, force: bool = False
+    ) -> None:
         while self._buffer:
             head = self._head_seq()
             entry = self._buffer[head]
-            if entry.arrival + self._playout > now:
+            if not force and entry.arrival + self._playout > now:
                 break  # head not yet due; nothing behind it can jump ahead
             if self._watermark is not None:
                 self._skip_gap(head, now, out)
             del self._buffer[head]
+            heapq.heappop(self._heap)
+            self._bytes -= len(entry.unit.payload)
             self._watermark = head
             self._mark_released(head)
             self._released += 1
+            identity = self._source_identity(entry.unit)
+            if identity is not None:
+                self._released_source_frame = max(
+                    self._released_source_frame
+                    if self._released_source_frame is not None
+                    else identity[1],
+                    identity[1],
+                )
             out.emit.append(entry.unit)
             out.events.append(
                 self._event(
                     EventKind.OUT,
-                    head,
+                    entry.unit.seq,
                     entry.unit.pts,
                     now,
                     {"delay": now - entry.arrival, "playout_delay": self._playout},
@@ -242,7 +480,7 @@ class JitterBuffer(StageBase):
         """Declare the missing seqs between the watermark and a due head
         lost: they will never make their deadline. Advance past them."""
         assert self._watermark is not None
-        missing = _seq_dist(self._watermark, head) - 1
+        missing = head - self._watermark - 1
         if missing <= 0:
             return  # contiguous
         if missing > _MAX_GAP:
@@ -251,29 +489,28 @@ class JitterBuffer(StageBase):
             out.events.append(
                 self._event(
                     EventKind.DROP,
-                    head,
+                    head % _SEQ_MOD,
                     0,
                     now,
                     {"reason": "gap", "skipped": missing},
                 )
             )
-            self._watermark = (head - 1) % _SEQ_MOD
+            self._watermark = head - 1
             return
-        expected = (self._watermark + 1) % _SEQ_MOD
+        expected = self._watermark + 1
         for _ in range(missing):
             self._dropped_gap += 1
             out.events.append(
-                self._event(EventKind.DROP, expected, 0, now, {"reason": "gap"})
+                self._event(
+                    EventKind.DROP, expected % _SEQ_MOD, 0, now, {"reason": "gap"}
+                )
             )
             self._watermark = expected
-            expected = (expected + 1) % _SEQ_MOD
+            expected += 1
 
     def _head_seq(self) -> int:
         """The serial-next buffered sequence number (head of line)."""
-        if self._watermark is None:
-            return _serial_min(list(self._buffer))
-        watermark = self._watermark
-        return min(self._buffer, key=lambda s: _seq_dist(watermark, s))
+        return self._heap[0]
 
     def _mark_released(self, seq: int) -> None:
         if seq in self._released_set:
@@ -309,7 +546,13 @@ class JitterBuffer(StageBase):
         if now - self._last_stat >= self._stat_interval:
             self._last_stat = now
             out.events.append(
-                self._event(EventKind.STAT, self._watermark or 0, 0, now, self.stats())
+                self._event(
+                    EventKind.STAT,
+                    (self._watermark or 0) % _SEQ_MOD,
+                    0,
+                    now,
+                    self.stats(),
+                )
             )
 
     def _event(

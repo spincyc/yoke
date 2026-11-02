@@ -16,6 +16,9 @@ PROTOCOL_VERSION = 1
 CONTROL_GROUP = "239.121.111.107"
 CONTROL_PORT = 9753
 MAX_FRAME_BYTES = 1200
+MAX_SEQUENCE = (1 << 63) - 1
+SEQUENCE_RESERVATION = 4096
+MAX_JSON_DEPTH = 32
 
 ANN_INTERVAL = 2.0
 ANN_JITTER = 0.25  # +/- fraction of ANN_INTERVAL
@@ -27,10 +30,6 @@ CLI_DEADLINE = 10.0
 INTENT_CACHE_TTL = 24 * 3600.0
 SUPPRESSION_MIN = 0.2
 SUPPRESSION_MAX = 1.2
-# A well-behaved origin resumes seq at max(persisted+1, int(unix_time))
-# (ADR 0007), so a legitimate seq never runs far ahead of the receiver's
-# clock. Frames claiming a seq beyond this margin are rejected so a
-# spoofed high-water cannot permanently mute a real origin (ADR 0010).
 NS_PER_S = 1_000_000_000
 # Sequence numbers are Unix nanoseconds (ADR 0007): fine enough that a
 # burst of frames never collides within one origin, and consistent
@@ -127,13 +126,15 @@ class NodeConfig:
     name: str = ""
 
     def __post_init__(self) -> None:
-        if not NODE_ID_RE.match(self.node_id):
+        if not NODE_ID_RE.fullmatch(self.node_id):
             raise ValueError(f"invalid node id: {self.node_id!r}")
+        if not isinstance(self.name, str) or len(self.name) > 64:
+            raise ValueError("node name must be a string of at most 64 characters")
 
 
 @dataclass
 class PersistedState:
-    """The only durable state an agent owns (PROTOCOL.md: persist before ack)."""
+    """Committed pairing and reserved outbound sequence ceiling (ADR 0012)."""
 
     seq: int = 0
     pairing: Pairing = field(default_factory=lambda: Pairing(None, VERSION_ZERO))
@@ -149,14 +150,34 @@ class PersistedState:
 
     @classmethod
     def from_json(cls, data: Body) -> PersistedState:
+        if not isinstance(data, dict) or set(data) != {"seq", "pairing"}:
+            raise ValueError("state requires exactly seq and pairing")
+        seq = data["seq"]
+        if type(seq) is not int or not 0 <= seq <= MAX_SEQUENCE:
+            raise ValueError("state seq must be a bounded nonnegative integer")
         pairing = data["pairing"]
+        if not isinstance(pairing, dict) or set(pairing) != {"producer", "version"}:
+            raise ValueError("state pairing requires producer and version")
+        producer = pairing["producer"]
+        if producer is not None and (
+            not isinstance(producer, str) or not NODE_ID_RE.fullmatch(producer)
+        ):
+            raise ValueError("state producer must be a node id or null")
         version = pairing["version"]
+        if not isinstance(version, list) or len(version) != 2:
+            raise ValueError("state version must have two items")
+        count, origin = version
+        if type(count) is not int or not 0 <= count <= MAX_SEQUENCE:
+            raise ValueError("state version count must be a bounded integer")
+        if (
+            not isinstance(origin, str)
+            or (count == 0 and (origin != "" or producer is not None))
+            or (count > 0 and not NODE_ID_RE.fullmatch(origin))
+        ):
+            raise ValueError("state version origin or zero sentinel is invalid")
         return cls(
-            seq=int(data["seq"]),
-            pairing=Pairing(
-                producer=pairing["producer"],
-                version=(int(version[0]), str(version[1])),
-            ),
+            seq=seq,
+            pairing=Pairing(producer=producer, version=(count, origin)),
         )
 
 
@@ -207,9 +228,10 @@ class DetachMedia:
 
 @dataclass(frozen=True)
 class Persist:
-    """Durably store this state before emitting any later effect."""
+    """Save, then feed on_persist_result(request_id, success, now) to Node."""
 
     state: PersistedState
+    request_id: int = 0
 
 
 @dataclass(frozen=True)

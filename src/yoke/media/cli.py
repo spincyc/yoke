@@ -1,4 +1,4 @@
-"""``yoke media`` — debug/observability CLI for the media pipeline.
+"""``yoke-media`` — debug CLI for the synthetic reference media pipeline.
 
 This is the media-plane twin of :mod:`yoke.cli`: every decision lives in a
 pure, string-returning helper driven by explicit data, and ``main`` is the
@@ -24,34 +24,39 @@ Subcommands
 ``run``       The real two-host/loopback runner: ``--role sender`` /
               ``--role receiver`` over UDP (multicast or ``--unicast``).
 
-All the sim/rendering logic is sans-I/O; only ``run --live`` /
+All the sim/rendering logic is sans-I/O; only ``run`` /
 ``snoop --live`` touch sockets, and only inside :func:`main`.
 """
 
 from __future__ import annotations
 
 import argparse
-import heapq
-import itertools
 import json
-import socket
+import math
 from collections.abc import Callable
-from dataclasses import dataclass, field
-from random import Random
+from dataclasses import dataclass
 
 from yoke.media.assembly import (
+    MAX_PATH_MTU,
+    MIN_PATH_MTU,
     MediaConfig,
     Receiver,
     build_receiver,
     build_sender,
 )
 from yoke.media.metrics import StageRoles
-from yoke.media.pipeline import Pipeline
+from yoke.media.simulation import LINK_DELAY, Faults, SimLink
 from yoke.media.snoop import MediaSnooper
+from yoke.media.sockets import (
+    MulticastOptions,
+    ipv4_address,
+    open_receiver_socket,
+    open_sender_socket,
+    valid_port,
+)
 from yoke.media.types import (
     Body,
-    MediaUnit,
-    NetworkReport,
+    EventKind,
     StageEvent,
 )
 from yoke.media.wire import rtp_header_body
@@ -65,8 +70,6 @@ TRACE_FRAMES = 3
 # Real-runner defaults for ``run`` when neither --frames nor --duration set.
 DEFAULT_RUN_FRAMES = 300
 DEFAULT_RUN_DURATION = 10.0
-# Base one-way link delay for the offline sim (seconds).
-LINK_DELAY = 0.0005
 
 EXIT_OK = 0
 EXIT_FAIL = 1
@@ -94,126 +97,6 @@ _STAGE_ORDER = (
 )
 
 
-# -- fault script + offline link --------------------------------------------
-
-
-@dataclass(frozen=True)
-class Faults:
-    """Per-unit fault probabilities for the offline sim (mirrors the media
-    simnet's policy). Probabilities are in ``[0, 1]``; ``jitter`` is the
-    magnitude (seconds) of uniform delay noise."""
-
-    drop: float = 0.0
-    dup: float = 0.0
-    reorder: float = 0.0
-    jitter: float = 0.0
-    corrupt: float = 0.0
-    delay: float = LINK_DELAY
-    reorder_spike: float = 0.01
-
-    def is_clean(self) -> bool:
-        return not (
-            self.drop or self.dup or self.reorder or self.jitter or self.corrupt
-        )
-
-
-@dataclass(order=True)
-class _Scheduled:
-    at: float
-    order: int
-    unit: MediaUnit = field(compare=False)
-
-
-class SimLink:
-    """A deterministic, seeded, one-way lossy link between a sender and a
-    receiver :class:`~yoke.media.pipeline.Pipeline`, for offline debugging.
-
-    It is the in-package analogue of ``tests/media_simnet.MediaLink`` (the
-    CLI is shippable package code and must not import the test tree): feed
-    it the sender's emitted units with :meth:`send`, then :meth:`advance`
-    the virtual clock to drive the receiver. Every delivered packet is
-    retained (:attr:`delivered_packets`) so a black-box snooper can verify
-    the *wire* the receiver actually saw.
-    """
-
-    def __init__(
-        self,
-        sender: Pipeline,
-        receiver: Pipeline,
-        *,
-        seed: int,
-        faults: Faults,
-    ) -> None:
-        self._sender = sender
-        self._receiver = receiver
-        self._rng = Random(seed)
-        self._faults = faults
-        self._queue: list[_Scheduled] = []
-        self._counter = itertools.count()
-        self.now = 0.0
-        self.delivered_packets: list[tuple[MediaUnit, float]] = []
-        self.dropped: list[MediaUnit] = []
-        self.events: list[StageEvent] = []
-        self.feedback: list[NetworkReport] = []
-        self.sent = 0
-
-    def send(self, units: list[MediaUnit]) -> None:
-        for unit in units:
-            self.sent += 1
-            self._schedule(unit)
-
-    def _schedule(self, unit: MediaUnit) -> None:
-        f = self._faults
-        if self._rng.random() < f.drop:
-            self.dropped.append(unit)
-            return
-        copies = 2 if self._rng.random() < f.dup else 1
-        for _ in range(copies):
-            delay = f.delay
-            if f.jitter:
-                delay += self._rng.uniform(-f.jitter, f.jitter)
-            if self._rng.random() < f.reorder:
-                delay += f.reorder_spike
-            out = self._corrupt(unit) if self._rng.random() < f.corrupt else unit
-            heapq.heappush(
-                self._queue,
-                _Scheduled(self.now + max(delay, 0.0), next(self._counter), out),
-            )
-
-    def _corrupt(self, unit: MediaUnit) -> MediaUnit:
-        if not unit.payload:
-            return unit.with_payload(b"\x00", corrupted=True)
-        data = bytearray(unit.payload)
-        index = self._rng.randrange(len(data))
-        data[index] ^= 1 << self._rng.randrange(8)
-        return unit.with_payload(bytes(data), corrupted=True)
-
-    def advance(self, until: float, *, tick_interval: float = 0.005) -> None:
-        next_tick = self.now
-        while True:
-            due = self._queue[0].at if self._queue else None
-            candidates = [t for t in (due, next_tick) if t is not None and t <= until]
-            if not candidates:
-                break
-            step = min(candidates)
-            self.now = step
-            if due is not None and step == due:
-                item = heapq.heappop(self._queue)
-                self.delivered_packets.append((item.unit, self.now))
-                out = self._receiver.push(item.unit, self.now)
-                self.events.extend(out.events)
-                self.feedback.extend(out.feedback)
-            if step == next_tick:
-                rout = self._receiver.tick(self.now)
-                self.events.extend(rout.events)
-                self.feedback.extend(rout.feedback)
-                next_tick = step + tick_interval
-        self.now = until
-
-    def quiescent(self) -> bool:
-        return not self._queue
-
-
 # -- config building ---------------------------------------------------------
 
 
@@ -221,6 +104,21 @@ def build_config(args: argparse.Namespace) -> MediaConfig:
     """Build a :class:`MediaConfig` from parsed global options. Raises
     ``ValueError`` for an unknown encoding/fec (argparse ``choices`` catches
     these first; this is the belt-and-suspenders guard)."""
+    for name in ("width", "height", "fps"):
+        if int(getattr(args, name)) < 1:
+            raise ValueError(f"{name} must be positive")
+    if not MIN_PATH_MTU <= int(args.mtu) <= MAX_PATH_MTU:
+        raise ValueError(f"path mtu must be in [{MIN_PATH_MTU}, {MAX_PATH_MTU}]")
+    if hasattr(args, "frames") and args.frames is not None and int(args.frames) < 1:
+        raise ValueError("frames must be positive")
+    if hasattr(args, "duration") and args.duration is not None:
+        duration = float(args.duration)
+        if not math.isfinite(duration) or duration <= 0:
+            raise ValueError("duration must be finite and positive")
+    valid_port(int(args.port))
+    MulticastOptions(
+        str(args.group), str(args.interface), int(args.ttl), bool(args.loopback)
+    )
     return MediaConfig(
         width=int(args.width),
         height=int(args.height),
@@ -244,14 +142,8 @@ def build_faults(args: argparse.Namespace) -> Faults:
 
 
 def _roles_for(config: MediaConfig) -> StageRoles:
-    """End-to-end measurement points for this config. The wire is launched
-    at the last sender stage (``fec`` when present, else ``packetize``) and
-    re-enters visibly at ``depacketize`` (the first receiver stage that taps
-    every packet it accepts)."""
-    return StageRoles(
-        wire_out="fec" if config.fec != "none" else "packetize",
-        wire_in="depacketize",
-    )
+    """Matched wire taps surround the link, before receiver FEC and jitter."""
+    return StageRoles(wire_out="wire", wire_in="wire")
 
 
 # -- offline drive core ------------------------------------------------------
@@ -273,6 +165,10 @@ class SimResult:
     packets_sent: int
     packets_dropped: int
     packets_recv: int
+    packets_duplicated: int
+    data_packets_recv: int
+    feedback_reports: int
+    feedback_delivered: int
     fec_recovered: int
     ratio: float | None
     target_ratio: float | None
@@ -301,6 +197,8 @@ def drive(config: MediaConfig, faults: Faults, frames: int) -> SimResult:
     every tap into a :class:`MediaSnooper`. Pure and deterministic: the
     only entropy is ``config.seed`` (source payloads and the link share it),
     so the same arguments always yield the same :class:`SimResult`."""
+    if type(frames) is not int or frames < 0:
+        raise ValueError("frames must be a nonnegative integer")
     sender = build_sender(config)
     receiver = build_receiver(config)
     link = SimLink(sender.pipeline, receiver.pipeline, seed=config.seed, faults=faults)
@@ -319,7 +217,11 @@ def drive(config: MediaConfig, faults: Faults, frames: int) -> SimResult:
         link.advance(now + interval)
         now += interval
     # Drain the link and flush the jitter buffer's remaining playout window.
-    link.advance(now + config.playout_delay + 0.05)
+    final_sender = sender.pipeline.finish(now)
+    events.extend(final_sender.events)
+    link.send(final_sender.emitted)
+    link.drain()
+    link.finish_receiver()
     events.extend(link.events)
 
     for event in events:
@@ -327,7 +229,16 @@ def drive(config: MediaConfig, faults: Faults, frames: int) -> SimResult:
     for unit, seen_at in link.delivered_packets:
         snooper.observe_packet(unit, seen_at)
 
-    return _assemble(config, faults, frames, receiver, link, snooper, events)
+    return _assemble(
+        config,
+        faults,
+        frames,
+        receiver,
+        link,
+        snooper,
+        events,
+        sender.rate_state.target,
+    )
 
 
 def _assemble(
@@ -338,23 +249,87 @@ def _assemble(
     link: SimLink,
     snooper: MediaSnooper,
     events: list[StageEvent],
+    final_target: float,
 ) -> SimResult:
     sink = receiver.sink.metrics()
     snapshot = snooper.metrics.snapshot()
     stream = _primary_stream(snapshot)
+    sourced = {
+        (event.seq, event.pts)
+        for event in events
+        if event.stage == "source" and event.kind is EventKind.OUT
+    }
+    failed = {
+        (event.seq, event.pts)
+        for event in events
+        if event.stage == "sink"
+        and event.kind is EventKind.INTEGRITY
+        and event.detail.get("ok") is False
+    } & sourced
+    passed = {
+        (event.seq, event.pts)
+        for event in events
+        if event.stage == "sink"
+        and event.kind is EventKind.INTEGRITY
+        and event.detail.get("ok") is True
+    } & sourced - failed
+    missing = sourced - passed - failed
+    data_recv = sum(
+        event.stage == "depacketize" and event.kind is EventKind.IN for event in events
+    )
+    network: Body = {
+        "packets_sent": link.sent,
+        "packets_recv": len(link.delivered_packets),
+        "packet_loss": len(link.dropped),
+        "packet_loss_rate": round(len(link.dropped) / link.sent, 6)
+        if link.sent
+        else 0.0,
+        "packets_duplicated": link.duplicates,
+        "packet_loss_source": "simulator-injected-drops",
+        "data_packets_recv": data_recv,
+    }
+    counts: Body = {
+        "frames_sourced": len(sourced),
+        "frames_ok": len(passed),
+        "frames_bad": len(failed),
+        "frames_lost": len(missing),
+    }
+    # This simulator knows each source identity and each injected drop;
+    # unlike a passive observer it can account for edge loss and copies.
+    stream.update(network)
+    stream.update(counts)
+    stream["target_ratio"] = final_target
+    recovered = _as_int(stream.get("fec_recovered"))
+    stream["fec_recovery_rate"] = round(recovered / data_recv, 6) if data_recv else 0.0
+    stream["fec_recovery_rate_scope"] = "recovered/post-fec-data"
+    totals = snapshot.get("totals")
+    if isinstance(totals, dict):
+        totals.update(network)
+        totals.update(counts)
+    snapshot["network"] = network
+    snapshot["feedback"] = {
+        "reports": len(link.feedback),
+        "delivered": len(link.feedback_delivered),
+        "return_delay": LINK_DELAY,
+        "transport": "reliable-model",
+    }
     return SimResult(
         config=config,
         faults=faults,
         frames=frames,
-        frames_sourced=frames,
-        frames_ok=_as_int(sink.get("frames_ok")),
-        frames_bad=_as_int(sink.get("frames_bad")),
-        frames_lost=_as_int(sink.get("lost")),
+        frames_sourced=len(sourced),
+        frames_ok=len(passed),
+        frames_bad=len(failed),
+        frames_lost=len(missing),
         duplicated=_as_int(sink.get("duplicated")),
         reordered=_as_int(sink.get("reordered")),
         packets_sent=link.sent,
         packets_dropped=len(link.dropped),
-        packets_recv=_as_int(stream.get("packets_recv")),
+        packets_recv=len(link.delivered_packets),
+        packets_duplicated=link.duplicates,
+        data_packets_recv=data_recv,
+        feedback_reports=len(link.feedback),
+        feedback_delivered=len(link.feedback_delivered),
         fec_recovered=_as_int(stream.get("fec_recovered")),
         ratio=_as_opt_float(stream.get("ratio")),
         target_ratio=_as_opt_float(stream.get("target_ratio")),
@@ -363,8 +338,28 @@ def _assemble(
         else None,
         events=events,
         snapshot=snapshot,
-        topology=snooper.topology(),
+        topology=_simulation_topology(snooper, snapshot),
     )
+
+
+def _simulation_topology(snooper: MediaSnooper, snapshot: Body) -> Body:
+    topology = snooper.topology()
+    # Preserve the independent black-box wire view, while making the
+    # white-box simulation view agree with the source-known summary.
+    observed = topology.get("streams")
+    measured = snapshot.get("streams")
+    if isinstance(observed, dict) and isinstance(measured, dict):
+        for stream_id, metrics in measured.items():
+            entry = observed.get(stream_id)
+            if isinstance(entry, dict) and isinstance(metrics, dict):
+                entry.update(metrics)
+                entry["measurement_scope"] = "source-known-reference-simulation"
+    topology["simulation"] = {
+        "network": snapshot.get("network"),
+        "feedback": snapshot.get("feedback"),
+        "source_accounting": "all sourced frame identities",
+    }
+    return topology
 
 
 def _primary_stream(snapshot: Body) -> Body:
@@ -384,7 +379,10 @@ def _as_int(value: object) -> int:
 def _as_opt_float(value: object) -> float | None:
     if isinstance(value, bool):
         return None
-    return float(value) if isinstance(value, (int, float)) else None
+    if isinstance(value, (int, float)):
+        result = float(value)
+        return result if math.isfinite(result) else None
+    return None
 
 
 # -- rendering (pure, string-returning) --------------------------------------
@@ -427,16 +425,20 @@ def _health_lines(r: SimResult) -> list[str]:
         f"bad={r.frames_bad} lost={r.frames_lost} "
         f"dup={r.duplicated} reordered={r.reordered}",
         f"packets:  sent={r.packets_sent} recv={r.packets_recv} "
-        f"dropped={r.packets_dropped} loss={r.loss_rate * 100:.2f}%",
+        f"dropped={r.packets_dropped} network-dup={r.packets_duplicated} "
+        f"loss={r.loss_rate * 100:.2f}%",
         f"fec:      recovered={r.fec_recovered}",
-        f"ratio:    effective={_fmt_ratio(r.ratio)} "
+        f"delivery: post-fec-data={r.data_packets_recv}",
+        f"feedback: reports={r.feedback_reports} delivered={r.feedback_delivered} "
+        "reliable-model",
+        f"ratio:    model-effective={_fmt_ratio(r.ratio)} "
         f"target={_fmt_ratio(r.target_ratio)}",
         f"latency:  {_fmt_latency(r.latency)}",
     ]
 
 
 def render_simulate_text(r: SimResult) -> str:
-    verdict = "OK" if r.frames_bad == 0 and r.frames_lost == 0 else "DEGRADED"
+    verdict = "OK" if r.integrity_ok else "DEGRADED"
     lines = [
         f"simulate  {_config_line(r.config, r.frames)}",
         _fault_line(r.faults),
@@ -449,6 +451,7 @@ def render_simulate_text(r: SimResult) -> str:
 def summary_dict(r: SimResult) -> Body:
     """The compact machine summary embedded in ``--json`` output."""
     return {
+        "measurement_scope": "synthetic-reference",
         "frames_sourced": r.frames_sourced,
         "frames_ok": r.frames_ok,
         "frames_bad": r.frames_bad,
@@ -456,6 +459,10 @@ def summary_dict(r: SimResult) -> Body:
         "packets_sent": r.packets_sent,
         "packets_recv": r.packets_recv,
         "packets_dropped": r.packets_dropped,
+        "packets_duplicated": r.packets_duplicated,
+        "data_packets_recv": r.data_packets_recv,
+        "feedback_reports": r.feedback_reports,
+        "feedback_delivered": r.feedback_delivered,
         "packet_loss_rate": round(r.loss_rate, 6),
         "fec_recovered": r.fec_recovered,
         "ratio": r.ratio,
@@ -536,6 +543,18 @@ class RunPlan:
     frames: int | None
     duration: float | None
     snoop: bool
+    interface: str = "0.0.0.0"
+    ttl: int = 1
+    loopback: bool = True
+    feedback_dest: tuple[str, int] | None = None
+
+    @property
+    def multicast(self) -> MulticastOptions | None:
+        if self.transport == "unicast":
+            return None
+        return MulticastOptions(
+            self.endpoint[0], self.interface, self.ttl, self.loopback
+        )
 
 
 def resolve_run_plan(
@@ -544,17 +563,53 @@ def resolve_run_plan(
     """Turn parsed ``run`` options into a validated :class:`RunPlan`, or an
     error message (for a 2 exit). No sockets, no clock."""
     role = str(args.role)
+    _validate_live_config(config)
     transport = "unicast" if args.unicast else "multicast"
     group = str(args.group)
     port = int(args.port)
     peer = args.peer
+    if args.frames is not None and args.duration is not None:
+        return None, "choose --frames or --duration, not both"
+    if role == "receiver" and args.frames is not None:
+        return None, "--frames applies to the sender; use --duration for a receiver"
+    if role == "receiver" and peer:
+        return None, "--peer applies to the unicast sender only"
+    if role == "sender" and args.snoop:
+        return None, "--snoop applies to the receiver; use snoop --live independently"
+    interface = str(args.interface)
+    ttl = int(args.ttl)
+    loopback = bool(args.loopback)
+    feedback_host, feedback_port = args.feedback_host, args.feedback_port
+    if (feedback_host is None) != (feedback_port is None):
+        return None, "--feedback-host and --feedback-port must be supplied together"
+    feedback_dest = None
+    if feedback_host is not None:
+        ipv4_address(str(feedback_host))
+        if feedback_host == "0.0.0.0":
+            return None, "feedback destination must be a unicast host"
+        feedback_dest = (str(feedback_host), valid_port(int(feedback_port)))
 
     if role == "sender":
-        if not peer:
-            return None, "run --role sender requires --peer HOST"
-        dest = (str(peer), port)
+        if feedback_dest is not None:
+            return None, "feedback options apply to the receiver only"
+        if transport == "unicast" and not peer:
+            return None, "run --role sender --unicast requires --peer HOST"
+        if transport == "multicast" and peer:
+            return None, "--peer requires --unicast; multicast sends to --group"
+        dest = (str(peer) if transport == "unicast" else group, port)
         frames, duration = _sender_limits(args, config)
-        return RunPlan(role, transport, dest, config, frames, duration, False), None
+        return RunPlan(
+            role,
+            transport,
+            dest,
+            config,
+            frames,
+            duration,
+            False,
+            interface,
+            ttl,
+            loopback,
+        ), None
 
     # receiver
     bind_host = group if transport == "multicast" else "0.0.0.0"
@@ -569,8 +624,17 @@ def resolve_run_plan(
         frames=None,
         duration=duration,
         snoop=bool(args.snoop),
+        interface=interface,
+        ttl=ttl,
+        loopback=loopback,
+        feedback_dest=feedback_dest,
     )
     return plan, None
+
+
+def _validate_live_config(config: MediaConfig) -> None:
+    if config.fec == "xor":
+        raise ValueError("XOR FEC is offline-only; use --fec none or dup for live UDP")
 
 
 def _sender_limits(
@@ -580,7 +644,10 @@ def _sender_limits(
         return int(args.frames), None
     if args.duration is not None:
         duration = float(args.duration)
-        return int(duration * config.fps), duration
+        count = duration * config.fps
+        if not math.isfinite(count):
+            raise ValueError("duration times fps must be finite")
+        return max(1, int(count)), duration
     return DEFAULT_RUN_FRAMES, None
 
 
@@ -595,6 +662,11 @@ def render_run_plan(plan: RunPlan) -> str:
         lines.append(f"dest:      {host}:{port}")
     else:
         lines.append(f"bind:      {host}:{port}")
+    if plan.transport == "multicast":
+        lines.append(
+            f"multicast: interface={plan.interface} ttl={plan.ttl} "
+            f"loopback={'on' if plan.loopback else 'off'}"
+        )
     lines.append(
         f"media:     {c.encoding}/{c.fec} {c.width}x{c.height}@{c.fps} mtu={c.mtu}"
     )
@@ -605,6 +677,12 @@ def render_run_plan(plan: RunPlan) -> str:
     else:
         lines.append(f"limit:     duration={plan.duration:g}s")
         lines.append(f"snoop:     {'on' if plan.snoop else 'off'}")
+        feedback = (
+            f"{plan.feedback_dest[0]}:{plan.feedback_dest[1]}"
+            if plan.feedback_dest is not None
+            else "off"
+        )
+        lines.append(f"feedback:  {feedback}")
     return "\n".join(lines)
 
 
@@ -615,6 +693,16 @@ def _config_parent() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(add_help=False)
     p.add_argument("--group", default=DEFAULT_MEDIA_GROUP, help="media multicast group")
     p.add_argument("--port", type=int, default=DEFAULT_MEDIA_PORT, help="media port")
+    p.add_argument(
+        "--interface", default="0.0.0.0", help="local IPv4 multicast interface"
+    )
+    p.add_argument("--ttl", type=int, default=1, help="multicast hop limit (0..255)")
+    p.add_argument(
+        "--loopback",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="deliver multicast to listeners on this host",
+    )
     p.add_argument("--encoding", choices=ENCODINGS, default="raw", help="codec model")
     p.add_argument("--fec", choices=FECS, default="none", help="FEC scheme")
     p.add_argument("--fps", type=int, default=60, help="frames per second")
@@ -646,7 +734,7 @@ def _fault_parent() -> argparse.ArgumentParser:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="yoke-media", description="media pipeline debug/observability tools"
+        prog="yoke-media", description="synthetic reference media debug tools"
     )
     config_parent = _config_parent()
     fault_parent = _fault_parent()
@@ -688,6 +776,9 @@ def build_parser() -> argparse.ArgumentParser:
     snoop.add_argument(
         "--live", action="store_true", help="join the real media group (main only)"
     )
+    snoop.add_argument(
+        "--duration", type=float, default=None, help="live observation seconds"
+    )
 
     run = sub.add_parser(
         "run",
@@ -695,11 +786,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="the real sender/receiver runner over UDP",
     )
     run.add_argument("--role", choices=("sender", "receiver"), required=True)
-    run.add_argument("--peer", default=None, help="sender destination host")
+    run.add_argument("--peer", default=None, help="unicast sender destination host")
     run.add_argument("--unicast", action="store_true", help="plain UDP, not multicast")
     run.add_argument("--frames", type=int, default=None, help="sender: frames to send")
     run.add_argument("--duration", type=float, default=None, help="run duration (s)")
     run.add_argument("--snoop", action="store_true", help="receiver: dump topology")
+    run.add_argument(
+        "--feedback-host", help="designated receiver: unicast feedback IPv4"
+    )
+    run.add_argument(
+        "--feedback-port", type=int, help="designated receiver: feedback UDP port"
+    )
     run.add_argument(
         "--dry-run",
         action="store_true",
@@ -766,6 +863,11 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:  # bad config the choices did not catch
         err(str(exc))
         return EXIT_USAGE
+    except OSError as exc:
+        err(f"media socket error: {exc}")
+        return EXIT_FAIL
+    except KeyboardInterrupt:
+        return EXIT_OK
     raise AssertionError(f"unhandled command: {command!r}")
 
 
@@ -783,33 +885,6 @@ def _run_command(
         out(render_run_plan(plan))
         return EXIT_OK
     return _run_live(plan, config, out, err)
-
-
-def _open_socket(transport: str, host: str, port: int) -> socket.socket:
-    """Receiver socket: a multicast-joined socket (bound to ``port``) or a
-    plain UDP socket bound to ``port`` for unicast."""
-    from yoke.net.mcast import open_multicast_socket
-
-    if transport == "multicast":
-        return open_multicast_socket(host, port)
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.bind(("", port))
-    return sock
-
-
-def _open_sender_socket(transport: str) -> socket.socket:
-    """Sender socket: bound to an EPHEMERAL local port — never the
-    destination port (binding that would steal the receiver's inbound
-    datagrams when both run on one host). Multicast sends need the TTL and
-    loopback options but no bind to the group port."""
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.bind(("", 0))
-    if transport == "multicast":
-        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 1)
-        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 1)
-    return sock
 
 
 def _run_live(
@@ -833,8 +908,8 @@ def _run_live_sender(
     from yoke.media.runner import SenderRunner
 
     host, port = plan.endpoint
-    sock = _open_sender_socket(plan.transport)
     runner = SenderRunner(build_sender(config), dest=(host, port))
+    sock = open_sender_socket(multicast=plan.multicast)
     frames = plan.frames if plan.frames is not None else DEFAULT_RUN_FRAMES
     try:
         stats = asyncio.run(runner.run(sock, frames=frames))
@@ -851,12 +926,14 @@ def _run_live_receiver(
 
     from yoke.media.runner import ReceiverRunner
 
-    host, port = plan.endpoint
+    _host, port = plan.endpoint
     snooper = (
         MediaSnooper(rtp_header_body, roles=_roles_for(config)) if plan.snoop else None
     )
-    sock = _open_socket(plan.transport, host, port)
-    runner = ReceiverRunner(build_receiver(config), snooper=snooper)
+    runner = ReceiverRunner(
+        build_receiver(config), snooper=snooper, feedback_dest=plan.feedback_dest
+    )
+    sock = open_receiver_socket(port, multicast=plan.multicast)
     duration = plan.duration if plan.duration is not None else DEFAULT_RUN_DURATION
     try:
         metrics = asyncio.run(runner.run(sock, duration=duration))
@@ -873,26 +950,30 @@ def _run_live_snoop(
     out: Callable[[str], None],
     err: Callable[[str], None],
 ) -> int:
-    """Live passive snoop: join the group, render each packet, transmit
-    nothing. Kept minimal; the offline path is the tested one."""
+    """Join the real group and observe through the tested receive-only shell."""
 
+    import asyncio
+
+    from yoke.media.runner import PassiveRunner
     from yoke.media.snoop import render_text
-    from yoke.net.mcast import open_multicast_socket
 
     config = build_config(args)
+    _validate_live_config(config)
     snooper = MediaSnooper(rtp_header_body, roles=_roles_for(config))
-    sock = open_multicast_socket(str(args.group), int(args.port))
+    runner = PassiveRunner(snooper, on_record=lambda record: out(render_text(record)))
+    sock = open_receiver_socket(
+        int(args.port),
+        multicast=MulticastOptions(
+            str(args.group), str(args.interface), int(args.ttl), bool(args.loopback)
+        ),
+    )
     try:
-        while True:
-            try:
-                raw, _addr = sock.recvfrom(65535)
-            except KeyboardInterrupt:
-                break
-            record = snooper.observe_packet(raw, 0.0)
-            out(render_text(record))
+        asyncio.run(runner.run(sock, duration=args.duration))
+    except KeyboardInterrupt:
+        pass
     finally:
         sock.close()
-    err(render_topology(snooper.topology()))
+    err(render_topology(runner.snapshot()))
     return EXIT_OK
 
 

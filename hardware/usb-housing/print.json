@@ -1,0 +1,54 @@
+{
+  "schema": "yoke.usb-housing-print/1",
+  "revision": "R1",
+  "state": "SUBMITTED_AND_PRINTING_VERIFIED",
+  "printer_model": "FlashForge Adventurer 5M",
+  "job_filename": "yoke-usb-housing-r1.gcode",
+  "stl_sha256": "a9aaea2a627f29c0a83ccc4deab5aef300c0a7a31283dda2b02d7cef273bd7ea",
+  "gcode_sha256": "76ffff196c789c3ebb24a20048e7fb1c3f937cbf2b86c478efe0120473fa8cbf",
+  "estimated_filament_g": 16.79,
+  "estimated_time_seconds": 4252,
+  "material_profile": "Flashforge Generic PLA",
+  "physical_validation": "NOT RUN",
+  "dispatch_attempted": true,
+  "assembly_packet_sha256": "5173c53690e40a60b647c4074bb823f202f0ddc192f8b6602dd4bf3d98029c4d",
+  "assembly_review_sha256": "70d8fa3ae37742f808e7d6927cf999e3c9ef3081ce09acc9d3c12ca4ad5c050d",
+  "assembly_pdf_sha256": "5a2dd2d81df2293f9c2b6e4b97ab7b4c9255b523a63edbf4c71316a9719133f1",
+  "approval_result": "PASS",
+  "independent_reviewer": "housing-review-independent",
+  "geometry": {
+    "sampled_poses": 225,
+    "collisions": 0,
+    "near_gaps": 0,
+    "result": "WARN",
+    "limitation": "Official board mesh nonmanifold; component surface bounds and nominal insertion reviewed separately."
+  },
+  "digital_verification": {
+    "native_rebuild": "BYTE_IDENTICAL",
+    "mesh_preflight": "PASS",
+    "gcode_preflight": "PASS",
+    "assembly_approval": "PASS"
+  },
+  "filament_identification": "Printer firmware reports no material type; configured PLA profile used on owner-ready printer.",
+  "dispatch_attempt_count": 1,
+  "dispatch_outcome": "STARTED_AND_FILENAME_VERIFIED",
+  "submitted_at": "2026-11-02T22:39:14Z",
+  "acknowledged_at": "2026-11-02T22:39:20Z",
+  "printer_firmware": "5.1.8",
+  "job_identity": "yoke-usb-housing-r1.gcode",
+  "numeric_job_id": null,
+  "job_id_note": "Stock transport exposes filename identity, no numeric job ID.",
+  "printer_status_observed": {
+    "at": "2026-11-02T22:58:49Z",
+    "state": "PRINTING",
+    "current_file": "yoke-usb-housing-r1.gcode"
+  },
+  "dispatch_ledger": {
+    "repository": "spincyc/lacuna",
+    "path": "tools/print/dispatch-log.jsonl",
+    "matching_rows_sha256": "bf6e4c457e0d62d8940426f4e17d89a1bb8723ce2d008011bd5c8ee2be1e7880",
+    "matching_rows_sha256_method": "SHA-256 of the exact UTF-8 JSONL bytes of matching rows, concatenated in ledger order with every terminating LF retained.",
+    "matching_row_count": 2,
+    "source_commit": "42f158992ef0b67b2e21c7f24f9a8a14c0d8e52a"
+  }
+}

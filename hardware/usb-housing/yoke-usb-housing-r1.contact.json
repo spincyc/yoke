@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "mesh_sha256": "a9aaea2a627f29c0a83ccc4deab5aef300c0a7a31283dda2b02d7cef273bd7ea",
+  "job_basename": "yoke-usb-housing-r1",
+  "expected_component_count": 2,
+  "envelope_mm": {
+    "minimum": [
+      0,
+      0,
+      0
+    ],
+    "maximum": [
+      220,
+      220,
+      220
+    ]
+  },
+  "components": {
+    "component-8f66bcd35eec434a": {
+      "label": "R1 base",
+      "expected_bounds_mm": {
+        "minimum": [
+          3.0,
+          0.6,
+          0.0
+        ],
+        "maximum": [
+          79.400002,
+          35.400002,
+          10.0
+        ],
+        "tolerance_mm": 0.001
+      }
+    },
+    "component-626478d4bbd04e24": {
+      "label": "R1 manufactured lid",
+      "expected_bounds_mm": {
+        "minimum": [
+          3.0,
+          42.599998,
+          0.0
+        ],
+        "maximum": [
+          79.400002,
+          77.400002,
+          11.48
+        ],
+        "tolerance_mm": 0.001
+      },
+      "policy": {
+        "maximum_bridge_span_mm": 6.2
+      },
+      "bridge_authority": "R1 first-article scope: four5.25mm AF nut-pocket roofs, with0.20mm sacrificial3mm screw-bore diaphragms forming complete bridges. Circumscribed span6.063mm. Inspect flat seats and hand-clear/ream lid bores before assembly."
+    }
+  }
+}

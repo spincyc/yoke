@@ -11,8 +11,20 @@ requires-python = ">=3.12"
 license = { text = "MIT" }
 dependencies = []
 
+[project.urls]
+Homepage = "https://spincyc.github.io/yoke/"
+Documentation = "https://spincyc.github.io/yoke/"
+Repository = "https://github.com/spincyc/yoke"
+Issues = "https://github.com/spincyc/yoke/issues"
+
 [project.optional-dependencies]
-dev = ["pytest>=8", "pytest-asyncio>=0.24", "ruff>=0.6", "mypy>=1.11"]
+dev = [
+    "pytest==9.2.0",
+    "pytest-asyncio==1.4.1.post1",
+    "ruff==0.17.3",
+    "mypy==2.4.1",
+    "Markdown==3.11.2",
+]
 
 [project.scripts]
 yoke = "yoke.cli:main"
@@ -24,7 +36,7 @@ packages = ["src/yoke"]
 [tool.ruff]
 line-length = 88
 target-version = "py312"
-src = ["src", "tests"]
+src = ["src", "tests", "scripts", "benchmarks"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "SIM", "RUF"]
@@ -33,9 +45,10 @@ select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "SIM", "RUF"]
 strict = true
 python_version = "3.12"
 mypy_path = "src"
-packages = ["yoke"]
+files = ["src/yoke", "scripts", "benchmarks"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-addopts = "-q"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-q --basetemp=.scratch/pytest -o cache_dir=.scratch/cache/pytest"

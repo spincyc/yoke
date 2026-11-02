@@ -33,6 +33,7 @@ that prefers the meta path works too.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 from yoke.media.pipeline import StageBase
@@ -98,12 +99,29 @@ class RateController(StageBase):
     def _pressure(report: NetworkReport) -> float:
         """Congestion/loss/jitter -> a single pressure signal in [0, 1]."""
         congestion = min(1.0, max(0.0, report.congestion))
-        loss = min(1.0, max(0.0, report.loss) / LOSS_FULL)
-        jitter = min(1.0, max(0.0, report.jitter) / JITTER_FULL)
+        loss = min(LOSS_FULL, max(0.0, report.loss)) / LOSS_FULL
+        jitter = min(JITTER_FULL, max(0.0, report.jitter)) / JITTER_FULL
         pressure = W_CONGESTION * congestion + W_LOSS * loss + W_JITTER * jitter
         return min(1.0, pressure)
 
     def on_feedback(self, report: NetworkReport, now: float) -> StageOutcome:
+        if any(
+            type(value) not in (int, float)
+            or (isinstance(value, float) and not math.isfinite(value))
+            for value in (report.loss, report.jitter, report.congestion)
+        ):
+            return StageOutcome(
+                events=[
+                    StageEvent(
+                        stage=self.name,
+                        kind=EventKind.DROP,
+                        seq=0,
+                        pts=0,
+                        now=now,
+                        detail={"why": "invalid-feedback"},
+                    )
+                ]
+            )
         pressure = self._pressure(report)
         # Quiet -> transparent resting point; full pressure -> RATIO_MAX.
         instant = RATIO_TRANSPARENT + pressure * (RATIO_MAX - RATIO_TRANSPARENT)

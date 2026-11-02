@@ -1,0 +1,31 @@
+name: Verify ESP32 firmware
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  firmware:
+    name: ESP32-S3 build and complete host tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - name: Install host developer tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            git cmake ninja-build gcc g++ openssl flex bison gperf \
+            libffi-dev libssl-dev libusb-1.0-0 dfu-util
+      - name: Verify pinned SDK, every firmware test, and ESP32-S3 image
+        run: python firmware/esp32/verify.py
+      # No firmware/trust artifacts are published. This workflow never flashes
+      # hardware, contacts endpoint devices, or requires deployment secrets.

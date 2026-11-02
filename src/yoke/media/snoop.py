@@ -37,8 +37,16 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Literal
 
-from yoke.media.metrics import DEFAULT_STREAM, MetricsCollector, StageRoles
-from yoke.media.types import Body, EventKind, MediaUnit, StageEvent
+from yoke.media.metrics import (
+    DEFAULT_STREAM,
+    MAX_PENDING_TIMES,
+    MAX_STAGES,
+    MAX_STREAMS,
+    MetricsCollector,
+    StageRoles,
+)
+from yoke.media.types import Body, EventKind, MediaUnit, StageEvent, UnitKind
+from yoke.snoop import escape_terminal
 
 Verdict = Literal[
     "ok",
@@ -62,6 +70,8 @@ VERDICTS: tuple[Verdict, ...] = (
 
 # RTP sequence numbers are 16-bit and wrap; compare with a signed window.
 _SEQ_MOD = 1 << 16
+SEQUENCE_WINDOW = 4096
+_SEQUENCE_MASK = (1 << SEQUENCE_WINDOW) - 1
 
 
 def _seq_diff(a: int, b: int) -> int:
@@ -90,25 +100,30 @@ class _StreamView:
     """White-box reconstruction of one stream from its tap events."""
 
     stages: list[str] = field(default_factory=list)
-    paths: dict[int, list[str]] = field(default_factory=dict)
     recovered: int = 0
     integrity_ok: int = 0
     integrity_bad: int = 0
 
-    def touch(self, stage: str, seq: int) -> None:
+    def touch(self, stage: str) -> None:
         if stage not in self.stages:
             self.stages.append(stage)
-        self.paths.setdefault(seq, []).append(stage)
+            if len(self.stages) > MAX_STAGES:
+                del self.stages[0]
 
 
 @dataclass
 class _WireState:
     """Black-box reconstruction of one stream from packets alone."""
 
-    expected: int | None = None
-    seen: set[int] = field(default_factory=set)
-    missing: set[int] = field(default_factory=set)
-    timestamps: set[int] = field(default_factory=set)
+    highest: int | None = None
+    # Bit n describes highest-n, so both histories have constant storage.
+    seen: int = 0
+    missing: int = 0
+    loss: int = 0
+    timestamp_highest: int | None = None
+    timestamps: dict[int, None] = field(default_factory=dict)
+    markers: dict[int, None] = field(default_factory=dict)
+    frames: int = 0
     marker_frames: int = 0
     packets: int = 0
     bytes: int = 0
@@ -152,7 +167,9 @@ class MediaSnooper:
         self.metrics.observe(event)
         stream_id = _stream_of(event.detail)
         view = self._views.setdefault(stream_id, _StreamView())
-        view.touch(event.stage, event.seq)
+        if len(self._views) > MAX_STREAMS:
+            del self._views[next(iter(self._views))]
+        view.touch(event.stage)
 
         verdict: Verdict = "ok"
         if event.kind in (EventKind.DROP, EventKind.LATE):
@@ -164,8 +181,10 @@ class MediaSnooper:
             if event.detail.get("ok") is False:
                 verdict = "integrity-fail"
                 view.integrity_bad += 1
-            else:
+            elif event.detail.get("ok") is True:
                 view.integrity_ok += 1
+            else:
+                verdict = "malformed"
 
         self.counts[verdict] += 1
         detail: Body = dict(event.detail)
@@ -200,7 +219,11 @@ class MediaSnooper:
 
         header = self._safe_decode(raw)
         seq = _as_int(header.get("seq")) if header is not None else None
-        if header is None or seq is None:
+        is_packet = not isinstance(raw_or_unit, MediaUnit) or raw_or_unit.kind in (
+            UnitKind.PACKET,
+            UnitKind.PARITY,
+        )
+        if header is None or seq is None or not is_packet or not _valid_header(header):
             self.counts["malformed"] += 1
             detail: Body = {"bytes": size, "rel": round(rel, 6)}
             return SnoopRecord(
@@ -215,13 +238,16 @@ class MediaSnooper:
 
         stream_id = _wire_stream_of(header)
         state = self._wire.setdefault(stream_id, _WireState())
-        verdict = self._track_seq(state, seq)
-        self._track_frame(state, header)
+        if len(self._wire) > MAX_STREAMS:
+            del self._wire[next(iter(self._wire))]
+        verdict, unique = self._track_seq(state, seq)
+        if unique:
+            self._track_frame(state, header)
         state.packets += 1
         state.bytes += size
         if state.first_now is None:
             state.first_now = now
-        state.last_now = now
+        state.last_now = now if state.last_now is None else max(state.last_now, now)
 
         self.counts[verdict] += 1
         marker = bool(header.get("marker"))
@@ -229,18 +255,15 @@ class MediaSnooper:
         pdetail: Body = {
             "seq": seq,
             "bytes": size,
-            "loss": len(state.missing),
-            "frames": len(state.timestamps),
+            "loss": state.loss,
+            "frames": state.frames,
             "bitrate_bps": state.bitrate_bps(),
             "marker": marker,
             "rel": round(rel, 6),
         }
         if ts is not None:
             pdetail["ts"] = ts
-        summary = (
-            f"wire seq={seq} {verdict} loss={len(state.missing)} "
-            f"frames={len(state.timestamps)}"
-        )
+        summary = f"wire seq={seq} {verdict} loss={state.loss} frames={state.frames}"
         return SnoopRecord(
             verdict=verdict,
             stream_id=stream_id,
@@ -251,46 +274,54 @@ class MediaSnooper:
             now=now,
         )
 
-    def _track_seq(self, state: _WireState, seq: int) -> Verdict:
-        if state.expected is None:
-            state.expected = (seq + 1) % _SEQ_MOD
-            state.seen.add(seq)
-            return "ok"
-        diff = _seq_diff(seq, state.expected)
-        if diff == 0:
-            state.seen.add(seq)
-            state.expected = (seq + 1) % _SEQ_MOD
-            return "ok"
+    def _track_seq(self, state: _WireState, seq: int) -> tuple[Verdict, bool]:
+        if state.highest is None:
+            state.highest = seq
+            state.seen = 1
+            return "ok", True
+        diff = _seq_diff(seq, state.highest % _SEQ_MOD)
         if diff > 0:
-            # A forward jump: seqs in [expected, seq) were skipped (lost).
-            missing = state.expected
-            for _ in range(diff):
-                state.missing.add(missing)
-                missing = (missing + 1) % _SEQ_MOD
-            state.seen.add(seq)
-            state.expected = (seq + 1) % _SEQ_MOD
-            return "loss"
-        # diff < 0: an out-of-order arrival, behind the expected cursor.
-        if seq in state.seen:
-            state.dups += 1
-            return "dup"
-        if seq in state.missing:
-            # A previously-missing packet arrived late: reorder, gap filled.
-            state.missing.discard(seq)
-            state.seen.add(seq)
+            state.loss += diff - 1
+            state.highest += diff
+            state.seen = ((state.seen << diff) | 1) & _SEQUENCE_MASK
+            gaps = (1 << min(diff, SEQUENCE_WINDOW)) - 2
+            state.missing = ((state.missing << diff) | gaps) & _SEQUENCE_MASK
+            return ("loss" if diff > 1 else "ok"), True
+        age = -diff
+        if age >= SEQUENCE_WINDOW:
+            # No retained evidence distinguishes late arrivals from duplicates.
             state.reorders += 1
-            return "reorder"
-        state.seen.add(seq)
+            return "reorder", False
+        bit = 1 << age
+        if state.seen & bit:
+            state.dups += 1
+            return "dup", False
+        if state.missing & bit:
+            state.missing &= ~bit
+            state.loss -= 1
+        state.seen |= bit
         state.reorders += 1
-        return "reorder"
+        return "reorder", True
 
     @staticmethod
     def _track_frame(state: _WireState, header: Body) -> None:
         ts = _as_int(header.get("timestamp"))
         if ts is not None:
-            state.timestamps.add(ts)
-        if bool(header.get("marker")):
+            high = state.timestamp_highest
+            if high is not None:
+                ts = high + ((ts - high + (1 << 31)) % (1 << 32)) - (1 << 31)
+            state.timestamp_highest = ts if high is None else max(high, ts)
+            if ts not in state.timestamps:
+                state.frames += 1
+                state.timestamps[ts] = None
+                if len(state.timestamps) > SEQUENCE_WINDOW:
+                    del state.timestamps[next(iter(state.timestamps))]
+        if bool(header.get("marker")) and (ts is None or ts not in state.markers):
             state.marker_frames += 1
+            if ts is not None:
+                state.markers[ts] = None
+                if len(state.markers) > SEQUENCE_WINDOW:
+                    del state.markers[next(iter(state.markers))]
 
     def _safe_decode(self, raw: bytes) -> Body | None:
         assert self._decode is not None
@@ -316,6 +347,17 @@ class MediaSnooper:
             "streams": streams,
             "stages": snap["stages"],
             "counts": dict(self.counts),
+            "inference": {
+                "sequence_window": SEQUENCE_WINDOW,
+                "stream_limit_per_mode": MAX_STREAMS,
+                "stage_limit": MAX_STAGES,
+                "pending_time_limit": MAX_PENDING_TIMES,
+                "late_gap_recovery": "retained sequence window only",
+                "frame_count": "unique timestamps in retained history",
+                "ratio": "mean applied model ratio from codec taps",
+                "integrity": "sink taps only; not inferred from wire headers",
+                "scope": "retained streams and observed stages only",
+            },
         }
 
     def _stream_topology(self, sid: str, wb: Body | None) -> Body:
@@ -340,9 +382,9 @@ class MediaSnooper:
         if state is not None:
             entry["wire"] = {
                 "packets": state.packets,
-                "frames": len(state.timestamps),
+                "frames": state.frames,
                 "marker_frames": state.marker_frames,
-                "loss": len(state.missing),
+                "loss": state.loss,
                 "reorders": state.reorders,
                 "dups": state.dups,
                 "bitrate_bps": state.bitrate_bps(),
@@ -365,7 +407,7 @@ def _stream_of(detail: Body) -> str:
 def _wire_stream_of(header: Body) -> str:
     ssrc = _as_int(header.get("ssrc"))
     if ssrc is not None:
-        return f"{ssrc & 0xFFFFFFFF:08x}"
+        return f"{ssrc:08x}"
     return "wire"
 
 
@@ -377,16 +419,32 @@ def _as_int(value: object) -> int | None:
     return None
 
 
+def _valid_header(header: Body) -> bool:
+    for key, maximum in (
+        ("seq", 0xFFFF),
+        ("timestamp", 0xFFFFFFFF),
+        ("ssrc", 0xFFFFFFFF),
+        ("pt", 127),
+    ):
+        if key not in header:
+            continue
+        value = _as_int(header[key])
+        if value is None or not 0 <= value <= maximum:
+            return False
+    return "marker" not in header or isinstance(header["marker"], bool)
+
+
 def render_text(record: SnoopRecord) -> str:
     """One-line human rendering: relative time, stream, stage, verdict,
     key numbers."""
     rel = record.detail.get("rel", record.now)
     rel_f = float(rel) if isinstance(rel, (int, float)) else record.now
     stream = record.stream_id or "?"
-    return (
+    line = (
         f"+{rel_f:8.3f}s {stream:<12} {record.stage:<10} "
         f"[{record.verdict}] {record.summary}"
     )
+    return escape_terminal(line)
 
 
 def render_json(record: SnoopRecord) -> str:

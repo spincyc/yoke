@@ -176,3 +176,72 @@ def test_missing_stage_report_is_zeroed() -> None:
     report = MetricsCollector().stage_report("nope")
     assert report["in"] == 0 and report["out"] == 0
     assert "stat" not in report
+
+
+def test_invalid_integrity_and_numeric_values_never_imply_success() -> None:
+    collector = MetricsCollector()
+    for ok in (None, 1, "true"):
+        collector.observe(ev("sink", EventKind.INTEGRITY, ok=ok))
+    for value in (float("nan"), float("inf"), -1, True, 10**400):
+        collector.observe(ev("codec", EventKind.OUT, ratio=value))
+        collector.observe(ev("ratecontrol", EventKind.ADJUST, target=value))
+        collector.observe(ev("sink", EventKind.INTEGRITY, ok=False, latency=value))
+    stream = collector.snapshot()["streams"][DEFAULT_STREAM]
+    assert stream["frames_ok"] == 0
+    assert stream["frames_bad"] == 5
+    assert stream["ratio"] is None
+    assert stream["target_ratio"] is None
+    assert stream["latency"] is None
+    assert collector.stage_report("sink")["integrity_ok"] == 0
+    json.dumps(collector.snapshot(), allow_nan=False)
+
+
+def test_latency_correlation_is_released_and_history_has_constant_storage() -> None:
+    from yoke.media.metrics import MAX_PENDING_TIMES
+
+    collector = MetricsCollector()
+    for seq in range(MAX_PENDING_TIMES + 10):
+        collector.observe(ev("source", EventKind.OUT, seq, seq, float(seq)))
+    assert len(collector._source_now) == MAX_PENDING_TIMES
+    collector.observe(ev("sink", EventKind.INTEGRITY, 0, 0, 1.0, ok=True))
+    assert collector.snapshot()["streams"][DEFAULT_STREAM]["latency"] is None
+    for seq in range(10, MAX_PENDING_TIMES + 10):
+        collector.observe(
+            ev("sink", EventKind.INTEGRITY, seq, seq, float(seq) + 0.5, ok=True)
+        )
+    assert collector._source_now == {}
+    assert collector.snapshot()["streams"][DEFAULT_STREAM]["latency"] == {
+        "samples": MAX_PENDING_TIMES,
+        "last": 0.5,
+        "mean": 0.5,
+        "max": 0.5,
+    }
+    assert not hasattr(collector._streams[DEFAULT_STREAM], "latencies")
+
+
+def test_stage_and_stream_maps_are_bounded() -> None:
+    from yoke.media.metrics import MAX_STAGES, MAX_STREAMS
+
+    collector = MetricsCollector()
+    for index in range(MAX_STREAMS + 1):
+        collector.observe(ev(f"stage-{index}", EventKind.STAT, stream=f"s{index}"))
+    assert len(collector._streams) == MAX_STREAMS
+    assert len(collector._stages) == MAX_STAGES
+    assert len(collector._stats) == MAX_STAGES
+
+
+def test_stat_snapshot_cannot_mutate_collector_or_observed_events() -> None:
+    detail: dict[str, object] = {"nested": {"count": 1}}
+    event = StageEvent("sink", EventKind.STAT, 0, 0, 0.0, detail)
+    collector = MetricsCollector()
+    collector.observe(event)
+    collector.stage_report("sink")["stat"]["nested"]["count"] = 99
+    assert event.detail["nested"] == {"count": 1}
+    assert collector.stage_report("sink")["stat"]["nested"] == {"count": 1}
+
+
+def test_negative_derived_latency_is_ignored() -> None:
+    collector = MetricsCollector()
+    collector.observe(ev("source", EventKind.OUT, now=2.0))
+    collector.observe(ev("sink", EventKind.INTEGRITY, now=1.0, ok=True))
+    assert collector.snapshot()["streams"][DEFAULT_STREAM]["latency"] is None

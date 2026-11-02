@@ -5,6 +5,8 @@ kind = "hdmi"
 name = "Den TV (JAP RX)"
 psk_file = "/etc/yoke/psk"
 state_file = "/var/lib/yoke/state.json"
+# Set to the warden host's address on the control VLAN when multi-homed.
+# interface = "10.20.30.2"
 
 [driver]
 type = "jap"

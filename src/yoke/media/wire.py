@@ -23,13 +23,21 @@ from yoke.media.stages.packetize import (
     RTP_HEADER_LEN,
     RtpError,
     decode_rtp_header,
+    packet_identity,
 )
-from yoke.media.types import Body, MediaUnit, UnitKind
+from yoke.media.types import (
+    MAX_UDP_BYTES,
+    REFERENCE_TRAILER_LEN,
+    Body,
+    MediaUnit,
+    UnitKind,
+)
 
 # frame_seq, frame_pts, slice_index, slice_count, frag_index, frag_count,
 # path (0=none, 1=A, 2=B for ST 2022-7 duplicate FEC), source digest (32 B).
 _TRAILER = struct.Struct("!QQHHHHB32s")
 TRAILER_LEN = _TRAILER.size
+assert TRAILER_LEN == REFERENCE_TRAILER_LEN
 _PATHS = {"": 0, "A": 1, "B": 2}
 _PATHS_INV = {0: "", 1: "A", 2: "B"}
 
@@ -63,8 +71,16 @@ def pack_packet(unit: MediaUnit) -> bytes:
     """
     if unit.kind is not UnitKind.PACKET:
         raise WireError(f"can only pack PACKET units, got {unit.kind}")
+    if any(key in unit.meta for key in ("fec_group", "fec_index", "fec_size")):
+        raise WireError("XOR FEC is offline-only; its repair metadata is not on wire")
     if len(unit.payload) < RTP_HEADER_LEN:
         raise WireError("packet payload shorter than an RTP header")
+    if len(unit.payload) + TRAILER_LEN > MAX_UDP_BYTES:
+        raise WireError("packet exceeds maximum UDP datagram size")
+    try:
+        packet_identity(unit, decode_rtp_header(unit.payload))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise WireError(f"invalid packet: {exc}") from exc
     meta = unit.meta
     try:
         digest = bytes.fromhex(unit.source_digest)
@@ -72,7 +88,7 @@ def pack_packet(unit: MediaUnit) -> bytes:
         raise WireError(f"bad source_digest: {unit.source_digest!r}") from exc
     if len(digest) != 32:
         raise WireError("source_digest is not a 32-byte sha256")
-    path = _PATHS.get(str(meta.get("path", "")), 0)
+    path = _PATHS[meta.get("path", "")]
     try:
         trailer = _TRAILER.pack(
             int(meta["frame_seq"]),
@@ -98,6 +114,8 @@ def unpack_packet(raw: bytes) -> MediaUnit:
     receiver drops it and counts it, never crashes."""
     if len(raw) < RTP_HEADER_LEN + TRAILER_LEN:
         raise WireError(f"short datagram: {len(raw)} bytes")
+    if len(raw) > MAX_UDP_BYTES:
+        raise WireError("datagram exceeds maximum UDP size")
     header = decode_rtp_header(raw)  # RtpError on bad header
     trailer = raw[RTP_HEADER_LEN : RTP_HEADER_LEN + TRAILER_LEN]
     (
@@ -110,6 +128,8 @@ def unpack_packet(raw: bytes) -> MediaUnit:
         path,
         digest,
     ) = _TRAILER.unpack(trailer)
+    if path not in _PATHS_INV:
+        raise WireError(f"unknown duplicate path: {path}")
     fragment = raw[RTP_HEADER_LEN + TRAILER_LEN :]
     # Rebuild exactly what the packetizer emitted: RTP header + fragment.
     payload = raw[:RTP_HEADER_LEN] + fragment
@@ -126,8 +146,8 @@ def unpack_packet(raw: bytes) -> MediaUnit:
         "rtp_ssrc": header.ssrc,
     }
     if path:
-        meta["path"] = _PATHS_INV.get(path, "")
-    return MediaUnit(
+        meta["path"] = _PATHS_INV[path]
+    unit = MediaUnit(
         kind=UnitKind.PACKET,
         seq=header.sequence,
         pts=frame_pts,
@@ -135,6 +155,11 @@ def unpack_packet(raw: bytes) -> MediaUnit:
         source_digest=digest.hex(),
         meta=meta,
     )
+    try:
+        packet_identity(unit, header)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise WireError(f"invalid packet metadata: {exc}") from exc
+    return unit
 
 
 __all__ = [

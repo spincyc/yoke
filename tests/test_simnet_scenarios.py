@@ -12,13 +12,16 @@ Failure model (doc/design/ARCHITECTURE.md):
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import itertools
 
 import pytest
 
 from tests.simnet import T0, FaultPolicy, SimNet
-from yoke.core.frames import encode
+from yoke.core.frames import canonical_bytes, encode
 from yoke.core.types import (
+    MAX_FRAME_BYTES,
     Body,
     FrameType,
     Kind,
@@ -100,6 +103,58 @@ def test_consumer_offline_anti_entropy_from_bystander_converges() -> None:
     assert applied_acks(net, "con-1", version)
     assert net.agree("con-1") == Pairing("prod-1", version)
     assert net.state_of("con-1") is NodeState.ACTIVE
+
+
+@pytest.mark.parametrize("extension", ["float", "padding"])
+def test_normalized_relay_reaches_offline_consumer_despite_unknown_extensions(
+    extension: str,
+) -> None:
+    net = SimNet(seed=2026)
+    relay = "relay-" + "x" * 26
+    net.add_node("prod-1", Role.PRODUCER, Kind.HDMI)
+    net.add_node(relay, Role.PRODUCER, Kind.HDMI)
+    net.add_node("con-1", Role.CONSUMER, Kind.HDMI)
+    net.run(3)
+    net.set_offline("con-1")
+    # Only the long-id relay hears the original short-id sender. The
+    # original can fit at 1200B while reissuing its opaque body cannot.
+    net.set_faults(FaultPolicy(drop=1), src="c", dst="prod-1")
+    expected: Body = {
+        "op": "pair",
+        "consumer": "con-1",
+        "producer": "prod-1",
+        "version": [1, "c"],
+    }
+    body: Body = {**expected, "extension": 0.5 if extension == "float" else ""}
+    unsigned: Body = {"v": 1, "t": "int", "id": "c", "seq": 1, "ts": T0, "body": body}
+
+    def signed() -> bytes:
+        signature = hmac.new(
+            net.psk, canonical_bytes(unsigned), hashlib.sha256
+        ).hexdigest()
+        return canonical_bytes({**unsigned, "sig": signature})
+
+    if extension == "padding":
+        body["extension"] = "x" * (MAX_FRAME_BYTES - len(signed()))
+    original = signed()
+    if extension == "padding":
+        assert len(original) == MAX_FRAME_BYTES
+    net.inject_raw(original, sender="c")
+    net.run(1)
+    assert net.pairing_of("con-1") == Pairing(None, (0, ""))
+    assert net.nodes[relay].node._intent_cache["con-1"].body == expected
+    net.set_offline("con-1", False)
+    net.run(6)
+    relayed = [
+        entry
+        for entry in net.log
+        if entry.origin == relay and entry.ftype is FrameType.INT
+    ]
+    assert relayed
+    assert all(entry.body == expected for entry in relayed)
+    assert all(len(entry.raw) <= MAX_FRAME_BYTES for entry in relayed)
+    assert net.pairing_of("con-1") == Pairing("prod-1", (1, "c"))
+    assert applied_acks(net, "con-1", (1, "c"))
 
 
 # -- row: conflicting concurrent intents -------------------------------------
@@ -475,14 +530,10 @@ def test_repair_consumer_from_one_producer_to_another() -> None:
     assert net.state_of("con-1") is NodeState.ACTIVE
     second, _ = net.send_intent("pair", "con-1", "prod-2", version=(2, CLI))
     net.run(4.0)
-    # NOTE: re-pairing replaces the attachment with a direct re-attach,
-    # not a DetachMedia/AttachMedia sequence: the driver contract treats
-    # attach-while-attached as a switch (SimDriver: "idempotent
-    # re-attach"; an IGMP driver leaves the old group as part of joining
-    # the new one). Only an explicit unpair emits DetachMedia.
+    # A committed replacement explicitly releases the old route first.
     calls = net.nodes["con-1"].driver.calls
     assert [c[1] for c in calls if c[0] == "attach"] == ["prod-1", "prod-2"]
-    assert ("detach",) not in calls
+    assert [c[0] for c in calls] == ["attach", "detach", "attach"]
     assert net.nodes["con-1"].driver.attached_to == "prod-2"
     assert net.agree("con-1") == Pairing("prod-2", second)
     assert net.state_of("con-1") is NodeState.ACTIVE
@@ -564,14 +615,9 @@ def test_unpair_then_repair_same_consumer() -> None:
     assert net.pairing_of("con-1") == Pairing(None, v_unpair)
     assert net.state_of("con-1") is NodeState.IDLE
     assert net.nodes["con-1"].driver.attached_to is None
-    # NOTE: unpair emits no "media-down" event: _apply_unpair sets the
-    # node IDLE before DetachMedia runs, so when the driver's IDLE
-    # status is fed back the state is already IDLE and the transition
-    # branch does not fire. The teardown surfaces as "pairing-applied"
-    # (producer null) plus the immediate idle announce; "media-down"
-    # only fires when the driver reports IDLE while the node still
-    # believes media is up (spontaneous media loss).
-    assert "media-down" not in net.event_slugs("con-1")
+    # The desired unpair is committed before cleanup; media-down confirms
+    # actual backend release rather than merely accepting the intent.
+    assert "media-down" in net.event_slugs("con-1")
     v_repair, _ = net.send_intent("pair", "con-1", "prod-2", version=(3, CLI))
     net.run(4.0)
     calls = net.nodes["con-1"].driver.calls

@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 132 32">
+  <title>Yoke</title>
+  <style>path { fill: #203b32; } @media (prefers-color-scheme: dark) { path { fill: #e2ece5; } }</style>
+  <!-- Mark geometry derives from yoke-mark.svg. See doc/design/BRANDING.md. -->
+  <path d="M4 3H10V12A6 6 0 0 0 22 12V3H28V12A12 12 0 0 1 19 23.6189500386V29H13V23.6189500386A12 12 0 0 1 4 12Z"/>
+  <path fill-rule="evenodd" d="M43 6H47.5L52 13.8L56.5 6H61L54 17.2V26H50V17.2Z M74 5.6C80.3 5.6 84 9.6 84 16S80.3 26.4 74 26.4S64 22.4 64 16S67.7 5.6 74 5.6Z M74 9.3C70.3 9.3 68.2 11.8 68.2 16S70.3 22.7 74 22.7S79.8 20.2 79.8 16S77.7 9.3 74 9.3Z M89 6H93V14.9L101 6H106L97.1 15.8L106.7 26H101.6L94.4 18.6L93 20.2V26H89Z M112 6H127V9.7H116V14.1H125.5V17.8H116V22.3H127V26H112Z"/>
+</svg>

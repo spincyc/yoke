@@ -208,3 +208,47 @@ def test_invalid_pattern_and_fps_rejected() -> None:
 
 def test_parse_header_rejects_short_payload() -> None:
     assert parse_header(b"\x00\x01\x02") is None
+
+
+@pytest.mark.parametrize("pattern", ["counter", "bars", "noise"])
+def test_payload_matches_original_per_frame_seed_contract(pattern: str) -> None:
+    import random
+
+    seed = 37
+    src = make_source(seed=seed, pattern=pattern)
+    for seq in range(12):
+        unit = src.frame(T0).emit[0]
+        if pattern == "bars":
+            tile = random.Random(seed).randbytes(16)
+            body = (tile * (MODEL_BODY_BYTES // 16 + 1))[:MODEL_BODY_BYTES]
+        else:
+            salt = 0x9E3779B9 if pattern == "noise" else 0
+            body = random.Random(seed ^ seq ^ salt).randbytes(MODEL_BODY_BYTES)
+        expected = (
+            seq.to_bytes(8, "big")
+            + (seq * (MEDIA_CLOCK_HZ // 60)).to_bytes(8, "big")
+            + (zlib.crc32(body) & 0xFFFFFFFF).to_bytes(4, "big")
+            + body
+        )
+        assert unit.payload == expected
+        assert unit.source_digest == digest_of(expected)
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"width": 0},
+        {"width": -1},
+        {"height": 0},
+        {"height": True},
+        {"width": 100_000, "height": 100_000},
+        {"fps": True},
+        {"fps": 91_000},
+        {"clock_hz": 0},
+        {"clock_hz": -1},
+        {"seed": -1},
+    ],
+)
+def test_invalid_source_bounds_are_rejected(kwargs: dict[str, int]) -> None:
+    with pytest.raises(ValueError):
+        make_source(**kwargs)

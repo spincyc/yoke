@@ -25,16 +25,26 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import errno
+import json
 import socket
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from typing import cast
 
 import pytest
 
 from yoke.media.assembly import MediaConfig, build_receiver, build_sender
-from yoke.media.runner import ReceiverRunner, SenderRunner, SenderStats
+from yoke.media.runner import (
+    FEEDBACK_MAGIC,
+    ReceiverRunner,
+    SenderRunner,
+    SenderStats,
+    _decode_feedback,
+)
 from yoke.media.snoop import MediaSnooper, SnoopRecord
+from yoke.media.stages.jitter import JitterBuffer
 from yoke.media.stages.packetize import RTP_HEADER_LEN, decode_rtp_header
 from yoke.media.types import Body, EventKind, StageEvent
 
@@ -44,6 +54,25 @@ FRAMES = 90
 # A datagram that is NOT a yoke media packet: the receiver must count it as
 # dropped (WireError) and keep flowing.
 GARBAGE = b"\xde\xad\xbe\xef not-a-yoke-media-packet \xff\xff\xff\xff"
+
+UNSUPPORTED_SOCKET_ERRORS = {
+    errno.EACCES,
+    errno.EPERM,
+    errno.EAFNOSUPPORT,
+    errno.EPROTONOSUPPORT,
+    errno.ENOPROTOOPT,
+    errno.EOPNOTSUPP,
+    errno.ENETUNREACH,
+    errno.EADDRNOTAVAIL,
+    errno.ENETDOWN,
+}
+
+
+def require_socket_support(exc: OSError) -> None:
+    """Skip only proven environment restrictions; implementation errors fail."""
+    if exc.errno in UNSUPPORTED_SOCKET_ERRORS:
+        pytest.skip(f"loopback UDP unavailable in this environment: {exc}")
+    raise exc
 
 
 # --------------------------------------------------------------------------
@@ -59,10 +88,14 @@ def _bind_udp() -> socket.socket:
     turn that into a skip.
     """
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.bind(("127.0.0.1", 0))
-    sock.setblocking(False)
-    return sock
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(("127.0.0.1", 0))
+        sock.setblocking(False)
+        return sock
+    except BaseException:
+        sock.close()
+        raise
 
 
 def _rtp_header_body(raw: bytes) -> Body:
@@ -132,11 +165,16 @@ async def run_loopback(
     the optional snooper's topology source. Any ``OSError`` from binding or
     endpoint creation becomes a skip.
     """
+    sockets: list[socket.socket] = []
     try:
-        rx_sock = _bind_udp()
-        tx_sock = _bind_udp()
+        sockets.append(_bind_udp())
+        sockets.append(_bind_udp())
     except OSError as exc:  # pragma: no cover - environment-dependent
-        pytest.skip(f"loopback UDP unavailable in this environment: {exc}")
+        for opened in sockets:
+            opened.close()
+        require_socket_support(exc)
+        raise AssertionError("unreachable") from exc
+    rx_sock, tx_sock = sockets
 
     rx_addr = rx_sock.getsockname()
     tx_addr = tx_sock.getsockname()
@@ -151,8 +189,6 @@ async def run_loopback(
 
     garbage_sock: socket.socket | None = None
     garbage_sent = 0
-    if garbage_every is not None:
-        garbage_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
     def _on_send(seq: int, now: float) -> None:
         nonlocal garbage_sent
@@ -164,6 +200,8 @@ async def run_loopback(
 
     metrics: dict[str, object] = {}
     try:
+        if garbage_every is not None:
+            garbage_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         recv_task: asyncio.Task[dict[str, object]] = asyncio.create_task(
             receiver.run(rx_sock, duration=duration)
         )
@@ -179,8 +217,10 @@ async def run_loopback(
         for leaked in (rx_sock, tx_sock):
             with contextlib.suppress(OSError):
                 leaked.close()
-        pytest.skip(f"loopback datagram endpoint unavailable: {exc}")
+        require_socket_support(exc)
     finally:
+        rx_sock.close()
+        tx_sock.close()
         if garbage_sock is not None:
             garbage_sock.close()
 
@@ -366,7 +406,7 @@ async def test_small_mtu_multifragment_is_bit_exact() -> None:
     # per slice across the wire; a lossless (raw) frames_ok proves the
     # depacketizer reassembled every fragment bit-for-bit.
     jumbo = await run_loopback(MediaConfig(width=32, height=32, fps=FPS, mtu=9000))
-    small = await run_loopback(MediaConfig(width=32, height=32, fps=FPS, mtu=40))
+    small = await run_loopback(MediaConfig(width=32, height=32, fps=FPS, mtu=125))
 
     _assert_clean(jumbo.metrics, FRAMES)
     _assert_clean(small.metrics, FRAMES)
@@ -445,3 +485,180 @@ def test_rtp_header_adapter_roundtrips() -> None:
         "pt": 96,
         "ssrc": 0x5A5A5A5A,
     }
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        b"not-feedback",
+        FEEDBACK_MAGIC + b"[]",
+        FEEDBACK_MAGIC + b"null",
+        FEEDBACK_MAGIC + b'{"loss":NaN,"jitter":0,"congestion":0}',
+        FEEDBACK_MAGIC + b'{"loss":0,"jitter":Infinity,"congestion":0}',
+        FEEDBACK_MAGIC + b'{"loss":0,"jitter":0,"congestion":-Infinity}',
+        FEEDBACK_MAGIC + b'{"loss":1e1000,"jitter":0,"congestion":0}',
+        FEEDBACK_MAGIC + b'{"loss":true,"jitter":0,"congestion":0}',
+        FEEDBACK_MAGIC + b'{"loss":"0","jitter":0,"congestion":0}',
+        FEEDBACK_MAGIC + b'{"loss":1.1,"jitter":0,"congestion":0}',
+        FEEDBACK_MAGIC + b'{"loss":0,"jitter":-1,"congestion":0}',
+        FEEDBACK_MAGIC + b'{"loss":0,"jitter":0,"congestion":-1}',
+        FEEDBACK_MAGIC + b'{"loss":0,"jitter":0,"congestion":0,"frames_ok":true}',
+        FEEDBACK_MAGIC + b'{"loss":0,"jitter":0,"congestion":0,"frames_bad":0.5}',
+        FEEDBACK_MAGIC + b'{"loss":0,"jitter":0,"congestion":0,"frames_bad":-1}',
+        FEEDBACK_MAGIC + b"\xff",
+        FEEDBACK_MAGIC + b"[" * 2000,
+    ],
+)
+def test_malformed_feedback_cannot_change_rate_control(raw: bytes) -> None:
+    sender = build_sender(MediaConfig(width=32, height=32))
+    runner = SenderRunner(sender, dest=("127.0.0.1", 5004))
+    before = (sender.rate_state.target, runner.stats.feedback_seen)
+    runner.on_feedback(raw, 0.0)
+    assert (sender.rate_state.target, runner.stats.feedback_seen) == before
+    assert _decode_feedback(raw, 0.0) is None
+
+
+def test_feedback_valid_numeric_report_is_accepted() -> None:
+    raw = (
+        FEEDBACK_MAGIC
+        + json.dumps(
+            {
+                "loss": 0.1,
+                "jitter": 0.02,
+                "congestion": 1,
+                "frames_ok": 12,
+                "frames_bad": 3,
+            }
+        ).encode()
+    )
+    report = _decode_feedback(raw, 123.0)
+    assert report is not None
+    assert report.now == 123.0 and report.loss == 0.1
+    assert report.frames_ok == 12 and report.frames_bad == 3
+
+
+@pytest.mark.parametrize("dest", [("239.1.2.3", 5004), ("0.0.0.0", 5004)])
+def test_receiver_forbids_automatic_or_multicast_feedback(
+    dest: tuple[str, int],
+) -> None:
+    with pytest.raises(ValueError):
+        ReceiverRunner(build_receiver(MediaConfig()), feedback_dest=dest)
+
+
+@pytest.mark.parametrize("duration", [0.0, -1.0, float("nan"), float("inf")])
+async def test_invalid_duration_does_not_open_transport(duration: float) -> None:
+    receiver = ReceiverRunner(build_receiver(MediaConfig()))
+    with pytest.raises(ValueError, match="duration"):
+        await receiver.run(cast(socket.socket, object()), duration=duration)
+
+
+async def test_receiver_cancellation_closes_socket_and_clears_transport() -> None:
+    try:
+        sock = _bind_udp()
+    except OSError as exc:
+        require_socket_support(exc)
+        raise AssertionError("unreachable") from exc
+    receiver = ReceiverRunner(build_receiver(MediaConfig()))
+    task = asyncio.create_task(receiver.run(sock, duration=60))
+    try:
+        await asyncio.sleep(0.01)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert sock.fileno() == -1
+        assert receiver._transport is None
+    finally:
+        if not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        sock.close()
+
+
+async def test_sender_callback_failure_closes_socket_and_clears_transport() -> None:
+    sockets: list[socket.socket] = []
+    try:
+        sockets.append(_bind_udp())
+        sockets.append(_bind_udp())
+        receiver_sock, sender_sock = sockets
+        runner = SenderRunner(
+            build_sender(MediaConfig()), dest=receiver_sock.getsockname()
+        )
+
+        def fail(seq: int, now: float) -> None:
+            raise RuntimeError("injected send callback failure")
+
+        with pytest.raises(RuntimeError, match="injected send callback failure"):
+            await runner.run(sender_sock, frames=2, on_send=fail)
+        assert sender_sock.fileno() == -1
+        assert runner._transport is None
+    except OSError as exc:
+        require_socket_support(exc)
+    finally:
+        for sock in sockets:
+            sock.close()
+
+
+def test_receiver_feedback_jitter_uses_arrivals_without_source_clock() -> None:
+    class RecordingTransport(asyncio.DatagramTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.reports: list[bytes] = []
+
+        def sendto(self, data: bytes, addr: object = None) -> None:
+            self.reports.append(data)
+
+    config = MediaConfig(width=32, height=32, fps=30)
+    receiver = build_receiver(config, report_every=1)
+    runner = ReceiverRunner(receiver, feedback_dest=("127.0.0.1", 12345))
+    transport = RecordingTransport()
+    runner._transport = transport
+    sender = SenderRunner(build_sender(config), dest=("127.0.0.1", 5004))
+    for seq in range(30):
+        now = seq / config.fps
+        arrival = now + (0.015 if seq % 2 else 0)
+        runner.tick(arrival)
+        for raw in sender.emit_frame(now):
+            runner.on_datagram(raw, arrival)
+    runner.tick(1.5)
+    reports = [_decode_feedback(raw, 1.5) for raw in transport.reports]
+    assert reports and all(report is not None for report in reports)
+    assert any(report is not None and report.jitter > 0 for report in reports)
+    jitter = next(
+        stage for stage in receiver.pipeline.stages if isinstance(stage, JitterBuffer)
+    )
+    assert reports[-1] is not None
+    assert reports[-1].jitter == pytest.approx(jitter.jitter_estimate())
+    assert receiver.sink.metrics()["mean_latency"] is None
+    assert receiver.sink.metrics()["last_latency"] is None
+
+
+async def test_finite_runners_finish_pipelines_and_ignore_late_arrivals() -> None:
+    sockets: list[socket.socket] = []
+    try:
+        sockets.append(_bind_udp())
+        sockets.append(_bind_udp())
+        rx_sock, tx_sock = sockets
+        source = build_sender(MediaConfig(width=32, height=32))
+        sink = build_receiver(source.config)
+        sender = SenderRunner(source, dest=rx_sock.getsockname())
+        receiver = ReceiverRunner(sink)
+        receive_task = asyncio.create_task(receiver.run(rx_sock, duration=0.05))
+        try:
+            await sender.run(tx_sock, frames=1)
+            await receive_task
+        finally:
+            if not receive_task.done():
+                receive_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await receive_task
+        assert source.pipeline.finished and sink.pipeline.finished
+        assert sender.finish(1) == []
+        before = sink.sink.metrics()
+        assert receiver.on_datagram(GARBAGE, 1).emitted == []
+        assert sink.sink.metrics() == before
+    except OSError as exc:
+        require_socket_support(exc)
+    finally:
+        for sock in sockets:
+            sock.close()

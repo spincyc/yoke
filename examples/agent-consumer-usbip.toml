@@ -1,11 +1,14 @@
-# Onboard agent for a USB consumer: the box plugged into a computer's
-# USB port (or the computer itself), attaching exported devices via usbip.
+# Linux USB/IP import reference: exported devices enter this consumer
+# host's Linux USB stack. A physical USB gadget/OTG backend that presents
+# those devices through a downstream computer's USB port is not implemented.
 node_id = "desk-usb"
 role = "consumer"
 kind = "usb"
 name = "Desk USB drop"
 psk_file = "/etc/yoke/psk"
 state_file = "/var/lib/yoke/state.json"
+# Set to the local host's address on the control VLAN when multi-homed.
+# interface = "10.20.30.2"
 
 [driver]
 type = "usbip"

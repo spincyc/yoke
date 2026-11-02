@@ -121,8 +121,12 @@ class TestConfigLoad:
 
 class TestStateFile:
     def test_missing_is_fresh(self, tmp_path: Path) -> None:
-        state = statefile.load(tmp_path / "none.json")
+        state = statefile.load(tmp_path / "none.json", allow_missing=True)
         assert state == PersistedState()
+
+    def test_missing_requires_explicit_commissioning(self, tmp_path: Path) -> None:
+        with pytest.raises(statefile.StateError, match="missing state"):
+            statefile.load(tmp_path / "none.json")
 
     def test_round_trip(self, tmp_path: Path) -> None:
         path = tmp_path / "deep" / "state.json"
@@ -154,3 +158,52 @@ class TestStateFile:
         path.write_bytes(content)
         with pytest.raises(statefile.StateError):
             statefile.load(path)
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        'group = "127.0.0.1"',
+        'group = "239.1.2.3/24"',
+        'group = "ff02::1"',
+        'interface = "eth0"',
+        'interface = "239.1.2.3"',
+        'interface = "255.255.255.255"',
+        "port = 65536",
+    ],
+)
+def test_network_options_fail_at_config_load(tmp_path: Path, extra: str) -> None:
+    with pytest.raises(ConfigError):
+        load(write_config(tmp_path, MINIMAL.format(state=tmp_path / "s.json") + extra))
+
+
+def test_config_read_error_is_actionable(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="cannot read config"):
+        load(tmp_path)
+
+
+def test_non_utf8_config_is_actionable(tmp_path: Path) -> None:
+    path = tmp_path / "agent.toml"
+    path.write_bytes(b"\xff")
+    with pytest.raises(ConfigError, match="UTF-8"):
+        load(path)
+
+
+def test_config_psk_fifo_is_rejected_without_waiting(tmp_path: Path) -> None:
+    import os
+
+    path = tmp_path / "psk"
+    os.mkfifo(path, 0o600)
+    with pytest.raises(ConfigError, match="regular"):
+        load(
+            write_config(
+                tmp_path,
+                MINIMAL.format(state=tmp_path / "s.json") + f'psk_file = "{path}"\n',
+            )
+        )
+
+
+def test_config_rejects_nul_state_path(tmp_path: Path) -> None:
+    text = MINIMAL.format(state="bad\\u0000state")
+    with pytest.raises(ConfigError, match="state_file"):
+        load(write_config(tmp_path, text))

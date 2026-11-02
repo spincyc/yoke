@@ -13,6 +13,7 @@ See doc/design/MEDIA.md for the architecture.
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
@@ -22,12 +23,24 @@ Body = dict[str, Any]
 # Media clock: 90 kHz is the RTP video convention (RFC 3551). Timestamps
 # (pts) are in these ticks so packetizers/jitter buffers share one unit.
 MEDIA_CLOCK_HZ = 90_000
-# Default network MTU for packetization; jumbo frames raise this and cut
-# packet rate ~6x (9000 vs 1500 bytes).
+# Conventional IPv4 path MTUs. MediaConfig reserves the network and
+# reference framing headers before constructing the low-level packetizer.
 DEFAULT_MTU = 1500
 JUMBO_MTU = 9000
-# RTP payload types we assign (dynamic range 96-127).
-PT_RAW = 96  # RFC 4175 uncompressed
+# Explicit reference-pipeline budgets. A 4K RGB frame occupies ~24 MiB;
+# these limits retain that workload while bounding untrusted reassembly.
+MAX_FRAME_BYTES = 64 * 1024 * 1024
+MAX_BUFFER_BYTES = 256 * 1024 * 1024
+MAX_FRAME_FRAGMENTS = 65_536
+MAX_PENDING_FRAMES = 16
+MAX_FEC_GROUP_SIZE = 1024
+MAX_UDP_BYTES = 65_507
+IPV4_UDP_HEADER_LEN = 28  # fixed IPv4 header (20) + UDP header (8), no IP options
+REFERENCE_TRAILER_LEN = 57
+_DIGEST_RE = re.compile(r"[0-9a-fA-F]{64}")
+# Dynamic payload types for reference codec models. These labels do not
+# make the private reference payload interoperable with real codec RTP.
+PT_RAW = 96
 PT_JPEGXS = 97
 PT_VC2 = 98
 PT_GENERIC = 99
@@ -60,6 +73,18 @@ class EventKind(StrEnum):
     ADJUST = "adjust"  # rate controller changed the target
     INTEGRITY = "integrity"  # sink verified (or failed) a frame's digest
     STAT = "stat"  # periodic counters snapshot
+
+
+def require_uint(value: object, name: str, maximum: int) -> int:
+    """Validate an integer without coercing strings, floats, or booleans."""
+    if type(value) is not int or not 0 <= value <= maximum:
+        raise ValueError(f"{name} must be an integer in [0, {maximum}]")
+    return value
+
+
+def is_digest(value: object) -> bool:
+    """Whether a value is a hexadecimal SHA-256 digest."""
+    return isinstance(value, str) and _DIGEST_RE.fullmatch(value) is not None
 
 
 def digest_of(payload: bytes) -> str:
@@ -121,9 +146,10 @@ class StageEvent:
 class NetworkReport:
     """Receiver → sender feedback that drives the rate controller.
 
-    All fields are observed at the receiver: fraction of packets lost,
-    smoothed one-way delay variation (jitter, seconds), and an ECN-style
-    congestion signal in [0, 1] (0 = idle, 1 = congested)."""
+    ``loss`` is the residual fraction of missing source frames inferred by
+    the sink, not RTP packet loss. ``jitter`` is smoothed packet interarrival
+    variation (seconds), supplied by the receiver's jitter buffer. Congestion
+    is a receiver signal in [0, 1] (0 = idle, 1 = congested)."""
 
     now: float
     loss: float

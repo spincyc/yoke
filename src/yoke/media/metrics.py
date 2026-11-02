@@ -34,12 +34,17 @@ Event ``detail`` schema this collector reads (all keys optional):
 
 from __future__ import annotations
 
+import math
+from copy import deepcopy
 from dataclasses import dataclass, field
 
 from yoke.media.types import Body, EventKind, StageEvent
 
 # Stream id used when an event's detail does not name one.
 DEFAULT_STREAM = "-"
+MAX_STREAMS = 256
+MAX_STAGES = 64
+MAX_PENDING_TIMES = 4096
 
 # Per-stage counter slots. ``in`` is a plain dict key (not the keyword).
 _STAGE_SLOTS: tuple[str, ...] = (
@@ -90,6 +95,30 @@ class StageRoles:
 
 
 @dataclass
+class _LatencyAgg:
+    samples: int = 0
+    last: float = 0.0
+    mean: float = 0.0
+    maximum: float = 0.0
+
+    def observe(self, latency: float) -> None:
+        self.samples += 1
+        self.last = latency
+        self.mean += (latency - self.mean) / self.samples
+        self.maximum = max(self.maximum, latency)
+
+    def body(self) -> Body | None:
+        if not self.samples:
+            return None
+        return {
+            "samples": self.samples,
+            "last": round(self.last, 6),
+            "mean": round(self.mean, 6),
+            "max": round(self.maximum, 6),
+        }
+
+
+@dataclass
 class _StreamAgg:
     """Mutable end-to-end accumulator for a single stream."""
 
@@ -101,10 +130,10 @@ class _StreamAgg:
     fec_recovered: int = 0
     src_bytes: int = 0
     codec_bytes: int = 0
-    ratio_sum: float = 0.0
+    ratio_mean: float = 0.0
     ratio_n: int = 0
     target_ratio: float | None = None
-    latencies: list[float] = field(default_factory=list)
+    latency: _LatencyAgg = field(default_factory=_LatencyAgg)
 
 
 def _new_stage() -> dict[str, int]:
@@ -123,7 +152,11 @@ def _as_float(value: object) -> float | None:
     if isinstance(value, bool):
         return None
     if isinstance(value, (int, float)):
-        return float(value)
+        try:
+            number = float(value)
+        except OverflowError:
+            return None
+        return number if math.isfinite(number) and number >= 0 else None
     return None
 
 
@@ -131,7 +164,7 @@ def _unit_bytes(detail: Body) -> int:
     """A unit's byte size from ``frame_bytes`` (preferred) or ``bytes``."""
     for key in ("frame_bytes", "bytes"):
         n = _as_int(detail.get(key))
-        if n is not None:
+        if n is not None and n >= 0:
             return n
     return 0
 
@@ -161,35 +194,50 @@ class MetricsCollector:
 
     def _count_stage(self, event: StageEvent) -> None:
         stage = self._stages.setdefault(event.stage, _new_stage())
+        if len(self._stages) > MAX_STAGES:
+            oldest = next(iter(self._stages))
+            del self._stages[oldest]
+            self._stats.pop(oldest, None)
         slot = _KIND_SLOT.get(event.kind)
         if slot is not None:
             stage[slot] += 1
         elif event.kind is EventKind.INTEGRITY:
             if event.detail.get("ok") is False:
                 stage["integrity_bad"] += 1
-            else:
+            elif event.detail.get("ok") is True:
                 stage["integrity_ok"] += 1
         elif event.kind is EventKind.STAT:
-            self._stats[event.stage] = dict(event.detail)
+            self._stats[event.stage] = deepcopy(event.detail)
 
     def _update_streams(self, event: StageEvent) -> None:
         roles = self._roles
         stream_id = self._stream_of(event.detail)
         agg = self._streams.setdefault(stream_id, _StreamAgg())
+        if len(self._streams) > MAX_STREAMS:
+            oldest = next(iter(self._streams))
+            del self._streams[oldest]
+            self._source_now = {
+                key: value
+                for key, value in self._source_now.items()
+                if key[0] != oldest
+            }
 
         if event.stage == roles.source and event.kind is EventKind.OUT:
             agg.frames_sourced += 1
             agg.src_bytes += _unit_bytes(event.detail)
-            self._source_now[(stream_id, event.pts)] = event.now
+            if math.isfinite(event.now):
+                self._source_now[(stream_id, event.pts)] = event.now
+                if len(self._source_now) > MAX_PENDING_TIMES:
+                    del self._source_now[next(iter(self._source_now))]
         elif event.stage == roles.codec and event.kind is EventKind.OUT:
             agg.codec_bytes += _unit_bytes(event.detail)
-            # Effective ratio is the codec's own applied ratio (source and
-            # codec model byte sizes on different bases, so their quotient
-            # is meaningless — the codec reports the real ratio directly).
+            # Each tap reports an applied model ratio; frame_bytes is the
+            # whole modeled frame repeated on every slice, so summing it
+            # cannot establish the effective compressed byte ratio.
             applied = _as_float(event.detail.get("ratio"))
-            if applied is not None:
-                agg.ratio_sum += applied
+            if applied is not None and applied > 0:
                 agg.ratio_n += 1
+                agg.ratio_mean += (applied - agg.ratio_mean) / agg.ratio_n
         elif event.stage == roles.wire_out and event.kind is EventKind.OUT:
             agg.packets_sent += 1
         elif event.stage == roles.wire_in and event.kind is EventKind.IN:
@@ -199,9 +247,9 @@ class MetricsCollector:
 
         if event.kind is EventKind.RECOVER:
             agg.fec_recovered += 1
-        elif event.kind is EventKind.ADJUST:
+        elif event.stage == roles.ratecontrol and event.kind is EventKind.ADJUST:
             target = _as_float(event.detail.get("target"))
-            if target is not None:
+            if target is not None and target > 0:
                 agg.target_ratio = target
 
     def _record_integrity(
@@ -209,15 +257,16 @@ class MetricsCollector:
     ) -> None:
         if event.detail.get("ok") is False:
             agg.frames_bad += 1
-        else:
+        elif event.detail.get("ok") is True:
             agg.frames_ok += 1
+        else:
+            return
         latency = _as_float(event.detail.get("latency"))
-        if latency is None:
-            sent = self._source_now.get((stream_id, event.pts))
-            if sent is not None:
-                latency = event.now - sent
+        sent = self._source_now.pop((stream_id, event.pts), None)
+        if latency is None and sent is not None:
+            latency = _as_float(event.now - sent)
         if latency is not None:
-            agg.latencies.append(latency)
+            agg.latency.observe(latency)
 
     @staticmethod
     def _stream_of(detail: Body) -> str:
@@ -247,7 +296,7 @@ class MetricsCollector:
         body: Body = dict(counters) if counters is not None else _new_stage()
         stat = self._stats.get(name)
         if stat is not None:
-            body["stat"] = dict(stat)
+            body["stat"] = deepcopy(stat)
         return body
 
     @staticmethod
@@ -256,7 +305,7 @@ class MetricsCollector:
         loss_rate = loss / agg.packets_sent if agg.packets_sent else 0.0
         recover_denom = agg.fec_recovered + loss
         recovery_rate = agg.fec_recovered / recover_denom if recover_denom else 0.0
-        ratio = agg.ratio_sum / agg.ratio_n if agg.ratio_n else None
+        ratio = agg.ratio_mean if agg.ratio_n else None
         return {
             "frames_sourced": agg.frames_sourced,
             "frames_ok": agg.frames_ok,
@@ -269,7 +318,7 @@ class MetricsCollector:
             "fec_recovery_rate": round(recovery_rate, 6),
             "ratio": round(ratio, 6) if ratio is not None else None,
             "target_ratio": agg.target_ratio,
-            "latency": _latency_body(agg.latencies),
+            "latency": agg.latency.body(),
         }
 
     def _totals(self) -> Body:
@@ -297,14 +346,3 @@ class MetricsCollector:
             "packet_loss": loss,
             "fec_recovered": recovered,
         }
-
-
-def _latency_body(samples: list[float]) -> Body | None:
-    if not samples:
-        return None
-    return {
-        "samples": len(samples),
-        "last": round(samples[-1], 6),
-        "mean": round(sum(samples) / len(samples), 6),
-        "max": round(max(samples), 6),
-    }

@@ -245,3 +245,94 @@ def test_merger_stage_events() -> None:
     lone.process(copies[0], NOW)
     flush = lone.flush(NOW)
     assert any(e.kind is EventKind.RECOVER for e in flush.events)
+
+
+def test_merger_does_not_drop_next_sequence_cycle_or_other_ssrc() -> None:
+    merger = SeamlessMerger()
+    first = make_packet(rtp_seq=5, pts=1, frame_seq=1, payload=b"a")
+    next_cycle = make_packet(rtp_seq=5, pts=2, frame_seq=2, payload=b"b")
+    assert merger.push(first).emit == [first]
+    assert merger.push(next_cycle).emit == [next_cycle]
+    other_ssrc = first.with_payload(first.payload, rtp_ssrc=9)
+    assert merger.push(other_ssrc).emit == [other_ssrc]
+
+
+def test_repeated_same_path_does_not_count_as_surviving_partner() -> None:
+    merger = SeamlessMerger()
+    unit = make_packet(rtp_seq=1, pts=1, payload=b"x").with_payload(b"x", path="A")
+    merger.push(unit)
+    merger.push(unit)
+    assert merger.flush().recovered == [unit]
+
+
+def test_merger_capacity_reports_retired_single_path_and_stays_bounded() -> None:
+    merger = SeamlessMerger(max_packets=2, max_bytes=2)
+    for seq in range(10):
+        unit = make_packet(rtp_seq=seq, pts=seq, payload=b"x")
+        feed = merger.push(unit)
+        assert feed.emit == [unit]
+        if seq >= 2:
+            assert len(feed.recovered) == 1
+        assert len(merger._first) <= 2
+        assert merger._bytes <= 2
+    assert len(merger.flush().recovered) == 2
+    assert merger._bytes == 0
+
+
+def test_malformed_xor_metadata_is_reported_without_retention() -> None:
+    base = make_packet(rtp_seq=1, pts=1, payload=b"x")
+    malformed = [
+        base.with_payload(b"x", fec_group="bad"),
+        base.with_payload(b"x", fec_group=1, fec_size=0, fec_index=0),
+        base.with_payload(b"x", fec_group=1, fec_size=1025, fec_index=0),
+        base.with_payload(b"x", fec_group=1, fec_size=2, fec_index=-1),
+        MediaUnit(
+            UnitKind.PARITY,
+            0,
+            0,
+            b"x",
+            DIGEST,
+            {"group": 0, "size": 2, "members": [{}]},
+        ),
+        MediaUnit(
+            UnitKind.PARITY,
+            0,
+            0,
+            b"x",
+            DIGEST,
+            {"group": 0, "size": 1, "members": [None]},
+        ),
+    ]
+    dec = XorParityDecoder()
+    for unit in malformed:
+        feed = dec.push(unit)
+        assert feed.reports
+        assert not feed.emit
+        assert not dec._groups
+
+
+def test_xor_group_capacity_and_completed_retention_are_bounded() -> None:
+    dec = XorParityDecoder(max_groups=2, max_bytes=2, done_window=3)
+    for group in range(10):
+        data = make_packet(rtp_seq=group, pts=group, payload=b"x").with_payload(
+            b"x", fec_group=group, fec_index=0, fec_size=2
+        )
+        feed = dec.push(data)
+        assert feed.emit == [data]
+        if group >= 2:
+            assert feed.reports[0]["reason"] == "capacity"
+        assert len(dec._groups) <= 2
+        assert len(dec._done) <= 3
+        assert dec._bytes <= 2
+    assert len(dec.flush().reports) == 2
+    assert dec._bytes == 0
+
+
+def test_partial_xor_group_recovers_with_larger_advertised_data_size() -> None:
+    enc = XorParityFec(4)
+    first = enc.push(make_packet(rtp_seq=0, pts=1, payload=b"a"))[0]
+    second = enc.push(make_packet(rtp_seq=1, pts=1, payload=b"b"))[0]
+    parity = enc.flush()[0]
+    dec = XorParityDecoder()
+    dec.push(first)
+    assert dec.push(parity).recovered == [second]

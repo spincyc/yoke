@@ -7,13 +7,17 @@ fixed PSK), and advances time by calling ``poll`` at chosen instants.
 
 from __future__ import annotations
 
+import pytest
+
 from yoke.core.frames import decode, encode
 from yoke.core.node import Node
 from yoke.core.types import (
     ANN_INTERVAL,
     ANN_JITTER,
     INTENT_CACHE_TTL,
+    MAX_SEQUENCE,
     PEER_TIMEOUT,
+    SEQUENCE_RESERVATION,
     SUPPRESSION_MAX,
     SUPPRESSION_MIN,
     AttachMedia,
@@ -155,7 +159,20 @@ class Loop:
         )
         self.now = now
         self._seqs: dict[str, int] = {}
-        self.start_fx = self.node.start(now)
+        self.start_fx = self.complete(self.node.start(now))
+
+    def complete(self, effects: list[Effect]) -> list[Effect]:
+        """Model successful durable storage, preserving effect-order assertions."""
+        result: list[Effect] = []
+        for effect in effects:
+            result.append(effect)
+            if isinstance(effect, Persist):
+                result.extend(
+                    self.complete(
+                        self.node.on_persist_result(effect.request_id, True, self.now)
+                    )
+                )
+        return result
 
     def feed(
         self,
@@ -169,15 +186,15 @@ class Loop:
             seq = self._seqs.get(origin, 0) + 1
         self._seqs[origin] = max(self._seqs.get(origin, 0), seq)
         frame, raw = build_frame(frame_type, origin, seq, body)
-        return self.node.on_frame(frame, raw, self.now)
+        return self.complete(self.node.on_frame(frame, raw, self.now))
 
     def feed_pair(self, frame: Frame, raw: bytes) -> list[Effect]:
-        return self.node.on_frame(frame, raw, self.now)
+        return self.complete(self.node.on_frame(frame, raw, self.now))
 
     def poll_at(self, t: float) -> list[Effect]:
         assert t >= self.now, "time must not go backwards"
         self.now = t
-        return self.node.poll(t)
+        return self.complete(self.node.poll(t))
 
 
 def paired(loop: Loop, producer: str = "prod-1", version: Version = (1, "cli")) -> None:
@@ -202,7 +219,7 @@ def test_start_effect_order_and_shapes() -> None:
     assert [type(e) for e in fx] == [Persist, SendFrame, SendFrame]
     persist = fx[0]
     assert isinstance(persist, Persist)
-    assert persist.state.seq == SEQ0  # nanosecond floor (ADR 0007)
+    assert persist.state.seq == SEQ0 + SEQUENCE_RESERVATION
     assert persist.state.pairing == Pairing(None, (0, ""))
     started, ann = sends(fx, FrameType.EVT)[0], sends(fx, FrameType.ANN)[0]
     assert started.body == {"event": "started", "detail": {}}
@@ -284,7 +301,7 @@ def test_pair_intent_unknown_producer_effect_order() -> None:
     assert isinstance(pending, SendFrame) and pending.body["event"] == "media-pending"
     assert isinstance(ack, SendFrame) and ack.type is FrameType.ACK
     assert ack.body == {"version": [1, "cli"], "applied": True, "reason": "applied"}
-    assert persist.state.seq < ack.seq  # persisted before the ack was minted
+    assert persist.state.seq >= ack.seq  # reserved durably before releasing the ack
     assert isinstance(applied, SendFrame)
     assert applied.body == {
         "event": "pairing-applied",
@@ -372,7 +389,7 @@ def test_unpair() -> None:
     }
     ann = sends(fx, FrameType.ANN)[0]
     assert ann.body["pairing"] == {"producer": None, "version": [2, "cli"]}
-    assert loop.node.node_state is NodeState.IDLE
+    assert loop.node.node_state is NodeState.PENDING
     assert loop.node.pairing == Pairing(None, (2, "cli"))
 
 
@@ -844,8 +861,8 @@ def test_producer_driver_status_events_no_retry() -> None:
 def test_shutdown_sends_stopping_then_bye() -> None:
     loop = Loop()
     fx = loop.node.shutdown(loop.now)
-    assert [type(e) for e in fx] == [SendFrame, SendFrame]
-    stopping, bye = fx
+    assert [type(e) for e in fx] == [DetachMedia, SendFrame, SendFrame]
+    stopping, bye = fx[1:]
     assert isinstance(stopping, SendFrame) and isinstance(bye, SendFrame)
     assert stopping.type is FrameType.EVT
     assert stopping.body == {"event": "stopping", "detail": {}}
@@ -896,11 +913,11 @@ def test_stale_driver_active_after_unpair_is_ignored() -> None:
     loop = Loop()
     paired_active(loop, "prod-1", (1, "cli"))
     loop.feed(FrameType.INT, "cli", unpair_body("node-1", (2, "cli")))
-    assert loop.node.node_state is NodeState.IDLE
+    assert loop.node.node_state is NodeState.PENDING  # cleanup not confirmed yet
     # A late ACTIVE from the attach that completed after the unpair.
     fx = loop.node.on_driver_status(DriverStatus(NodeState.ACTIVE), loop.now)
     assert fx == []
-    assert loop.node.node_state is NodeState.IDLE
+    assert loop.node.node_state is NodeState.PENDING
     assert "media-up" not in evts(fx)
 
 
@@ -933,3 +950,353 @@ def test_prune_forgets_long_departed_peers() -> None:
     loop.poll_at(loop.now + PEER_FORGET + 1.0)
     assert "ghost" not in loop.node.peers
     assert "ghost" not in loop.node._replay
+
+
+def test_failed_pair_save_never_commits_or_reacks_duplicate() -> None:
+    loop = Loop()
+    frame, raw = build_frame(
+        FrameType.INT, "cli", 1, pair_body("node-1", "prod-1", (1, "cli"))
+    )
+    effects = loop.node.on_frame(frame, raw, loop.now)
+    assert len(effects) == 1 and isinstance(effects[0], Persist)
+    save = effects[0]
+    assert loop.node.pairing == Pairing(None, (0, ""))
+    assert loop.node.on_persist_result(save.request_id + 1, True, loop.now) == []
+    assert loop.node.on_frame(frame, raw, loop.now) == []
+    failed = loop.node.on_persist_result(save.request_id, False, loop.now)
+    assert all(isinstance(effect, Log) for effect in failed)
+    assert loop.node.pairing == Pairing(None, (0, ""))
+    assert loop.node.on_frame(frame, raw, loop.now) == []
+    # CLI retries use a fresh envelope sequence but the same intent version.
+    retry, retry_raw = build_frame(FrameType.INT, "cli", 2, frame.body)
+    retried = loop.node.on_frame(retry, retry_raw, loop.now)
+    assert len(retried) == 1 and isinstance(retried[0], Persist)
+    completed = loop.node.on_persist_result(retried[0].request_id, True, loop.now)
+    assert sends(completed, FrameType.ACK)[0].body["applied"] is True
+    assert loop.node.pairing == Pairing("prod-1", (1, "cli"))
+    assert loop.node.on_persist_result(retried[0].request_id, True, loop.now) == []
+
+
+def test_failed_unpair_keeps_committed_pairing_and_emits_no_detach() -> None:
+    loop = Loop()
+    paired_active(loop)
+    before = loop.node.pairing
+    frame, raw = build_frame(FrameType.INT, "cli", 2, unpair_body("node-1", (2, "cli")))
+    effects = loop.node.on_frame(frame, raw, loop.now)
+    assert len(effects) == 1 and isinstance(effects[0], Persist)
+    assert loop.node.pairing == before
+    failed = loop.node.on_persist_result(effects[0].request_id, False, loop.now)
+    assert not any(isinstance(effect, DetachMedia | SendFrame) for effect in failed)
+    assert loop.node.pairing == before
+
+
+def test_start_save_failure_emits_no_frames_or_driver_commands() -> None:
+    node = Node(
+        NodeConfig("node-1", Role.CONSUMER, Kind.USB), state=PersistedState(), now=T0
+    )
+    effects = node.start(T0)
+    assert len(effects) == 1 and isinstance(effects[0], Persist)
+    failed = node.on_persist_result(effects[0].request_id, False, T0)
+    assert all(isinstance(effect, Log) for effect in failed)
+    assert node.poll(T0 + 10) == []
+    # Local shutdown must still quiesce even without an outbound reservation.
+    assert node.shutdown(T0 + 10) == [DetachMedia()]
+
+
+def test_same_second_restart_skips_durable_reservation_with_backwards_wall_clock() -> (
+    None
+):
+    loop = Loop()
+    saved = next(
+        effect.state for effect in loop.start_fx if isinstance(effect, Persist)
+    )
+    prior_sequences = [
+        effect.seq for effect in loop.start_fx if isinstance(effect, SendFrame)
+    ]
+    restarted = Node(
+        NodeConfig("node-1", Role.CONSUMER, Kind.HDMI),
+        state=saved,
+        now=0.0,
+        wall_time=T0 - 60,
+    )
+    save = restarted.start(0.0)[0]
+    assert isinstance(save, Persist)
+    frames = restarted.on_persist_result(save.request_id, True, 0.0)
+    sequences = [effect.seq for effect in frames if isinstance(effect, SendFrame)]
+    assert min(sequences) > saved.seq >= max(prior_sequences)
+    assert max(sequences) <= save.state.seq
+
+
+def test_sequence_refill_failure_withholds_batch_until_durable_retry() -> None:
+    loop = Loop()
+    loop.node._seq = loop.node._reserved_until
+    t = loop.node.next_deadline()
+    effects = loop.node.poll(t)
+    assert len(effects) == 1 and isinstance(effects[0], Persist)
+    failed = loop.node.on_persist_result(effects[0].request_id, False, t)
+    assert not any(isinstance(effect, SendFrame) for effect in failed)
+    assert loop.node.poll(t + 0.5) == []
+    retry = loop.node.poll(t + 1.0)
+    assert len(retry) == 1 and isinstance(retry[0], Persist)
+    released = loop.node.on_persist_result(retry[0].request_id, True, t + 1.0)
+    assert sends(released, FrameType.ANN)
+    assert all(
+        effect.seq <= retry[0].state.seq
+        for effect in released
+        if isinstance(effect, SendFrame)
+    )
+
+
+def test_shutdown_detaches_even_when_sequence_refill_save_is_pending() -> None:
+    loop = Loop()
+    paired(loop)
+    loop.node._seq = loop.node._reserved_until
+    assert isinstance(loop.node.poll(loop.node.next_deadline())[0], Persist)
+    assert loop.node.shutdown(loop.now) == [DetachMedia()]
+
+
+def test_repair_to_unknown_producer_releases_previous_attachment() -> None:
+    loop = Loop()
+    paired_active(loop)
+    effects = loop.feed(
+        FrameType.INT, "cli", pair_body("node-1", "unknown", (2, "cli"))
+    )
+    assert any(isinstance(effect, DetachMedia) for effect in effects)
+    assert not attaches(effects)
+    assert loop.node.pairing == Pairing("unknown", (2, "cli"))
+    assert loop.node.on_driver_status(DriverStatus(NodeState.ACTIVE), loop.now) == []
+    loop.node.on_driver_status(DriverStatus(NodeState.IDLE), loop.now)
+    assert loop.node.node_state is NodeState.PENDING
+
+
+def test_backend_readiness_reports_bounded_evidence_without_payload_claim() -> None:
+    loop = Loop()
+    paired(loop)
+    effects = loop.node.on_driver_status(
+        DriverStatus(NodeState.ACTIVE, "joined group"), loop.now
+    )
+    assert evt_detail(effects, "media-up") == {"detail": "joined group"}
+    assert sends(effects, FrameType.ANN)[0].body["driver_status"] == {
+        "detail": "joined group"
+    }
+
+
+@pytest.mark.parametrize(
+    "version",
+    [[1, ""], [0, "cli"], [MAX_SEQUENCE + 1, "cli"], [True, "cli"], [1, "bad\n"]],
+)
+def test_invalid_version_cannot_update_pairing_or_enter_cache(version: object) -> None:
+    loop = Loop()
+    effects = loop.feed(
+        FrameType.INT,
+        "cli",
+        {"op": "pair", "consumer": "node-1", "producer": "prod-1", "version": version},
+    )
+    assert not sends(effects, FrameType.ACK)
+    assert loop.node.pairing == Pairing(None, (0, ""))
+    assert not loop.node._intent_cache
+
+
+def test_monotonic_timer_inputs_are_independent_of_sequence_wall_floor() -> None:
+    node = Node(
+        NodeConfig("node-1", Role.PRODUCER, Kind.USB),
+        state=PersistedState(),
+        now=0,
+        wall_time=T0,
+    )
+    save = node.start(0)[0]
+    assert isinstance(save, Persist)
+    node.on_persist_result(save.request_id, True, 0)
+    assert 1.0 <= node.next_deadline() <= 3.0
+    frame, raw = build_frame(FrameType.ANN, "peer", SEQ0 + 100, producer_ann())
+    node.on_frame(frame, raw, 0.25)
+    assert "peer" in node.peers
+
+
+def test_pairing_survives_longer_than_intent_cache_and_peer_timeout() -> None:
+    loop = Loop()
+    paired_active(loop)
+    committed = loop.node.pairing
+    loop.poll_at(T0 + INTENT_CACHE_TTL + PEER_TIMEOUT + 1)
+    assert loop.node.pairing == committed
+    assert loop.node.node_state is NodeState.PENDING
+
+
+def test_peer_maps_are_bounded_between_timer_ticks() -> None:
+    from yoke.core.types import MAX_TRACKED
+
+    loop = Loop()
+    for index in range(MAX_TRACKED + 20):
+        loop.feed(FrameType.ANN, f"peer-{index}", producer_ann())
+    assert len(loop.node._peers) == MAX_TRACKED
+    assert len(loop.node._replay) == MAX_TRACKED
+
+
+def test_optional_driver_evidence_cannot_overflow_existing_announce() -> None:
+    loop = Loop(role=Role.PRODUCER, media={"pad": "x" * 850})
+    effects = loop.node.on_driver_status(
+        DriverStatus(NodeState.ACTIVE, "証拠" * 100), loop.now
+    )
+    for effect in effects:
+        if isinstance(effect, SendFrame):
+            encode(effect.type, "node-1", effect.seq, T0, effect.body, PSK)
+
+
+def test_unpair_failure_stays_visible_and_retries_detach_until_idle() -> None:
+    loop = Loop()
+    paired_active(loop)
+    loop.feed(FrameType.INT, "cli", unpair_body("node-1", (2, "cli")))
+    effects = loop.node.on_driver_status(
+        DriverStatus(NodeState.ERROR, "release failed"), T0
+    )
+    assert loop.node.node_state is NodeState.ERROR
+    assert "driver-error" in evts(effects)
+    loop.node.on_driver_status(
+        DriverStatus(NodeState.ERROR, "release failed"), T0 + 0.9
+    )
+    retry = loop.poll_at(T0 + 1)
+    assert any(isinstance(effect, DetachMedia) for effect in retry)
+    assert not attaches(retry)
+    assert loop.node.pairing == Pairing(None, (2, "cli"))
+    loop.node.on_driver_status(DriverStatus(NodeState.IDLE), T0 + 1)
+    assert loop.node.node_state is NodeState.IDLE
+    assert loop.node._retry_at is None
+
+
+def test_unknown_replacement_failure_retries_old_teardown_without_new_peer() -> None:
+    loop = Loop()
+    paired_active(loop)
+    loop.feed(FrameType.INT, "cli", pair_body("node-1", "unknown", (2, "cli")))
+    loop.node.on_driver_status(DriverStatus(NodeState.ERROR, "old route stuck"), T0)
+    retry = loop.poll_at(T0 + 1)
+    assert any(isinstance(effect, DetachMedia) for effect in retry)
+    assert not attaches(retry)
+    loop.node.on_driver_status(DriverStatus(NodeState.IDLE), T0 + 1)
+    assert loop.node.pairing == Pairing("unknown", (2, "cli"))
+    assert loop.node.node_state is NodeState.PENDING
+    assert loop.node._retry_at is None
+
+
+def test_restart_after_durable_unpair_reconciles_possible_surviving_imports() -> None:
+    loop = Loop(state=PersistedState(seq=17, pairing=Pairing(None, (2, "cli"))))
+    assert any(isinstance(effect, DetachMedia) for effect in loop.start_fx)
+    assert loop.node.node_state is NodeState.PENDING
+    loop.node.on_driver_status(
+        DriverStatus(NodeState.PENDING, "owned ports remain"), T0
+    )
+    assert any(isinstance(effect, DetachMedia) for effect in loop.poll_at(T0 + 1))
+
+
+def test_restart_unknown_replacement_cleans_previous_owned_imports() -> None:
+    loop = Loop(state=PersistedState(seq=17, pairing=Pairing("unknown", (2, "cli"))))
+    assert any(isinstance(effect, DetachMedia) for effect in loop.start_fx)
+    loop.node.on_driver_status(DriverStatus(NodeState.ERROR, "old import remains"), T0)
+    retry = loop.poll_at(T0 + 1)
+    assert any(isinstance(effect, DetachMedia) for effect in retry)
+    assert not attaches(retry)
+
+
+def test_repeated_error_polls_cannot_starve_attach_retry() -> None:
+    loop = Loop()
+    paired(loop)
+    loop.node.on_driver_status(DriverStatus(NodeState.ERROR, "same failure"), T0)
+    deadline = loop.node._retry_at
+    attempts = 0
+    for index in range(1, 31):
+        loop.now = T0 + index * 0.9
+        loop.feed(FrameType.ANN, "prod-1", producer_ann())
+        loop.node.on_driver_status(
+            DriverStatus(NodeState.ERROR, "same failure"), loop.now
+        )
+        if index == 1:
+            assert loop.node._retry_at == deadline
+        attempts += len(attaches(loop.poll_at(loop.now)))
+    assert attempts >= 4
+
+
+def test_pending_backend_drift_reconciles_with_live_configured_producer() -> None:
+    loop = Loop()
+    paired_active(loop)
+    loop.node.on_driver_status(DriverStatus(NodeState.PENDING, "channel changed"), T0)
+    deadline = loop.node._retry_at
+    loop.node.on_driver_status(
+        DriverStatus(NodeState.PENDING, "channel changed"), T0 + 0.9
+    )
+    assert loop.node._retry_at == deadline
+    assert attaches(loop.poll_at(T0 + 1)) == [AttachMedia("prod-1", HDMI_MEDIA)]
+
+
+@pytest.mark.parametrize("reason", [[], {}, None, True, 1])
+def test_malformed_ack_reason_cannot_crash_or_evict_intent(reason: object) -> None:
+    loop = Loop(role=Role.PRODUCER)
+    loop.feed(FrameType.INT, "cli", pair_body("con-9", "prod-1", (1, "cli")))
+    loop.feed(
+        FrameType.ACK,
+        "con-9",
+        {"version": [1, "cli"], "applied": False, "reason": reason},
+    )
+    assert "con-9" in loop.node._intent_cache
+    assert loop.node._drops["malformed"] == 1
+
+
+def test_large_producer_error_announcements_fit_without_truncating_media() -> None:
+    media = {"pad": "x" * 850}
+    loop = Loop(role=Role.PRODUCER, media=media)
+    batches = [loop.start_fx]
+    for status in (
+        DriverStatus(NodeState.ERROR, "x" * 128),
+        DriverStatus(NodeState.PENDING, "waiting"),
+        DriverStatus(NodeState.ACTIVE, "ready"),
+    ):
+        batches.append(loop.node.on_driver_status(status, loop.now))
+        batches.append(loop.poll_at(loop.node.next_deadline()))
+    for batch in batches:
+        for effect in batch:
+            if isinstance(effect, SendFrame):
+                encode(effect.type, "node-1", effect.seq, T0, effect.body, PSK)
+                if effect.type is FrameType.ANN:
+                    assert effect.body["media"] == media
+
+
+def test_unencodable_local_media_is_rejected_before_start_or_update() -> None:
+    with pytest.raises(ValueError):
+        Loop(role=Role.PRODUCER, media={"pad": "x" * 1200})
+    loop = Loop(role=Role.PRODUCER, media=HDMI_MEDIA)
+    with pytest.raises(ValueError):
+        loop.node.set_media({"pad": "x" * 1200}, loop.now)
+    assert loop.node._media == HDMI_MEDIA
+
+
+def test_changed_producer_description_invalidates_active_evidence_until_success() -> (
+    None
+):
+    loop = Loop()
+    paired(loop)
+    loop.node.on_driver_status(
+        DriverStatus(NodeState.ACTIVE, "old group ready"), loop.now
+    )
+    effects = loop.feed(FrameType.ANN, "prod-1", producer_ann(HDMI_MEDIA_2))
+    assert attaches(effects) == [AttachMedia("prod-1", HDMI_MEDIA_2)]
+    assert loop.node.node_state is NodeState.PENDING
+    assert loop.node._driver_detail == ""
+    assert loop.node._err is None
+    announcements = sends(effects, FrameType.ANN)
+    announcements.extend(sends(loop.poll_at(loop.node.next_deadline()), FrameType.ANN))
+    assert announcements
+    assert all(frame.body["state"] == "pending" for frame in announcements)
+    assert all("driver_status" not in frame.body for frame in announcements)
+    ready = loop.node.on_driver_status(
+        DriverStatus(NodeState.ACTIVE, "new group ready"), loop.now
+    )
+    assert loop.node.node_state is NodeState.ACTIVE
+    assert evt_detail(ready, "media-up") == {"detail": "new group ready"}
+
+
+def test_invalid_producer_payload_is_not_retained_for_relay() -> None:
+    loop = Loop(role=Role.PRODUCER)
+    loop.feed(
+        FrameType.INT,
+        "cli",
+        {"op": "pair", "consumer": "con-1", "producer": [], "version": [1, "cli"]},
+    )
+    assert not loop.node._intent_cache

@@ -1,10 +1,17 @@
 # Yoke Wire Protocol v1 (YWP/1)
 
-Status: normative for v1. Changes require an ADR and a version bump.
+Status: normative for v1, with compatible correctness clarifications in
+ADR 0012. The frame envelope and version remain **YWP/1**: existing clients
+can still send intents and observe multicast. An incompatible authority or
+wire change requires a new version; these fixes do not implement the planned
+per-device/source-authorized YWP/2 security model.
 
 ## Transport
 
 - UDP over IPv4 multicast.
+- Group configuration MUST be an IPv4 multicast address; an explicitly
+  selected interface is local unicast IPv4 or `0.0.0.0`, and the port is
+  1 through 65535. TTL remains 1.
 - Control group: `239.121.111.107`, port `9753` (site-configurable; these
   are the defaults). TTL 1. Loopback enabled (snooper and agents may share
   a host).
@@ -23,7 +30,10 @@ A frame is canonical JSON, UTF-8, with:
   the signature binds parsed content either way).
 
 Canonical bytes = `json.dumps(obj, sort_keys=True, separators=(",", ":"),
-ensure_ascii=False).encode("utf-8")`.
+ensure_ascii=False, allow_nan=False).encode("utf-8")`. JSON must contain
+finite numbers, unique object keys, valid Unicode and at most 32 nested
+containers. Invalid inputs are dropped as `malformed`, never allowed to
+escape the receive loop as parser or encoding exceptions.
 
 ## Frame envelope
 
@@ -32,8 +42,8 @@ ensure_ascii=False).encode("utf-8")`.
 | `v` | int | MUST be `1`; other values dropped (count: `version`) |
 | `t` | str | one of `ann` `int` `ack` `evt` `bye` |
 | `id` | str | origin node id: `[a-z0-9][a-z0-9-]{0,31}` |
-| `seq` | int | per-origin, strictly increasing, ≥ 1 |
-| `ts` | number | sender's Unix time, seconds; informational only |
+| `seq` | int | per-origin, strictly increasing, 1 through 2^63−1; bool is invalid |
+| `ts` | number | finite sender Unix time, seconds; informational only |
 | `body` | object | per-type schema below |
 | `sig` | str | hex HMAC (see Authentication) or `""` in open mode |
 
@@ -62,18 +72,39 @@ Receivers track the highest `seq` seen per origin id. A frame with
 byte-identical canonical encoding ⇒ drop silently (count: `dup`) —
 duplicates are normal on multicast.
 
-Senders persist `seq`. On state loss, a sender MUST resume with
-`seq = max(persisted + 1, int(unix_time))` so it re-enters above any
-previously sent value. (`int(unix_time)` grows faster than any plausible
-frame rate; see ADR 0007.)
+Sequence units are Unix nanoseconds (ADR 0007), not seconds. A sender
+durably reserves a block before emitting frames from it: persisted `seq`
+is the reserved upper bound, not merely the last sequence already emitted.
+After restart it starts above that bound, using the larger of that bound
+and `int(unix_time) * 1_000_000_000` as its floor, and persists a fresh
+reservation before announcing. Unused reserved numbers are skipped. A
+reservation failure releases no frames beyond the previous durable bound.
+This prevents sequence reuse even when a process restarts in the same second
+or its wall clock moves backwards while its durable state survives.
+
+The reference implementation reserves 4096 numbers at a time. Receivers
+still reject values more than one hour ahead of their approximate wall
+clock. State loss, receive replay-map eviction and malicious site-key holders
+remain limitations: this is not cryptographic anti-replay across arbitrary
+reflashes or an ownership lease. State recovery is an explicit operator
+decision. Timer inputs are monotonic; a separately injected startup wall
+time supplies the sequence floor and future-sequence estimate.
 
 ## Versions
 
 A pairing version is a two-element array `[n, origin]`: Lamport counter
-`n` (int ≥ 1) and the intent origin's node id. Total order: compare `n`,
+`n` (int 1 through 2^63−1) and a syntactically valid origin node id. Total order: compare `n`,
 then `origin` lexicographically. An intent author sets
 `n = latest_known_n_for_that_consumer + 1` (from announce cache; 1 if
 unknown).
+
+Every new client operation MUST choose a fresh unpredictable version author
+id (valid node-id syntax), distinct from prior operations, even when the
+envelope origin is stable. Retries of that one operation reuse its complete
+version and intent. This prevents a delayed ACK for an older operation from
+being mistaken for a new request derived from a stale announce. The version
+author may differ from the envelope origin; it is an operation identifier,
+not an independently authenticated principal in site-PSK YWP/1.
 
 ## Frame bodies
 
@@ -136,6 +167,12 @@ ack still says `applied: true` with reason `applied` in that case —
 (hdmi consumer told to pair with usb producer) and `self-pair` are
 rejections and MUST NOT change state.
 
+An applied ACK confirms the saved pairing, not successful media activation
+or completed backend release after unpair.
+Clients distinguish that result from a subsequent matching consumer announce
+reporting active media. Open-PSK lab operation is explicitly identified by
+tools; it is not authenticated deployment.
+
 ### `evt` — event
 
 ```
@@ -159,9 +196,18 @@ Graceful shutdown; body `{}`. Peers mark the node departed immediately
 
 ## Consumer state machine
 
-States: `idle` (no pairing), `pending` (pairing applied, producer media
-parameters unknown or media not yet confirmed), `active` (driver reports
-media flowing), `error` (driver failed; retrying).
+States: `idle` (unpaired and backend release confirmed), `pending` (producer
+parameters unknown, attachment not ready or teardown awaiting confirmation),
+`active` (the backend confirms requested
+attachment readiness), `error` (driver failed; retrying). Active does not
+prove payload flow, application behavior or a physical target's response.
+Driver evidence (group membership, process running, selected channel or
+owned USB import) is described in bounded `driver_status.detail` announce
+metadata and `media-up` event detail when available.
+A changed non-null producer description invalidates prior attachment
+readiness: clear old status evidence and announce pending before starting
+the replacement attach. Only current-generation backend success restores
+active readiness.
 
 On `int` addressed to self:
 1. If `version <=` current version ⇒ `ack(applied=false, superseded)`.
@@ -169,8 +215,13 @@ On `int` addressed to self:
    intent that is already applied ⇒ `ack(applied=true, "applied")` — acks
    are idempotent and re-sent so a retrying CLI always terminates.)
 2. Validate (`kind`, self-pair, id syntax) ⇒ on failure `ack(false, …)`.
-3. Persist `{pairing, version}` BEFORE acking (crash between apply and
-   ack ⇒ CLI retries ⇒ idempotent re-ack).
+3. Stage, but do not apply in memory, `{pairing, version}`. Emit a
+   `Persist(state, request_id)` effect. The shell performs the durable save
+   and feeds `on_persist_result(request_id, success, now)` back to the core.
+   Only matching successful feedback commits the pairing and allows the
+   remaining effects. Failure retains the previous committed pairing and
+   MUST NOT produce an applied acknowledgment, including on duplicate
+   delivery of the failed intent. Unknown/duplicate feedback is ignored.
 4. Command driver: `pair` ⇒ attach to producer's media (from announce
    cache; else `pending` until its `ann` arrives). `unpair` ⇒ detach.
 5. `ack`, emit `evt`, re-`ann` immediately.
@@ -178,6 +229,78 @@ On `int` addressed to self:
 Driver transitions `pending → active` on success, `→ error` on failure
 with retry after `RETRY_BACKOFF` (1 s doubling, cap 30 s), emitting
 events on every transition.
+Repeated error or pending polls MUST NOT postpone an already scheduled
+retry. Retry deadlines advance only after an attempted reconciliation;
+successful attachment resets backoff. A backend reporting pending drift
+from a live configured producer schedules bounded reattachment as well.
+
+Unpaired configuration does not prove that the driver has released its old
+resources. After explicit unpair, or an unknown-producer replacement, track
+teardown until the backend confirms idle. Failed teardown remains visible as
+error and retries detach independently of producer liveness; no successful
+media-up is inferred from a stale active report. On restart a consumer with
+any nonzero saved version requests idempotent owned-resource teardown before
+reattachment, so a crash between a durable replacement/unpair and driver
+cleanup is recoverable. Pending/uncertain resources
+reported by an unpaired backend also trigger this reconciliation.
+
+Startup uses the same persistence barrier. While a save is pending the
+shell serializes further core inputs; the core also refuses to start an
+overlapping save. An explicit replacement first detaches the old route,
+including when the new producer is unknown. Driver completion is tagged by
+the shell's route generation; stale completions cannot activate a newer
+route. A control-plane peer timeout alone does not unpair or require tearing
+down a healthy underlying media session. Orderly agent shutdown quiesces its
+local driver but retains the saved pairing for restart.
+The shell bounds queued driver work to the actual in-flight call and the
+latest desired route, retaining a detach barrier across coalesced changes.
+Superseded pending routes do not accumulate tasks or run during shutdown.
+
+Detach is idempotent but teardown uncertainty is a driver error: retain
+owned resource bookkeeping until release is confirmed. Replacement cannot
+begin before previous teardown completes. IGMP membership, stream process
+liveness and an appliance channel selection are attachment evidence only.
+
+The Linux USB/IP reference driver reconciles exact host, advertised TCP
+port and busids. It detaches only owned imports, cleans newly created ports
+after partial failure and never preempts unrelated importers. Ownership
+journaling is separate from pairing configuration so restart can reconcile
+surviving imports. Producer readiness requires configured devices actually
+bound to `usbip-host` and visible through local `usbipd`, not merely present
+in the physical inventory. No physical OTG presentation is implied.
+Ownership intent alone cannot identify an import whose upstream connection
+record was never written: ports lacking corroborating tuple metadata remain
+untouched and report manual recovery required, without blocking unrelated
+routes. Reject targets that cannot fit the upstream connection-record limit
+before side effects. Producer unbind releases only bindings this driver
+established; an already-bound export is not automatically owned.
+Producer polls may reconcile startup bind failure or a returned configured
+device; explicit unbind disables automatic repair.
+
+Announcements must remain encodable during error and readiness transitions.
+Optional evidence is omitted first, then human error text is shortened to
+the available wire budget. Opaque media parameters are never truncated.
+Reject local descriptions whose mandatory fields cannot fit in the worst
+state/envelope size before publishing them.
+
+The state file has the existing shape
+`{"seq": int, "pairing": {"producer": str|null, "version": [int,str]}}`.
+Integers are non-bool, bounded by 2^63−1; node ids are validated. The zero
+version is exactly `[0, ""]` and implies an unpaired consumer. Saves use an
+exclusive unique temporary file in the destination directory, complete
+writes, file synchronization, atomic replacement and parent-directory
+synchronization, with private permissions. Symbolic links and nonregular
+state files are refused. Corrupt state never becomes fresh state. A missing
+file on a commissioned installation must require explicit recovery; fresh
+installation permission belongs to the provisioning shell (`yoke agent
+--commission`). State input is limited to 4096 bytes, finite unique-key UTF-8
+JSON with bounded nesting; invalid input is a recovery error.
+A POSIX exclusive nonblocking advisory lease on the stable private
+`<state>.lock` file is held for the agent lifetime. A second writer using
+that state path is refused; the lock file is never unlinked on release.
+It is not a pairing lease and its lifetime never changes saved pairing.
+Duplicate node ids configured with different state files remain an operator
+error that this local lock cannot prevent.
 
 ## Producer state machine
 
@@ -203,13 +326,18 @@ re-attached.
 
 ## Anti-entropy
 
-All agents cache the highest-version `int` **body** per consumer. On
+All agents cache the highest-version normalized `int` per consumer. Retain
+only `op`, `consumer`, `version`, and `producer` for pair operations. Unknown
+extension fields are ignored, not copied into re-issued frames; malformed
+producer fields are not cached. This guarantees relays can encode the known
+semantic intent despite tolerated inbound float extensions or padding that
+nearly filled the original sender's frame budget. On
 receiving `ann` from consumer C whose `pairing.version <` cached
 version for C: schedule a re-issue of the cached intent after a
 deterministic jitter in `[0.2 s, 1.2 s]` (seeded per node); cancel if
 any `int` for C with a version `>=` the cached one is heard first
 (suppression). A re-issue is a **fresh frame under the relayer's own
-origin and seq** carrying the cached body unchanged — the `version`
+origin and seq** carrying those normalized fields unchanged — the `version`
 inside the body preserves authorship and total order. Re-issuing
 verbatim copies is forbidden: they livelock against replay defense
 whenever the original author has since sent higher-seq traffic
@@ -242,8 +370,27 @@ directly in `core`.
 The snooper joins the control group, verifies signatures when it has the
 PSK (reporting, never enforcing), maintains the same announce cache and
 drop counters as an agent, and renders frames + inferred topology. It
-MUST NOT transmit. It is therefore also the conformance oracle: a
-correct implementation of this document can reconstruct global state
-from the multicast stream alone. In media-multicast deployments the same
+MUST NOT transmit. It can check protocol conformance and reconstruct
+recently observed control state from the multicast stream, within the
+retention and loss limits below. In media-multicast deployments the same
 host can additionally subscribe to a producer's media group to measure
 stream presence/bitrate without interpreting payload.
+
+Observer caches are bounded by `MAX_TRACKED`, `PEER_FORGET` and
+`INTENT_CACHE_TTL`, as applicable to their record type. A bounded early-ACK
+cache permits an ACK arriving before its intent to be associated later.
+Bad-signature frames may be displayed for diagnosis but MUST NOT update
+trusted topology, replay or operation caches. Retention limits mean a
+late-starting or lossy passive observer cannot prove absent history.
+Callers computing current observer liveness supply their current monotonic
+time; the observer reads no clock and packet silence never refreshes a
+peer's last announcement time.
+Text renderers escape terminal control characters (ASCII/C1 and Unicode
+format/separator controls); JSON diagnostic output retains the original data.
+Observers apply the same future-sequence admission bound as nodes, using
+injected monotonic/startup-wall clocks before updating replay high-water.
+If distinct normalized intents reuse one consumer/version, a version-only
+ACK cannot establish which body it acknowledges: report ambiguity rather
+than attributing success to one body. A fresh operation version resolves
+that ambiguity; observing a corrected legacy retry is not proof of intent
+identity.

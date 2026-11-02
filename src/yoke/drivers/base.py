@@ -9,6 +9,7 @@ receive or inspect media payload (ADR 0002/0004).
 
 from __future__ import annotations
 
+import math
 from typing import Protocol, runtime_checkable
 
 from yoke.core.types import Body, DriverStatus
@@ -19,16 +20,36 @@ class DriverError(Exception):
     plus a capped-backoff retry; it never crashes the agent."""
 
 
+def positive_timeout(value: object, name: str) -> float:
+    """Validate a bounded driver I/O deadline without bool coercion."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise DriverError(f"{name} must be finite and positive")
+    try:
+        timeout = float(value)
+    except OverflowError as exc:
+        raise DriverError(f"{name} must be finite and positive") from exc
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise DriverError(f"{name} must be finite and positive")
+    return timeout
+
+
 @runtime_checkable
 class Driver(Protocol):
     def attach(self, producer: str, media: Body) -> None:
         """Start consuming ``producer``'s media described by ``media``."""
 
     def detach(self) -> None:
-        """Stop consuming. Must be idempotent."""
+        """Stop consuming; repeated success is harmless.
+
+        Raise DriverError and retain ownership when teardown is uncertain.
+        A replacement must not start until the old resource is quiescent.
+        """
 
     def poll(self) -> DriverStatus:
-        """Report current media-plane state (ACTIVE/PENDING/ERROR)."""
+        """Report attachment state and describe the evidence in detail.
+
+        ACTIVE confirms backend readiness, not observed media payload flow.
+        """
 
     def describe(self) -> Body | None:
         """Producer side: the ``media`` dict to advertise in announces

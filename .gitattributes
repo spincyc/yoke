@@ -1,0 +1,4 @@
+# Preserve reviewed manufacturing artifacts byte for byte.
+*.pdf binary
+*.stl binary
+*.png binary

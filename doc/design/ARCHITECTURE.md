@@ -1,6 +1,7 @@
 # Yoke architecture
 
-Status: v1 design, 2026-08-08.
+Status: current software architecture, 2026-11-02. YWP/1 remains the
+multicast wire protocol; ADRs 0012–0017 record the correctness changes.
 
 ## Problem
 
@@ -8,8 +9,8 @@ Route HDMI and USB point-to-point links over a switched Ethernet network.
 Endpoints are small boxes whose only ports are HDMI (or USB) plus
 Ethernet/PoE. Any single producer must be re-pairable to any single
 consumer at runtime. The payload must be transported transparently — the
-system never interprets HDMI or USB signals, so content protection (HDCP)
-remains entirely between the endpoint hardware and the sink/source. There
+control plane never interprets media payload. Content protection (HDCP)
+remains between the endpoint hardware and the sink/source. There
 is no central controller process; reconfiguration is signaled on the
 network itself. A passive snooper must be able to verify and debug the
 system out of band. This must hold up in production, not as a lab toy.
@@ -31,17 +32,18 @@ The media plane is whatever the endpoint hardware does natively:
   the switch fabric prunes traffic via IGMP snooping.
 - **USB**: USB-over-IP endpoint pairs (appliance, or usbip on an
   embeddable Linux box). The producer side exports the physically attached
-  USB devices; the consumer side attaches to one producer and presents its
-  devices to the downstream computer. Sessions are consumer-initiated,
-  which matches the pairing model below.
+  USB devices; the reference consumer imports them into its local Linux
+  USB stack. A physical USB output to another computer needs a separate
+  gadget/proxy backend, which is not implemented. Sessions are
+  consumer-initiated, matching the pairing model below.
 
 Where no commercial endpoint meets the requirement (4K120 over 10G, a
-supervised USB3 mesh), yoke's own endpoint designs fill the media-plane
+supervised USB3 mesh), Yoke's endpoint proposals describe the media-plane
 role (`EDGE-DEVICES.md`). They keep the same split: the agent drives the
 endpoint through a driver, and gateware or an external process carries
 the media (ADR 0011).
 
-Yoke never touches the media payload. HDCP is negotiated hop-by-hop by
+The agent never touches media payload. HDCP is negotiated hop-by-hop by
 licensed endpoint silicon (encoder acts as HDCP sink, decoder as HDCP
 source/repeater, per the vendor's certification). Yoke only decides — and
 records — *who feeds whom*. See ADR 0004.
@@ -59,8 +61,9 @@ group. The protocol has five frame types: `ann` (announce), `int`
 - **Reconfiguration**: anything on the LAN (normally the ephemeral `yoke`
   CLI, but equally a button box, a scheduled job, a home-automation hook)
   multicasts a signed `int` naming a consumer and the producer it should
-  attach to (or none). The named consumer applies it, persists it, `ack`s
-  it, and re-announces. Everything else ignores it — except that peers
+  attach to (or none). The named consumer stages it, waits for durable
+  persistence, then commits and acknowledges. Driver activation is a
+  separate outcome. Other nodes ignore it except that peers
   cache the highest-version intent per consumer for anti-entropy.
 - **Convergence**: intents carry a total-ordered version (Lamport counter,
   origin id as tie-break). A consumer applies the highest version it has
@@ -76,6 +79,11 @@ group. The protocol has five frame types: `ann` (announce), `int`
 There is no controller. There is no store of record beyond each agent's
 own persisted state file. The CLI is a client that happens to run for a
 few seconds.
+
+Pairing is durable desired configuration, not a heartbeat lease. Producer
+loss changes operational state to `pending`; only an explicit intent
+changes the configured peer. Acknowledgment means the pairing was saved,
+not that a player, display or USB application performed an action.
 
 ### Where the agent runs
 
@@ -106,6 +114,7 @@ src/yoke/
   net/
     mcast.py     UDP multicast socket helper (interface-selectable)
     runner.py    wires core.node to the socket + a driver + persisted state
+    executor.py  serialized driver work with actual cancellation/drain barriers
   drivers/
     base.py      Driver protocol: attach(producer, media), detach(), poll(), describe()
     sim.py       in-memory driver with scriptable fault injection (tests)
@@ -116,15 +125,19 @@ src/yoke/
     shellcmd.py  command-runner abstraction (mockable; never shell=True)
   media/         software media pipeline + yoke-media CLI (MEDIA.md)
   config.py      per-agent TOML config with fail-fast validation
-  statefile.py   atomic (write-fsync-rename) persisted-state load/save
-  cli.py         yoke pair|unpair|status|snoop|agent
+  statefile.py   exclusive local lease and atomic durable state replacement
+  simulation.py installed deterministic software fault campaign
+  cli.py         yoke pair|unpair|status|snoop|agent|simulate
   snoop.py       passive decoder/renderer for the control group
+benchmarks/      repeatable control and media software measurements
+site/            local static documentation shell and navigation
 ```
 
 ### Sans-I/O core
 
 `core.node.Node` is a pure state machine. Inputs: decoded frames plus a
-monotonic timestamp; a `tick(now)` for timers. Outputs: a list of effects
+monotonic timestamp; `poll(now)` for timers, and explicit persistence and
+driver completion inputs. Outputs: a list of effects
 — frames to send, driver commands, events, state to persist. The shell
 (`net.runner`) performs effects. Consequences:
 
@@ -132,17 +145,34 @@ monotonic timestamp; a `tick(now)` for timers. Outputs: a list of effects
   a fake clock and no sockets.
 - A simulated network (`tests/simnet.py`) connects many `Node` instances
   through a scheduler that can drop, duplicate, reorder, delay, and
-  partition — deterministically, from a seed.
-- The asyncio shell stays so thin it can be reviewed by eye and smoke
-  tested over loopback.
+  partition deterministically. The installed `yoke simulate` command
+  exercises those contracts without importing the test suite.
+- The asyncio shell owns sockets, storage and actual driver execution.
+  Failed storage writes cannot release a success acknowledgment or leave
+  an in-memory committed pairing that later acknowledges a duplicate.
+
+Before sending frames, a node durably reserves sequence numbers. Restart
+skips the unused part of a reservation rather than reusing emitted values.
+This avoids a write for every announcement while preserving uniqueness
+through a same-second restart with intact storage. State loss and storage
+rollback need explicit recovery; the protocol does not claim a hardware
+monotonic trust anchor.
 
 ### Drivers
 
 A driver translates the abstract pairing ("consume producer P" /
 "produce on group G") into the device's reality. Drivers are handed a
 command runner and report `DriverStatus` (active/pending/error + detail).
-Driver failures never crash the agent: they surface as `evt` frames and
-retries with capped backoff. The `sim` driver can be scripted to fail in
+`active` means the backend confirms its requested attachment: membership
+for IGMP, a running supervised process for `stream`, a selected channel for
+JAP, or imports for USB/IP. It is not universal proof of media flow or
+physical output. Details expose the backend's evidence.
+
+Driver work runs on one executor. Route changes fence older generations;
+late status results cannot reactivate an old route. Replacement waits for
+confirmed teardown. Cancellation of an asyncio task does not establish that
+a device call or subprocess has stopped. Failures surface as `evt` frames
+and capped-backoff retries. The `sim` driver can be scripted to fail in
 every way we have seen or can imagine, which is how error conditions stay
 covered offline (see ADR 0006).
 
@@ -157,6 +187,9 @@ covered offline (see ADR 0006).
 | Producer disappears | Consumer keeps pairing, media goes `pending`, event emitted; media resumes on return |
 | Driver failure | `error` state + event + capped-backoff retry; never crashes agent |
 | Agent reboot | Pairing + seq persisted; rejoins and re-applies before first announce |
+| Storage write fails | Committed pairing retained; no success ACK or uncommitted driver change |
+| Two local processes use one state file | Second startup fails on the held exclusive lease |
+| Old driver call completes after reassignment | Work is serialized and stale-generation results are discarded |
 | Forged/altered frames | HMAC-PSK verification; failures counted and evented, frame dropped |
 | Partition | Each side keeps last state; versions reconcile on heal |
 
@@ -165,10 +198,21 @@ covered offline (see ADR 0006).
 Control frames are authenticated with HMAC-SHA256 over canonical frame
 bytes using a pre-shared key provisioned per site (ADR 0005). Replay is
 bounded by per-origin monotonic sequence numbers. The threat model is
-"malicious or buggy device on the LAN must not re-route streams or spoof
-state"; confidentiality of control metadata is explicitly not a goal —
-the snooper depends on its absence. Media-plane security is the endpoint
-hardware's (VLAN isolation is the recommended deployment posture).
+"a device without the site key must not re-route streams or spoof state".
+Every site-key holder is trusted to author messages, including another
+node's origin. Open mode is explicitly unauthenticated and intended for
+isolated labs. Control metadata is cleartext so the passive snooper can
+observe it. Media-plane security belongs to the endpoint backend; the
+reference USB/IP transport does not add encryption or per-peer admission.
+See [Security](../../SECURITY.md) for the exact boundary.
+
+Multicast is a supported operating mode, not a debugging mirror managed by
+Thermite. An observer joins alongside agents and transmits no application
+control or media datagrams. Normal kernel IGMP membership traffic still
+occurs. The separate synthetic media runner also supports multicast with
+an independent passive observer; feedback is disabled by default and must
+be directed explicitly to a designated unicast reporter path. Protected
+media remains point-to-point under ADR 0011.
 
 ## Testing strategy
 
@@ -192,12 +236,16 @@ hardware's (VLAN isolation is the recommended deployment posture).
   unauthenticated and buggy senders but does not make a key-holder
   harmless. Per-device keys are the v2 answer and need an ADR (enrollment
   touches the no-controller principle).
-- **Two minor async races in `net/runner.py`.** The driver-poll loop can
-  publish a status captured between an intent's application and its
-  attach task running (a brief spurious `media-down`/`media-up` blip that
-  self-corrects on the next poll), and a driver call's worker thread can
-  outlive task cancellation. Fix: a single-thread driver executor with
-  generation-tagged statuses.
+- **USB ownership scope.** YWP/1 owns pairings per consumer. A producer's
+  USB/IP backend refuses simultaneous device attachment; there is no
+  distributed, authenticated source-owner transaction. The driver now
+  reconciles its owned imports and fences replacement locally. A future
+  source-authorized protocol must have its own ADR and version rather
+  than adding optional authority fields ignored by legacy nodes.
+- **Observation scope.** Snooper caches and packet histories are bounded.
+  Announcements reconstruct recently observed endpoint state; an observer
+  cannot prove an unobserved endpoint's physical state, recover every
+  historical event, or authenticate individual holders of a shared key.
 - **HDCP position is a well-supported reading, not a legal opinion**
   (ADR 0004); a commercial launch should get it reviewed.
 - **No real endpoint hardware has been touched.** Driver assumptions are

@@ -11,11 +11,14 @@ from __future__ import annotations
 import hashlib
 import hmac as hmac_mod
 import json
+import math
 import re
 from typing import Any
 
 from yoke.core.types import (
     MAX_FRAME_BYTES,
+    MAX_JSON_DEPTH,
+    MAX_SEQUENCE,
     NODE_ID_RE,
     PROTOCOL_VERSION,
     Body,
@@ -57,8 +60,47 @@ def _reject_floats(value: Any, where: str) -> None:
 def canonical_bytes(obj: dict[str, Any]) -> bytes:
     """Canonical JSON per PROTOCOL.md: sorted keys, compact, UTF-8."""
     return json.dumps(
-        obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
     ).encode("utf-8")
+
+
+def _check_json(value: Any, *, depth: int = 0) -> None:
+    """Bound recursive work and reject JSON extensions before signing."""
+    stack: list[tuple[Any, int]] = [(value, depth)]
+    while stack:
+        item, depth = stack.pop()
+        if isinstance(item, dict | list):
+            depth += 1
+            if depth > MAX_JSON_DEPTH:
+                raise ValueError("JSON nesting exceeds limit")
+            if isinstance(item, dict):
+                for key, child in item.items():
+                    if not isinstance(key, str):
+                        raise ValueError("JSON object key is not a string")
+                    key.encode("utf-8")
+                    stack.append((child, depth))
+            else:
+                stack.extend((child, depth) for child in item)
+        elif isinstance(item, str):
+            item.encode("utf-8")
+        elif isinstance(item, float):
+            if not math.isfinite(item):
+                raise ValueError("nonfinite JSON number")
+        elif item is not None and not isinstance(item, bool | int):
+            raise ValueError("not a JSON value")
+
+
+def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON key")
+        result[key] = value
+    return result
+
+
+def _invalid_constant(value: str) -> None:
+    raise ValueError(f"nonfinite JSON constant: {value}")
 
 
 def _signature(unsigned: dict[str, Any], psk: bytes) -> str:
@@ -76,11 +118,25 @@ def encode(
     psk: bytes,
 ) -> bytes:
     """Build, sign, and serialize one frame. Raises EncodeError on misuse."""
-    if not NODE_ID_RE.match(origin):
+    if not isinstance(frame_type, FrameType):
+        raise EncodeError("invalid frame type")
+    if not isinstance(origin, str) or not NODE_ID_RE.fullmatch(origin):
         raise EncodeError(f"invalid origin id: {origin!r}")
-    if isinstance(seq, bool) or seq < 1:
+    if type(seq) is not int or not 1 <= seq <= MAX_SEQUENCE:
         raise EncodeError(f"seq must be an int >= 1, got {seq!r}")
-    _reject_floats(body, "body")
+    try:
+        if (
+            isinstance(ts, bool)
+            or not isinstance(ts, int | float)
+            or not math.isfinite(ts)
+        ):
+            raise ValueError("timestamp must be finite")
+        if not isinstance(body, dict):
+            raise ValueError("body must be an object")
+        _check_json(body, depth=1)  # include the enclosing wire envelope
+        _reject_floats(body, "body")
+    except (ValueError, TypeError, OverflowError, RecursionError) as exc:
+        raise EncodeError(str(exc)) from exc
     unsigned: dict[str, Any] = {
         "v": PROTOCOL_VERSION,
         "t": frame_type.value,
@@ -90,8 +146,11 @@ def encode(
         "body": body,
     }
     signed = dict(unsigned)
-    signed["sig"] = _signature(unsigned, psk)
-    raw = canonical_bytes(signed)
+    try:
+        signed["sig"] = _signature(unsigned, psk)
+        raw = canonical_bytes(signed)
+    except (ValueError, TypeError, OverflowError, RecursionError) as exc:
+        raise EncodeError(str(exc)) from exc
     if len(raw) > MAX_FRAME_BYTES:
         raise EncodeError(f"frame is {len(raw)} bytes, max {MAX_FRAME_BYTES}")
     return raw
@@ -107,8 +166,13 @@ def decode(raw: bytes, psk: bytes) -> Frame:
     if len(raw) > MAX_FRAME_BYTES:
         raise FrameDrop(DropReason.OVERSIZE, str(len(raw)))
     try:
-        obj = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        obj = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=_unique_object,
+            parse_constant=_invalid_constant,
+        )
+        _check_json(obj)
+    except (ValueError, TypeError, OverflowError, RecursionError) as exc:
         raise FrameDrop(DropReason.MALFORMED, "not canonical json") from exc
     if not isinstance(obj, dict):
         raise FrameDrop(DropReason.MALFORMED, "not an object")
@@ -119,16 +183,24 @@ def decode(raw: bytes, psk: bytes) -> Frame:
         raise FrameDrop(DropReason.VERSION, repr(version))
     try:
         frame_type = FrameType(obj["t"])
-    except ValueError as exc:
+    except (ValueError, TypeError) as exc:
         raise FrameDrop(DropReason.MALFORMED, "frame type") from exc
     origin = obj["id"]
-    if not isinstance(origin, str) or not NODE_ID_RE.match(origin):
+    if not isinstance(origin, str) or not NODE_ID_RE.fullmatch(origin):
         raise FrameDrop(DropReason.MALFORMED, "origin id")
     seq = obj["seq"]
-    if not isinstance(seq, int) or isinstance(seq, bool) or seq < 1:
+    if type(seq) is not int or not 1 <= seq <= MAX_SEQUENCE:
         raise FrameDrop(DropReason.MALFORMED, "seq")
     ts = obj["ts"]
-    if not isinstance(ts, int | float) or isinstance(ts, bool):
+    try:
+        valid_ts = (
+            isinstance(ts, int | float)
+            and not isinstance(ts, bool)
+            and math.isfinite(ts)
+        )
+    except OverflowError:
+        valid_ts = False
+    if not valid_ts:
         raise FrameDrop(DropReason.MALFORMED, "ts")
     body = obj["body"]
     if not isinstance(body, dict):
@@ -141,7 +213,7 @@ def decode(raw: bytes, psk: bytes) -> Frame:
     # non-ASCII str operand, and an attacker-chosen sig must never crash
     # the receive loop — it drops as auth. This precedes verification,
     # so without the guard it is a one-packet unauthenticated DoS.
-    if not _HEX_OR_EMPTY.match(sig):
+    if not _HEX_OR_EMPTY.fullmatch(sig):
         raise FrameDrop(DropReason.AUTH, "sig format")
     unsigned = {k: v for k, v in obj.items() if k != "sig"}
     expected = _signature(unsigned, psk)

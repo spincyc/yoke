@@ -326,3 +326,146 @@ def test_black_box_without_decoder_raises() -> None:
     except RuntimeError:
         return
     raise AssertionError("expected RuntimeError without a header decoder")
+
+
+def test_sequence_tracking_survives_full_rollover() -> None:
+    snooper = MediaSnooper(lambda raw: {"seq": int.from_bytes(raw, "big")})
+    for extended in range(65536 + 8):
+        record = snooper.observe_packet(
+            (extended % 65536).to_bytes(2, "big"), float(extended)
+        )
+        assert record.verdict == "ok"
+    wire = snooper.topology()["streams"]["wire"]["wire"]
+    assert wire["loss"] == wire["dups"] == wire["reorders"] == 0
+    assert snooper.observe_packet(b"\x00\x07", 70000.0).verdict == "dup"
+
+
+def test_wrap_reorder_recovers_only_retained_gaps() -> None:
+    snooper = _snooper()
+    for seq in (65534, 1, 0, 65535):
+        snooper.observe_packet(make_packet(seq), 0.0)
+    assert snooper.topology()["streams"][STREAM]["wire"]["loss"] == 0
+    assert snooper.observe_packet(make_packet(0), 0.0).verdict == "dup"
+    snooper.observe_packet(make_packet(5000), 1.0)
+    before = snooper.topology()["streams"][STREAM]["wire"]["loss"]
+    snooper.observe_packet(make_packet(2), 2.0)  # Gap has left the 4096-packet window.
+    assert snooper.topology()["streams"][STREAM]["wire"]["loss"] == before
+    snooper.observe_packet(make_packet(4999), 3.0)
+    assert snooper.topology()["streams"][STREAM]["wire"]["loss"] == before - 1
+
+
+def test_duplicate_marker_and_timestamp_do_not_inflate_frames() -> None:
+    snooper = _snooper()
+    raw = make_packet(1, ts=99, marker=True)
+    snooper.observe_packet(raw, 0.0)
+    snooper.observe_packet(raw, 1.0)
+    snooper.observe_packet(make_packet(2, ts=99, marker=True), 2.0)
+    wire = snooper.topology()["streams"][STREAM]["wire"]
+    assert wire["packets"] == 3  # Bitrate includes every arriving datagram.
+    assert wire["frames"] == wire["marker_frames"] == 1
+
+
+def test_invalid_decoded_headers_cannot_create_streams() -> None:
+    bad_headers: list[dict[str, object]] = [
+        {"seq": -1},
+        {"seq": 65536},
+        {"seq": True},
+        {"seq": 1, "ssrc": -1},
+        {"seq": 1, "ssrc": 2**32},
+        {"seq": 1, "timestamp": True},
+        {"seq": 1, "timestamp": 2**32},
+        {"seq": 1, "marker": "false"},
+        {"seq": 1, "pt": 128},
+    ]
+    for header in bad_headers:
+
+        def decode(
+            _raw: bytes, header: dict[str, object] = header
+        ) -> dict[str, object]:
+            return header
+
+        snooper = MediaSnooper(decode)
+        assert snooper.observe_packet(b"packet", 0.0).verdict == "malformed"
+        assert snooper.topology()["streams"] == {}
+
+
+def test_unknown_integrity_is_not_reported_successful() -> None:
+    snooper = _snooper()
+    record = snooper.observe_event(ev("sink", EventKind.INTEGRITY, stream="s0"), 0.0)
+    assert record.verdict == "malformed"
+    assert snooper.topology()["streams"]["s0"]["frames_ok"] == 0
+
+
+def test_observer_histories_and_stream_maps_are_bounded() -> None:
+    from yoke.media.metrics import MAX_STREAMS
+    from yoke.media.snoop import SEQUENCE_WINDOW
+
+    snooper = _snooper()
+    for seq in range(SEQUENCE_WINDOW + 10):
+        snooper.observe_packet(make_packet(seq, ts=seq, marker=True), float(seq))
+        snooper.observe_event(ev("source", EventKind.OUT, seq=seq), float(seq))
+    state = snooper._wire[STREAM]
+    assert state.seen.bit_length() <= SEQUENCE_WINDOW
+    assert state.missing.bit_length() <= SEQUENCE_WINDOW
+    assert len(state.timestamps) <= SEQUENCE_WINDOW
+    assert len(state.markers) <= SEQUENCE_WINDOW
+    assert state.frames == SEQUENCE_WINDOW + 10
+    assert not hasattr(snooper._views["-"], "paths")
+    for ssrc in range(MAX_STREAMS + 1):
+        snooper.observe_packet(make_packet(1, ssrc=ssrc), 0.0)
+    assert len(snooper._wire) == MAX_STREAMS
+    assert snooper.topology()["inference"]["sequence_window"] == SEQUENCE_WINDOW
+
+
+def test_timestamp_rollover_and_reorder_count_frames_once() -> None:
+    snooper = _snooper()
+    for seq, timestamp in ((65534, 2**32 - 1), (0, 0), (65535, 2**32 - 1), (1, 0)):
+        snooper.observe_packet(make_packet(seq, ts=timestamp, marker=True), float(seq))
+    wire = snooper.topology()["streams"][STREAM]["wire"]
+    assert wire["frames"] == wire["marker_frames"] == 2
+    assert wire["loss"] == 0
+
+
+def test_seeded_reorder_duplication_and_wrap_are_deterministic() -> None:
+    import random
+
+    randomizer = random.Random(20261102)
+    extended = list(range(65500, 65800))
+    lost = set(randomizer.sample(extended[1:-1], 25))
+    arrival = [seq for seq in extended if seq not in lost]
+    arrival.extend(randomizer.sample(arrival, 30))
+    # Keep the first packet first; reorder the rest within the retained window.
+    tail = arrival[1:]
+    randomizer.shuffle(tail)
+    arrival = arrival[:1] + tail
+    observers = [_snooper(), _snooper()]
+    records: list[list[str]] = [[], []]
+    for index, snooper in enumerate(observers):
+        for position, seq in enumerate(arrival):
+            raw = make_packet(seq % 65536, ts=seq, marker=True)
+            records[index].append(
+                render_json(snooper.observe_packet(raw, float(position)))
+            )
+    assert records[0] == records[1]
+    assert observers[0].topology() == observers[1].topology()
+    wire = observers[0].topology()["streams"][STREAM]["wire"]
+    assert wire["loss"] == len(lost)
+    assert wire["dups"] == 30
+    assert wire["frames"] == len(extended) - len(lost)
+    assert wire["marker_frames"] == wire["frames"]
+
+
+def test_tap_text_escapes_terminal_controls_without_changing_json_data() -> None:
+    import unicodedata
+
+    snooper = _snooper()
+    stream = "untrusted\x1b]52;c;aGVsbG8=\x07\u202e"
+    record = snooper.observe_event(
+        ev("codec\u009b31m\u2028", EventKind.OUT, stream=stream), 0.0
+    )
+    line = render_text(record)
+    assert not any(
+        unicodedata.category(char) in ("Cc", "Cf", "Cs", "Zl", "Zp") for char in line
+    )
+    assert "\\x1b]52;" in line and "\\x9b31m\\u2028" in line
+    assert json.loads(render_json(record))["stream"] == stream

@@ -1,21 +1,32 @@
-# systemd unit for a yoke agent. Install: copy to /etc/systemd/system/,
-# place /etc/yoke/agent.toml and /etc/yoke/psk, then
+# Follow DEPLOYMENT.md to install the package under /opt/yoke/current/venv,
+# create the yoke account, configure /etc/yoke, and commission state once.
+# Install this unit and yoke-update-recover.service, then:
 #   systemctl enable --now yoked
 [Unit]
 Description=yoke endpoint agent
-After=network-online.target
-Wants=network-online.target
+Requires=yoke-update-recover.service
+After=network.target yoke-update-recover.service
 
 [Service]
-Type=exec
-ExecStart=/usr/bin/python3 -m yoke.cli agent --config /etc/yoke/agent.toml
+Type=notify
+NotifyAccess=main
+TimeoutStartSec=90s
+User=yoke
+Group=yoke
+UMask=0077
+ExecStart=/opt/yoke/current/venv/bin/python -m yoke.cli agent --config /etc/yoke/agent.toml
 Restart=always
 RestartSec=2
 # Crash-only by design: state persists before acks; convergence is
 # re-established from the network on every start.
 StateDirectory=yoke
+StateDirectoryMode=0700
 NoNewPrivileges=true
 ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET
 ReadWritePaths=/var/lib/yoke
 
 [Install]

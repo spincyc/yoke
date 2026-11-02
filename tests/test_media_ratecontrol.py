@@ -153,3 +153,26 @@ def test_controller_codec_closed_loop() -> None:
     fb_after = after[0].meta["frame_bytes"]
     assert after[0].meta["ratio"] > RATIO_TRANSPARENT
     assert fb_after < fb_before  # smaller modelled on-wire size
+
+
+def test_nonfinite_feedback_is_dropped_without_changing_shared_state() -> None:
+    import math
+
+    state = RateState()
+    ctrl = RateController(state)
+    ctrl.on_feedback(congested(), NOW)
+    previous = ctrl.target_ratio()
+    for field in ("loss", "jitter", "congestion"):
+        for invalid in (math.nan, math.inf, -math.inf):
+            fields = {"loss": 0.0, "jitter": 0.0, "congestion": 0.0, field: invalid}
+            out = ctrl.on_feedback(NetworkReport(now=NOW, **fields), NOW)
+            assert ctrl.target_ratio() == state.target == previous
+            assert out.events[0].kind is EventKind.DROP
+
+
+def test_extreme_integer_feedback_saturates_without_overflow() -> None:
+    ctrl = RateController()
+    enormous = 10**1000
+    out = ctrl.on_feedback(NetworkReport(NOW, enormous, enormous, enormous), NOW)
+    assert RATIO_TRANSPARENT < ctrl.target_ratio() <= RATIO_MAX
+    assert out.events[0].kind is EventKind.ADJUST

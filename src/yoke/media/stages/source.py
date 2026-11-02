@@ -37,11 +37,13 @@ Patterns:
 from __future__ import annotations
 
 import random
+import struct
 import zlib
 from typing import Final
 
 from yoke.media.pipeline import StageBase
 from yoke.media.types import (
+    MAX_FRAME_BYTES,
     MEDIA_CLOCK_HZ,
     RATIO_MAX,
     RATIO_MIN,
@@ -53,6 +55,7 @@ from yoke.media.types import (
     StageOutcome,
     UnitKind,
     digest_of,
+    require_uint,
 )
 
 # Header layout (bytes). Public so the sink and other lanes parse the
@@ -61,6 +64,7 @@ SEQ_OFFSET: Final = 0
 PTS_OFFSET: Final = 8
 CRC_OFFSET: Final = 16
 FRAME_HEADER_LEN: Final = 20
+_HEADER: Final = struct.Struct("!QQI")
 # Modeled body size: a small representative slice, NOT a real raster. The
 # true frame size rides in meta["frame_bytes"] for bandwidth accounting.
 MODEL_BODY_BYTES: Final = 512
@@ -84,10 +88,8 @@ def parse_header(payload: bytes) -> tuple[int, int, int] | None:
     so every stage decodes it the same way."""
     if len(payload) < FRAME_HEADER_LEN:
         return None
-    seq = int.from_bytes(payload[SEQ_OFFSET:PTS_OFFSET], "big")
-    pts = int.from_bytes(payload[PTS_OFFSET:CRC_OFFSET], "big")
-    crc = int.from_bytes(payload[CRC_OFFSET:FRAME_HEADER_LEN], "big")
-    return seq, pts, crc
+    seq, pts, crc = _HEADER.unpack_from(payload)
+    return int(seq), int(pts), int(crc)
 
 
 class SyntheticSource(StageBase):
@@ -105,8 +107,16 @@ class SyntheticSource(StageBase):
         seed: int = 0,
         clock_hz: int = MEDIA_CLOCK_HZ,
     ) -> None:
-        if fps <= 0:
-            raise ValueError("fps must be positive")
+        for name, value in (("width", width), ("height", height)):
+            if require_uint(value, name, MAX_FRAME_BYTES) == 0:
+                raise ValueError(f"{name} must be positive")
+        if width * height * _BYTES_PER_PIXEL > MAX_FRAME_BYTES:
+            raise ValueError("modeled frame exceeds byte budget")
+        if require_uint(clock_hz, "clock_hz", 0xFFFF_FFFF_FFFF_FFFF) == 0:
+            raise ValueError("clock_hz must be positive")
+        if require_uint(fps, "fps", clock_hz) == 0:
+            raise ValueError("fps must be positive and no greater than clock_hz")
+        require_uint(seed, "seed", 0xFFFF_FFFF_FFFF_FFFF)
         if pattern not in _PATTERN_HINTS:
             raise ValueError(f"unknown pattern {pattern!r}")
         self._width = width
@@ -120,6 +130,11 @@ class SyntheticSource(StageBase):
         self._seq = 0
         # A fixed, highly compressible unit tiled to make "bars" static.
         self._bar_unit = random.Random(seed).randbytes(_BAR_UNIT_LEN)
+        self._bar_body = (self._bar_unit * (MODEL_BODY_BYTES // _BAR_UNIT_LEN + 1))[
+            :MODEL_BODY_BYTES
+        ]
+        self._bar_crc = zlib.crc32(self._bar_body) & 0xFFFFFFFF
+        self._rng = random.Random(seed)
 
     def describe(self) -> Body:
         """Static parameters of this source (for probes / topology dumps)."""
@@ -178,16 +193,18 @@ class SyntheticSource(StageBase):
 
     def _build_payload(self, seq: int, pts: int) -> bytes:
         body = self._build_body(seq)
-        crc = zlib.crc32(body) & 0xFFFFFFFF
-        header = (
-            seq.to_bytes(8, "big") + pts.to_bytes(8, "big") + crc.to_bytes(4, "big")
+        crc = (
+            self._bar_crc if self._pattern == "bars" else zlib.crc32(body) & 0xFFFFFFFF
         )
+        header = _HEADER.pack(seq, pts, crc)
         return header + body
 
     def _build_body(self, seq: int) -> bytes:
         n = MODEL_BODY_BYTES
         if self._pattern == "bars":
-            reps = n // len(self._bar_unit) + 1
-            return (self._bar_unit * reps)[:n]
+            return self._bar_body
         salt = _NOISE_SALT if self._pattern == "noise" else 0
-        return random.Random(self._seed ^ seq ^ salt).randbytes(n)
+        # Reseeding a private generator reproduces Random(seed ^ seq ^ salt)
+        # exactly while avoiding a new generator allocation for every frame.
+        self._rng.seed(self._seed ^ seq ^ salt)
+        return self._rng.randbytes(n)

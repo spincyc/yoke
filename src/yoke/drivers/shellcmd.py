@@ -15,7 +15,7 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
-from yoke.drivers.base import DriverError
+from yoke.drivers.base import DriverError, positive_timeout
 
 
 @dataclass(frozen=True)
@@ -52,25 +52,42 @@ class SubprocessRunner:
     """
 
     def run(self, argv: Sequence[str], *, timeout: float) -> CommandResult:
+        args = command_args(argv)
+        timeout = positive_timeout(timeout, "command timeout")
         try:
             proc = subprocess.run(
-                list(argv),
+                args,
                 capture_output=True,
                 text=True,
+                errors="replace",
                 timeout=timeout,
                 check=False,
             )
         except subprocess.TimeoutExpired as exc:
             raise DriverError(
-                f"command timed out after {timeout:g}s: {' '.join(argv)}"
+                f"command timed out after {timeout:g}s: {' '.join(args)}"
             ) from exc
         except FileNotFoundError as exc:
-            raise DriverError(f"command not found: {argv[0]}") from exc
+            raise DriverError(f"command not found: {args[0]}") from exc
+        except OSError as exc:
+            raise DriverError(f"command failed to start: {args[0]}: {exc}") from exc
         return CommandResult(
             returncode=proc.returncode,
             stdout=proc.stdout,
             stderr=proc.stderr,
         )
+
+
+def command_args(argv: Sequence[str]) -> list[str]:
+    """Copy and validate an argv vector before invoking a subprocess."""
+    if isinstance(argv, (str, bytes)) or not argv:
+        raise DriverError("empty or invalid command argv")
+    args = list(argv)
+    if any(not isinstance(arg, str) or "\x00" in arg for arg in args):
+        raise DriverError("command argv must contain strings without NUL")
+    if not args[0]:
+        raise DriverError("empty command executable")
+    return args
 
 
 # A scripted response: a ready-made result, an exception instance to

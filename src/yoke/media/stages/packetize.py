@@ -31,18 +31,27 @@ frame's seq and pts are preserved in ``meta`` (``frame_seq`` / ``frame_pts``).
 from __future__ import annotations
 
 import struct
+from collections import OrderedDict
 from dataclasses import dataclass, field
 
 from yoke.media.pipeline import StageBase
 from yoke.media.types import (
     DEFAULT_MTU,
+    MAX_BUFFER_BYTES,
+    MAX_FRAME_BYTES,
+    MAX_FRAME_FRAGMENTS,
+    MAX_PENDING_FRAMES,
+    MAX_UDP_BYTES,
     PT_GENERIC,
+    REFERENCE_TRAILER_LEN,
     Body,
     EventKind,
     MediaUnit,
     StageEvent,
     StageOutcome,
     UnitKind,
+    is_digest,
+    require_uint,
 )
 
 RTP_VERSION = 2
@@ -88,14 +97,15 @@ def encode_rtp_header(
     truncated. ``sequence`` must already be reduced mod 2**16 and
     ``timestamp``/``ssrc`` mod 2**32 by the caller (they are modular fields).
     """
-    if not 0 <= payload_type <= _PT_MASK:
-        raise RtpError(f"payload_type out of range: {payload_type}")
-    if not 0 <= sequence <= _SEQ_MASK:
-        raise RtpError(f"sequence out of range: {sequence}")
-    if not 0 <= timestamp <= _TS_MASK:
-        raise RtpError(f"timestamp out of range: {timestamp}")
-    if not 0 <= ssrc <= _SSRC_MASK:
-        raise RtpError(f"ssrc out of range: {ssrc}")
+    if type(marker) is not bool:
+        raise RtpError("marker must be a boolean")
+    try:
+        require_uint(payload_type, "payload_type", _PT_MASK)
+        require_uint(sequence, "sequence", _SEQ_MASK)
+        require_uint(timestamp, "timestamp", _TS_MASK)
+        require_uint(ssrc, "ssrc", _SSRC_MASK)
+    except ValueError as exc:
+        raise RtpError(str(exc)) from exc
     b0 = RTP_VERSION << 6  # P=0, X=0, CC=0
     b1 = (0x80 if marker else 0x00) | payload_type
     return _HEADER.pack(b0, b1, sequence, timestamp, ssrc)
@@ -111,6 +121,8 @@ def decode_rtp_header(data: bytes) -> RtpHeader:
     version = b0 >> 6
     if version != RTP_VERSION:
         raise RtpError(f"bad version: {version}")
+    if b0 & 0x3F:
+        raise RtpError("padding, extensions and CSRCs are unsupported")
     return RtpHeader(
         marker=bool(b1 & 0x80),
         payload_type=b1 & _PT_MASK,
@@ -124,8 +136,73 @@ def decode_rtp_header(data: bytes) -> RtpHeader:
     )
 
 
+@dataclass(frozen=True)
+class PacketIdentity:
+    frame_seq: int
+    frame_pts: int
+    slice_index: int
+    slice_count: int
+    frag_index: int
+    frag_count: int
+
+
+def packet_identity(unit: MediaUnit, header: RtpHeader) -> PacketIdentity:
+    """Validate the fixed-header/trailer contract, before allocating state."""
+    values = [
+        require_uint(unit.meta[name], name, maximum)
+        for name, maximum in (
+            ("frame_seq", 0xFFFF_FFFF_FFFF_FFFF),
+            ("frame_pts", 0xFFFF_FFFF_FFFF_FFFF),
+            ("slice_index", _SEQ_MASK),
+            ("slice_count", _SEQ_MASK),
+            ("frag_index", _SEQ_MASK),
+            ("frag_count", _SEQ_MASK),
+        )
+    ]
+    identity = PacketIdentity(*values)
+    if not 0 <= identity.slice_index < identity.slice_count:
+        raise ValueError("slice index/count out of range")
+    if not 0 <= identity.frag_index < identity.frag_count:
+        raise ValueError("fragment index/count out of range")
+    if (
+        type(unit.seq) is not int
+        or unit.seq != header.sequence
+        or type(unit.pts) is not int
+        or unit.pts != identity.frame_pts
+        or header.timestamp != (identity.frame_pts & _TS_MASK)
+    ):
+        raise ValueError("packet/header identity mismatch")
+    marker = (
+        identity.slice_index == identity.slice_count - 1
+        and identity.frag_index == identity.frag_count - 1
+    )
+    if header.marker != marker:
+        raise ValueError("marker disagrees with final fragment")
+    for key, expected in (
+        ("rtp_seq", header.sequence),
+        ("rtp_pt", header.payload_type),
+        ("rtp_ssrc", header.ssrc),
+        ("marker", header.marker),
+    ):
+        if key in unit.meta and (
+            type(unit.meta[key]) is not type(expected) or unit.meta[key] != expected
+        ):
+            raise ValueError(f"{key} disagrees with RTP header")
+    if not is_digest(unit.source_digest):
+        raise ValueError("source_digest is not a SHA-256 digest")
+    if unit.meta.get("path", "") not in {"", "A", "B"}:
+        raise ValueError("invalid duplicate path")
+    return identity
+
+
 class Packetizer(StageBase):
     """Split each ``SLICE`` into ``PACKET`` units (RTP header + fragment).
+
+    ``mtu`` here is the internal RTP packet byte budget, including the
+    12-byte RTP header, excluding the reference trailer and IP/UDP headers.
+    It can be tiny in offline fragmentation tests. ``build_sender``
+    reserves every wrapping header from ``MediaConfig.mtu`` (path MTU)
+    before constructing this low-level stage.
 
     A slice's ``meta`` carries ``slice_index`` / ``slice_count`` (all slices
     of a frame share the frame's ``seq`` and ``pts``); the marker bit is set
@@ -144,10 +221,12 @@ class Packetizer(StageBase):
         ssrc: int = 0,
         start_seq: int = 0,
     ) -> None:
+        require_uint(mtu, "mtu", MAX_UDP_BYTES - REFERENCE_TRAILER_LEN)
         if mtu <= RTP_HEADER_LEN:
             raise ValueError(f"mtu {mtu} must exceed RTP header ({RTP_HEADER_LEN})")
-        if not 0 <= ssrc <= _SSRC_MASK:
-            raise ValueError(f"ssrc out of range: {ssrc}")
+        require_uint(ssrc, "ssrc", _SSRC_MASK)
+        require_uint(payload_type, "payload_type", _PT_MASK)
+        require_uint(start_seq, "start_seq", 0xFFFF_FFFF_FFFF_FFFF)
         self._mtu = mtu
         self._max_fragment = mtu - RTP_HEADER_LEN
         self._pt = payload_type
@@ -163,8 +242,28 @@ class Packetizer(StageBase):
             return out
 
         try:
-            slice_index = int(unit.meta["slice_index"])
-            slice_count = int(unit.meta["slice_count"])
+            slice_index = require_uint(
+                unit.meta["slice_index"], "slice_index", _SEQ_MASK
+            )
+            slice_count = require_uint(
+                unit.meta["slice_count"], "slice_count", _SEQ_MASK
+            )
+            require_uint(unit.seq, "frame_seq", 0xFFFF_FFFF_FFFF_FFFF)
+            require_uint(unit.pts, "frame_pts", 0xFFFF_FFFF_FFFF_FFFF)
+            if not is_digest(unit.source_digest):
+                raise ValueError("source_digest is not a SHA-256 digest")
+            if not 0 <= slice_index < slice_count:
+                raise ValueError("slice index/count out of range")
+            if len(unit.payload) > MAX_FRAME_BYTES:
+                raise ValueError("slice exceeds frame byte budget")
+            if (
+                max(
+                    1,
+                    (len(unit.payload) + self._max_fragment - 1) // self._max_fragment,
+                )
+                > _SEQ_MASK
+            ):
+                raise ValueError("too many fragments")
         except (KeyError, TypeError, ValueError):
             out.events.append(
                 self._event(
@@ -249,34 +348,60 @@ class Packetizer(StageBase):
 
 @dataclass
 class _SliceBuf:
-    frag_count: int | None = None
-    frags: dict[int, bytes] = field(default_factory=dict)
+    frag_count: int
+    frags: dict[int, tuple[int, bytes]] = field(default_factory=dict)
 
 
 @dataclass
 class _FrameBuf:
-    slice_count: int | None = None
-    source_digest: str = ""
+    slice_count: int
+    source_digest: str
+    ssrc: int
+    payload_type: int
     marker_seen: bool = False
     slices: dict[int, _SliceBuf] = field(default_factory=dict)
+    bytes: int = 0
+    declared_fragments: int = 0
+    complete_slices: int = 0
 
 
 class Depacketizer(StageBase):
-    """Reassemble ``PACKET`` units back into byte-exact ``SLICE`` units.
+    """Byte-exact reassembly with explicit frame, byte and fragment budgets.
 
-    Packets are buffered per frame (keyed by ``(frame_seq, frame_pts)`` from
-    meta) and per slice; fragments are ordered by ``frag_index`` so arbitrary
-    reordering is tolerated. When every slice of a frame has all its fragments
-    the slices are emitted (in slice order) and the frame is retired. Malformed
-    packets (bad RTP header / missing meta) are dropped with a DROP event, never
-    crash. ``flush`` reports any frame still missing fragments as incomplete.
+    Oldest incomplete frames are retired at capacity. Recently retired
+    identities are remembered in a bounded window, so duplicates cannot
+    revive them. Conflicting identity/count/fragment data retires a frame.
+    Missing-fragment diagnostics contain at most 256 sample entries.
     """
 
     name = "depacketize"
 
-    def __init__(self) -> None:
-        self._frames: dict[tuple[int, int], _FrameBuf] = {}
-        self._done: set[tuple[int, int]] = set()
+    def __init__(
+        self,
+        *,
+        max_frames: int = MAX_PENDING_FRAMES,
+        max_bytes: int = MAX_BUFFER_BYTES,
+        max_frame_bytes: int = MAX_FRAME_BYTES,
+        max_fragments: int = MAX_FRAME_FRAGMENTS,
+        done_window: int = 1024,
+    ) -> None:
+        for name, value in (
+            ("max_frames", max_frames),
+            ("max_bytes", max_bytes),
+            ("max_frame_bytes", max_frame_bytes),
+            ("max_fragments", max_fragments),
+            ("done_window", done_window),
+        ):
+            if type(value) is not int or value < 1:
+                raise ValueError(f"{name} must be a positive integer")
+        self._max_frames = max_frames
+        self._max_bytes = max_bytes
+        self._max_frame_bytes = max_frame_bytes
+        self._max_fragments = max_fragments
+        self._done_window = done_window
+        self._frames: OrderedDict[tuple[int, int], _FrameBuf] = OrderedDict()
+        self._done: OrderedDict[tuple[int, int], None] = OrderedDict()
+        self._bytes = 0
 
     def process(self, unit: MediaUnit, now: float) -> StageOutcome:
         out = StageOutcome()
@@ -295,20 +420,17 @@ class Depacketizer(StageBase):
             )
             return out
         try:
-            frame_seq = int(unit.meta["frame_seq"])
-            frame_pts = int(unit.meta["frame_pts"])
-            slice_index = int(unit.meta["slice_index"])
-            slice_count = int(unit.meta["slice_count"])
-            frag_index = int(unit.meta["frag_index"])
-            frag_count = int(unit.meta["frag_count"])
-        except (KeyError, TypeError, ValueError):
+            identity = packet_identity(unit, header)
+        except (KeyError, TypeError, ValueError) as exc:
             out.events.append(
-                self._event(EventKind.DROP, unit.seq, unit.pts, now, why="bad-meta")
+                self._event(
+                    EventKind.DROP, unit.seq, unit.pts, now, why=f"bad-packet: {exc}"
+                )
             )
             return out
-
-        out.events.append(self._event(EventKind.IN, unit.seq, frame_pts, now))
+        frame_seq, frame_pts = identity.frame_seq, identity.frame_pts
         key = (frame_seq, frame_pts)
+        out.events.append(self._event(EventKind.IN, unit.seq, frame_pts, now))
         if key in self._done:
             out.events.append(
                 self._event(
@@ -320,97 +442,138 @@ class Depacketizer(StageBase):
                 )
             )
             return out
-
         fragment = unit.payload[RTP_HEADER_LEN:]
-        frame = self._frames.setdefault(key, _FrameBuf())
-        frame.slice_count = slice_count
-        frame.source_digest = unit.source_digest
-        if header.marker:
-            frame.marker_seen = True
-        sbuf = frame.slices.setdefault(slice_index, _SliceBuf())
-        sbuf.frag_count = frag_count
-        sbuf.frags[frag_index] = fragment
-
-        if self._complete(frame):
-            out.extend(self._emit_frame(key, frame, now))
+        if len(fragment) > min(self._max_frame_bytes, self._max_bytes):
+            out.events.append(
+                self._event(
+                    EventKind.DROP, unit.seq, frame_pts, now, why="frame-byte-budget"
+                )
+            )
+            return out
+        frame = self._frames.get(key)
+        if frame is None:
+            while len(self._frames) >= self._max_frames:
+                self._retire(next(iter(self._frames)), now, out, "frame-capacity")
+            frame = _FrameBuf(
+                identity.slice_count,
+                unit.source_digest,
+                header.ssrc,
+                header.payload_type,
+            )
+            self._frames[key] = frame
+        if (frame.slice_count, frame.source_digest, frame.ssrc, frame.payload_type) != (
+            identity.slice_count,
+            unit.source_digest,
+            header.ssrc,
+            header.payload_type,
+        ):
+            self._retire(key, now, out, "conflicting-frame-meta")
+            return out
+        sbuf = frame.slices.get(identity.slice_index)
+        if sbuf is not None:
+            if sbuf.frag_count != identity.frag_count:
+                self._retire(key, now, out, "conflicting-fragment-count")
+                return out
+            previous = sbuf.frags.get(identity.frag_index)
+            if previous is not None:
+                if previous != (header.sequence, fragment):
+                    self._retire(key, now, out, "conflicting-fragment")
+                return out
+        if frame.bytes + len(fragment) > self._max_frame_bytes:
+            self._retire(key, now, out, "frame-byte-budget")
+            return out
+        if sbuf is None:
+            if frame.declared_fragments + identity.frag_count > self._max_fragments:
+                self._retire(key, now, out, "fragment-budget")
+                return out
+            sbuf = _SliceBuf(identity.frag_count)
+            frame.slices[identity.slice_index] = sbuf
+            frame.declared_fragments += identity.frag_count
+        while self._bytes + len(fragment) > self._max_bytes:
+            victim = next(iter(self._frames))
+            self._retire(victim, now, out, "buffer-byte-budget")
+            if victim == key:
+                return out
+        sbuf.frags[identity.frag_index] = (header.sequence, fragment)
+        frame.bytes += len(fragment)
+        self._bytes += len(fragment)
+        frame.marker_seen |= header.marker
+        if len(sbuf.frags) == sbuf.frag_count:
+            frame.complete_slices += 1
+        if frame.complete_slices == frame.slice_count:
+            for slice_index in range(frame.slice_count):
+                buf = frame.slices[slice_index]
+                payload = b"".join(buf.frags[f][1] for f in range(buf.frag_count))
+                out.emit.append(
+                    MediaUnit(
+                        kind=UnitKind.SLICE,
+                        seq=frame_seq,
+                        pts=frame_pts,
+                        payload=payload,
+                        source_digest=frame.source_digest,
+                        meta={
+                            "slice_index": slice_index,
+                            "slice_count": frame.slice_count,
+                        },
+                    )
+                )
+                out.events.append(
+                    self._event(
+                        EventKind.OUT,
+                        frame_seq,
+                        frame_pts,
+                        now,
+                        slice_index=slice_index,
+                    )
+                )
+            self._remove(key)
         return out
 
     def flush(self, now: float) -> StageOutcome:
-        """Report every still-buffered frame as incomplete (fragments lost),
-        then clear the buffers. Emits a DROP event per incomplete frame."""
         out = StageOutcome()
-        for (frame_seq, frame_pts), frame in self._frames.items():
-            missing = self._missing(frame)
-            out.events.append(
-                self._event(
-                    EventKind.DROP,
-                    frame_seq,
-                    frame_pts,
-                    now,
-                    incomplete=True,
-                    missing=missing,
-                    marker_seen=frame.marker_seen,
-                )
-            )
-            self._done.add((frame_seq, frame_pts))
-        self._frames.clear()
+        while self._frames:
+            self._retire(next(iter(self._frames)), now, out, "incomplete")
         return out
 
-    def _emit_frame(
-        self, key: tuple[int, int], frame: _FrameBuf, now: float
-    ) -> StageOutcome:
-        out = StageOutcome()
-        frame_seq, frame_pts = key
-        assert frame.slice_count is not None
-        for slice_index in range(frame.slice_count):
-            sbuf = frame.slices[slice_index]
-            assert sbuf.frag_count is not None
-            payload = b"".join(sbuf.frags[f] for f in range(sbuf.frag_count))
-            out.emit.append(
-                MediaUnit(
-                    kind=UnitKind.SLICE,
-                    seq=frame_seq,
-                    pts=frame_pts,
-                    payload=payload,
-                    source_digest=frame.source_digest,
-                    meta={"slice_index": slice_index, "slice_count": frame.slice_count},
-                )
-            )
-            out.events.append(
-                self._event(
-                    EventKind.OUT, frame_seq, frame_pts, now, slice_index=slice_index
-                )
-            )
-        self._done.add(key)
-        del self._frames[key]
-        return out
+    def _remove(self, key: tuple[int, int]) -> None:
+        self._bytes -= self._frames.pop(key).bytes
+        self._done[key] = None
+        while len(self._done) > self._done_window:
+            self._done.popitem(last=False)
 
-    @staticmethod
-    def _complete(frame: _FrameBuf) -> bool:
-        if frame.slice_count is None or len(frame.slices) < frame.slice_count:
-            return False
-        for slice_index in range(frame.slice_count):
-            sbuf = frame.slices.get(slice_index)
-            if sbuf is None or sbuf.frag_count is None:
-                return False
-            if any(f not in sbuf.frags for f in range(sbuf.frag_count)):
-                return False
-        return True
-
-    @staticmethod
-    def _missing(frame: _FrameBuf) -> list[list[int]]:
+    def _retire(
+        self, key: tuple[int, int], now: float, out: StageOutcome, why: str
+    ) -> None:
+        frame = self._frames[key]
         missing: list[list[int]] = []
-        if frame.slice_count is None:
-            return missing
-        for slice_index in range(frame.slice_count):
-            sbuf = frame.slices.get(slice_index)
-            if sbuf is None or sbuf.frag_count is None:
-                missing.append([slice_index, -1])  # whole slice absent
-                continue
-            missing.extend(
-                [slice_index, f] for f in range(sbuf.frag_count) if f not in sbuf.frags
+        missing_total = frame.slice_count - len(frame.slices)
+        missing_total += sum(b.frag_count - len(b.frags) for b in frame.slices.values())
+        for index in range(frame.slice_count):
+            if len(missing) >= 256:
+                break
+            buf = frame.slices.get(index)
+            if buf is None:
+                missing.append([index, -1])
+            else:
+                for frag in range(buf.frag_count):
+                    if frag not in buf.frags:
+                        missing.append([index, frag])
+                        if len(missing) >= 256:
+                            break
+        out.events.append(
+            self._event(
+                EventKind.DROP,
+                key[0],
+                key[1],
+                now,
+                why=why,
+                incomplete=True,
+                missing=missing,
+                missing_total=missing_total,
+                marker_seen=frame.marker_seen,
             )
-        return missing
+        )
+        self._remove(key)
 
     def _event(
         self, kind: EventKind, seq: int, pts: int, now: float, **detail: object

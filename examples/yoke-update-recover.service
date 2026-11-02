@@ -1,0 +1,16 @@
+# Install with the fixed /opt/yoke/updater.py maintenance script.
+# yoked.service requires this unit and starts after it.
+[Unit]
+Description=Recover an interrupted Yoke application update
+Before=yoked.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/yoke/updater.py recover --offline
+RemainAfterExit=yes
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/yoke

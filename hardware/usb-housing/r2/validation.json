@@ -1,0 +1,291 @@
+{
+  "status": "PASS",
+  "basis": "Nominal exact-mesh comparison; no physical test",
+  "brand_sha256": "9cd2e3d234d98c833720469ec785b33eab2dde6797da40ca634b75f833b08390",
+  "r1_mechanical_source_sha256": "58a4b039121b7737c01a4c54c03ca8a42df1e5e116984c651a3614551209ff02",
+  "r2_source_sha256": "b19780dc3402c1746cad38b1303e958b8a51f8a8f62cc11a71412ac5b211ed35",
+  "rebuild_byte_identical": {
+    "base.stl": true,
+    "lid.stl": true,
+    "lid-printed.stl": true,
+    "yoke-usb-housing-r2.stl": true,
+    "yoke-usb-housing-r2.contact.json": true
+  },
+  "meshes": {
+    "base.stl": {
+      "sha256": "2eafcaff0760704f1dec657bbfb88929d73994a9eafaea5ef0992f5bfdd550b6",
+      "facets": 4956,
+      "watertight": true,
+      "consistent_winding": true,
+      "components": 1,
+      "volume_mm3": 7070.705159,
+      "bounds_mm": [
+        [
+          -9.0,
+          -2.4000000953674316,
+          0.0
+        ],
+        [
+          67.4000015258789,
+          32.400001525878906,
+          10.0
+        ]
+      ],
+      "r1_bounds_identical": true
+    },
+    "lid.stl": {
+      "sha256": "2722c830697cbe58f06bb7b7674596579eb0186b8228d498f99944d1f3d4f695",
+      "facets": 4794,
+      "watertight": true,
+      "consistent_winding": true,
+      "components": 1,
+      "volume_mm3": 7609.881872,
+      "bounds_mm": [
+        [
+          -9.0,
+          -2.4000000953674316,
+          0.0
+        ],
+        [
+          67.4000015258789,
+          32.400001525878906,
+          11.479999542236328
+        ]
+      ],
+      "r1_bounds_identical": true
+    },
+    "lid-printed.stl": {
+      "sha256": "e6c37bfb8b62f754ce6e022b147099abe8f8978e3a7ec4186f4bdf1c3718f95f",
+      "facets": 5878,
+      "watertight": true,
+      "consistent_winding": true,
+      "components": 1,
+      "volume_mm3": 7615.527661,
+      "bounds_mm": [
+        [
+          -9.0,
+          -2.4000000953674316,
+          0.0
+        ],
+        [
+          67.4000015258789,
+          32.400001525878906,
+          11.479999542236328
+        ]
+      ],
+      "r1_bounds_identical": true
+    },
+    "yoke-usb-housing-r2.stl": {
+      "sha256": "55dc109ba850569d339a86bc9a0b42037f8ab4a74be8b2cf707a0885b3420470",
+      "watertight": true,
+      "consistent_winding": true,
+      "components": 2,
+      "bounds_mm": [
+        [
+          3.0,
+          0.5999999046325684,
+          0.0
+        ],
+        [
+          79.4000015258789,
+          77.4000015258789,
+          11.479999542236328
+        ]
+      ]
+    }
+  },
+  "delta": {
+    "base.stl": {
+      "added": {
+        "volume_mm3": 2.982918439,
+        "bounds_mm": [
+          16.09491539001465,
+          27.47016716003418,
+          0.0,
+          31.99920082092285,
+          29.633384704589844,
+          0.4399999976158142
+        ]
+      },
+      "removed": {
+        "volume_mm3": 4.043396923,
+        "bounds_mm": [
+          19.133609771728516,
+          27.0,
+          0.0,
+          28.746509552001953,
+          30.093120574951172,
+          0.44999998807907104
+        ]
+      },
+      "allowed_windows_print_coordinates_mm": [
+        [
+          [
+            10,
+            26.5,
+            -0.001
+          ],
+          [
+            40,
+            31,
+            0.461
+          ]
+        ]
+      ],
+      "outside_allowed_windows_mm3": 0.0
+    },
+    "lid.stl": {
+      "added": {
+        "volume_mm3": 3.014480856,
+        "bounds_mm": [
+          16.17014503479004,
+          0.36913349540001716,
+          0.0,
+          31.795446395874023,
+          2.5280169750668176,
+          0.44999998807907104
+        ]
+      },
+      "removed": {
+        "volume_mm3": 18.893209636,
+        "bounds_mm": [
+          5.0,
+          -0.09312000125646591,
+          0.0,
+          28.850099563598633,
+          19.33333396911621,
+          0.44999998807907104
+        ]
+      },
+      "allowed_windows_print_coordinates_mm": [
+        [
+          [
+            10,
+            -1,
+            -0.001
+          ],
+          [
+            40,
+            3.5,
+            0.461
+          ]
+        ],
+        [
+          [
+            5,
+            10.6666,
+            -0.001
+          ],
+          [
+            13,
+            19.3334,
+            0.451
+          ]
+        ]
+      ],
+      "outside_allowed_windows_mm3": 0.0
+    },
+    "lid-printed.stl": {
+      "added": {
+        "volume_mm3": 3.014480856,
+        "bounds_mm": [
+          16.17014503479004,
+          0.36913349540001716,
+          0.0,
+          31.795446395874023,
+          2.5280169750668176,
+          0.44999998807907104
+        ]
+      },
+      "removed": {
+        "volume_mm3": 18.893209636,
+        "bounds_mm": [
+          5.0,
+          -0.09312000125646591,
+          0.0,
+          28.850099563598633,
+          19.33333396911621,
+          0.44999998807907104
+        ]
+      },
+      "allowed_windows_print_coordinates_mm": [
+        [
+          [
+            10,
+            -1,
+            -0.001
+          ],
+          [
+            40,
+            3.5,
+            0.461
+          ]
+        ],
+        [
+          [
+            5,
+            10.6666,
+            -0.001
+          ],
+          [
+            13,
+            19.3334,
+            0.451
+          ]
+        ]
+      ],
+      "outside_allowed_windows_mm3": 0.0
+    }
+  },
+  "membranes": {
+    "unchanged": true,
+    "volume_mm3": 5.645788272,
+    "bounds_mm": [
+      2.0499041080474854,
+      1.999925971031189,
+      2.200000047683716,
+      62.89992904663086,
+      27.90005874633789,
+      2.4000000953674316
+    ],
+    "symmetric_difference_mm3": 0.0
+  },
+  "brand_placement_assembly_mm": {
+    "center_xy": [
+      9,
+      15
+    ],
+    "visible_width": 8,
+    "visible_height": 8.666666666666666,
+    "engrave_depth": 0.45,
+    "minimum_roof_remaining": 1.55,
+    "minimum_mark_stroke_width": 2,
+    "first_vent_clearance": 3,
+    "bounds": [
+      [
+        5,
+        10.666666666666668,
+        19.55
+      ],
+      [
+        13,
+        19.333333333333332,
+        20
+      ]
+    ]
+  },
+  "unchanged_interfaces": [
+    "inner floor and roof",
+    "side walls and 0.15mm closure gap",
+    "four mounting-pad support posts",
+    "screw bores and hex nut bearing seats",
+    "Ethernet/USB-C/micro-HDMI/microSD openings",
+    "all 3x13mm ventilation slots",
+    "four 0.20mm sacrificial lid-bore membranes"
+  ],
+  "limits": [
+    "No R2 slice, print release, printer dispatch, or physical validation.",
+    "R1 board-fit, cable, hand-snug strength and thermal limits still apply.",
+    "The vendor board mesh remains nonmanifold; no new board Boolean collision claim."
+  ]
+}

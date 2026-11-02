@@ -42,22 +42,27 @@ Spec notes:
 from __future__ import annotations
 
 import json
+import math
 import random
 from dataclasses import dataclass
 
-from yoke.core.frames import canonical_bytes
+from yoke.core.frames import canonical_bytes, encode
 from yoke.core.types import (
     ANN_INTERVAL,
     ANN_JITTER,
     INTENT_CACHE_TTL,
+    MAX_FRAME_BYTES,
+    MAX_SEQUENCE,
     MAX_TRACKED,
     NODE_ID_RE,
     NS_PER_S,
     PEER_FORGET,
     PEER_TIMEOUT,
+    PROTOCOL_VERSION,
     RETRY_BACKOFF_BASE,
     RETRY_BACKOFF_CAP,
     SEQ_FUTURE_MARGIN_S,
+    SEQUENCE_RESERVATION,
     SUPPRESSION_MAX,
     SUPPRESSION_MIN,
     AttachMedia,
@@ -83,6 +88,11 @@ from yoke.core.types import (
 
 _TIMEOUT_EPS = 1e-3
 _COUNTER_KEYS = ("malformed", "version", "auth", "stale", "oversize")
+
+
+def _bounded_detail(detail: str) -> str:
+    encoded = detail.encode("utf-8", errors="replace")[:128]
+    return encoded.decode("utf-8", errors="ignore")
 
 
 @dataclass(frozen=True)
@@ -122,13 +132,23 @@ class _CachedIntent:
     cached_at: float
 
 
+@dataclass(frozen=True)
+class _PendingSave:
+    request_id: int
+    kind: str
+    state: PersistedState
+    effects: tuple[Effect, ...] = ()
+
+
 def _parse_version(value: object, *, min_n: int = 0) -> Version | None:
     if not isinstance(value, list) or len(value) != 2:
         return None
     n, origin = value
-    if isinstance(n, bool) or not isinstance(n, int) or n < min_n:
+    if type(n) is not int or not min_n <= n <= MAX_SEQUENCE:
         return None
-    if not isinstance(origin, str):
+    if not isinstance(origin, str) or (
+        (n == 0 and origin != "") or (n > 0 and not NODE_ID_RE.fullmatch(origin))
+    ):
         return None
     return (n, origin)
 
@@ -139,7 +159,7 @@ def _parse_intent(body: Body) -> tuple[str, str, object, Version] | None:
     if op not in ("pair", "unpair"):
         return None
     consumer = body.get("consumer")
-    if not isinstance(consumer, str) or not NODE_ID_RE.match(consumer):
+    if not isinstance(consumer, str) or not NODE_ID_RE.fullmatch(consumer):
         return None
     version = _parse_version(body.get("version"), min_n=1)
     if version is None:
@@ -165,7 +185,7 @@ def _parse_ann(body: Body, now: float) -> _PeerRec | None:
     except ValueError:
         return None
     name = body.get("name")
-    if not isinstance(name, str):
+    if not isinstance(name, str) or len(name) > 64:
         return None
     err = body.get("err")
     if err is not None and not isinstance(err, str):
@@ -177,10 +197,12 @@ def _parse_ann(body: Body, now: float) -> _PeerRec | None:
         if not isinstance(raw_pairing, dict):
             return None
         producer = raw_pairing.get("producer")
-        if producer is not None and not isinstance(producer, str):
+        if producer is not None and (
+            not isinstance(producer, str) or not NODE_ID_RE.fullmatch(producer)
+        ):
             return None
         version = _parse_version(raw_pairing.get("version"))
-        if version is None:
+        if version is None or (version[0] == 0 and producer is not None):
             return None
         pairing = Pairing(producer, version)
     else:
@@ -211,14 +233,37 @@ class Node:
         now: float,
         media: Body | None = None,
         seed: int = 0,
+        wall_time: float | None = None,
     ) -> None:
+        wall_time = now if wall_time is None else wall_time
+        if not math.isfinite(now) or not math.isfinite(wall_time) or wall_time < 0:
+            raise ValueError(
+                "node clocks must be finite; wall time must be nonnegative"
+            )
+        state = PersistedState.from_json(state.to_json())
         self._config = config
         self._pairing = state.pairing
-        self._seq = max(state.seq, int(now) * NS_PER_S)
+        self._seq = max(state.seq, int(wall_time) * NS_PER_S)
+        if self._seq >= MAX_SEQUENCE:
+            raise ValueError("outbound sequence space is exhausted")
+        self._reserved_until = state.seq
+        self._wall_offset = wall_time - now
+        self._save_serial = 0
+        self._pending_save: _PendingSave | None = None
+        self._deferred_effects: tuple[Effect, ...] | None = None
+        self._reserve_retry_at: float | None = None
+        self._reserve_backoff = RETRY_BACKOFF_BASE
+        self._started = False
         self._media = media
         self._rng = random.Random(seed)
         self._err: str | None = None
-        if config.role is Role.CONSUMER and state.pairing.producer is not None:
+        self._driver_detail = ""
+        self._teardown_pending = (
+            config.role is Role.CONSUMER and state.pairing.version[0] > 0
+        )
+        if config.role is Role.CONSUMER and (
+            state.pairing.producer is not None or self._teardown_pending
+        ):
             self._state = NodeState.PENDING
         else:
             self._state = NodeState.IDLE
@@ -244,6 +289,7 @@ class Node:
         self._backoff = RETRY_BACKOFF_BASE
         self._attached_media: Body | None = None
         self._last_now = now
+        self._validate_media_description(media)
 
     # -- public introspection ------------------------------------------------
 
@@ -281,26 +327,71 @@ class Node:
 
     def start(self, now: float) -> list[Effect]:
         self._touch(now)
-        return [
-            self._persist(),
-            self._evt("started", {}),
-            self._ann(now),
-        ]
+        if self._started or self._pending_save is not None:
+            return []
+        return self._begin_save("start", self._pairing)
+
+    def on_persist_result(
+        self, request_id: int, success: bool, now: float
+    ) -> list[Effect]:
+        """Release effects only after the shell confirms the exact save."""
+        self._touch(now)
+        pending = self._pending_save
+        if pending is None or pending.request_id != request_id:
+            return []
+        self._pending_save = None
+        if not success:
+            if pending.kind == "effects":
+                self._deferred_effects = pending.effects
+                self._reserve_retry_at = now + self._reserve_backoff
+                self._reserve_backoff = min(
+                    self._reserve_backoff * 2, RETRY_BACKOFF_CAP
+                )
+            return [Log("durable save failed; pairing unchanged and success withheld")]
+        self._reserved_until = pending.state.seq
+        self._reserve_backoff = RETRY_BACKOFF_BASE
+        if pending.kind == "start":
+            self._started = True
+            effects: list[Effect] = []
+            if self._teardown_pending:
+                effects.append(DetachMedia())
+            effects.extend([self._evt("started", {}), self._ann(now)])
+            return self._finish(effects)
+        if pending.kind == "pairing":
+            return self._finish(self._commit_pairing(pending.state.pairing, now))
+        return list(pending.effects)
 
     def shutdown(self, now: float) -> list[Effect]:
         self._touch(now)
-        return [
-            self._evt("stopping", {}),
-            self._send(FrameType.BYE, {}),
-        ]
+        fx: list[Effect] = []
+        if self._config.role is Role.CONSUMER:
+            fx.append(DetachMedia())
+        if (
+            not self._started
+            or self._pending_save is not None
+            or self._deferred_effects is not None
+        ):
+            return fx
+        return fx + self._finish(
+            [
+                self._evt("stopping", {}),
+                self._send(FrameType.BYE, {}),
+            ]
+        )
 
     # -- inputs --------------------------------------------------------------
 
     def on_frame(self, frame: Frame, raw: bytes, now: float) -> list[Effect]:
         self._touch(now)
+        if (
+            not self._started
+            or self._pending_save is not None
+            or self._deferred_effects is not None
+        ):
+            return []
         if frame.origin == self._config.node_id:
             return []  # own multicast loopback
-        if frame.seq > (int(now) + SEQ_FUTURE_MARGIN_S) * NS_PER_S:
+        if frame.seq > (int(now + self._wall_offset) + SEQ_FUTURE_MARGIN_S) * NS_PER_S:
             # Implausibly-far-future seq (nanoseconds): a spoofed
             # high-water would otherwise stale-drop the real origin's
             # frames indefinitely (ADR 0010). Reject without advancing the
@@ -325,15 +416,17 @@ class Node:
                 self._drops["stale"] += 1
                 return []
         self._replay[frame.origin] = (frame.seq, canon)
+        fx: list[Effect] = []
         if frame.type is FrameType.ANN:
-            return self._on_ann(frame, now)
-        if frame.type is FrameType.INT:
-            return self._on_int(frame, now)
-        if frame.type is FrameType.ACK:
-            return self._on_ack(frame, now)
-        if frame.type is FrameType.BYE:
-            return self._on_bye(frame, now)
-        return []  # evt: observed, not acted on
+            fx = self._on_ann(frame, now)
+        elif frame.type is FrameType.INT:
+            fx = self._on_int(frame, now)
+        elif frame.type is FrameType.ACK:
+            fx = self._on_ack(frame, now)
+        elif frame.type is FrameType.BYE:
+            fx = self._on_bye(frame, now)
+        self._bound_maps()
+        return self._finish(fx)
 
     def on_drop(self, reason: DropReason, now: float) -> list[Effect]:
         self._touch(now)
@@ -345,53 +438,110 @@ class Node:
 
     def on_driver_status(self, status: DriverStatus, now: float) -> list[Effect]:
         self._touch(now)
-        fx: list[Effect] = []
-        prev = self._state
-        # A consumer with no pairing has nothing to be active/pending/error
-        # about: a status arriving from an attach that completed after an
-        # unpair is stale and must not resurrect a torn-down pairing.
         if (
-            self._config.role is Role.CONSUMER
-            and self._pairing.producer is None
-            and status.state is not NodeState.IDLE
+            not self._started
+            or self._pending_save is not None
+            or self._deferred_effects is not None
         ):
             return []
+        fx: list[Effect] = []
+        prev = self._state
+        consumer = self._config.role is Role.CONSUMER
+        if consumer and self._pairing.producer is None:
+            if status.state is NodeState.IDLE:
+                self._teardown_pending = False
+                self._retry_at = None
+                self._backoff = RETRY_BACKOFF_BASE
+            else:
+                self._teardown_pending = True
+                self._schedule_retry(now)
+                if status.state is NodeState.ACTIVE:
+                    # It is evidence of unfinished cleanup, never evidence
+                    # that the unpaired desired route became active again.
+                    if prev not in (NodeState.PENDING, NodeState.ERROR):
+                        self._state = NodeState.PENDING
+                        fx.extend([self._evt("media-pending", {}), self._ann(now)])
+                    return self._finish(fx)
         if status.state is NodeState.ACTIVE:
+            if consumer and self._teardown_pending:
+                self._schedule_retry(now)
+                return self._finish(fx)
+            if self._config.role is Role.CONSUMER:
+                peer = self._peers.get(self._pairing.producer or "")
+                if (
+                    peer is None
+                    or peer.lost
+                    or peer.departed
+                    or peer.role is not Role.PRODUCER
+                    or peer.kind is not self._config.kind
+                ):
+                    return []
+            self._driver_detail = _bounded_detail(status.detail)
+            self._teardown_pending = False
             self._err = None
             self._backoff = RETRY_BACKOFF_BASE
             self._retry_at = None
             if prev is not NodeState.ACTIVE:
                 self._state = NodeState.ACTIVE
-                fx.append(self._evt("media-up", {}))
+                detail: Body = {}
+                if self._driver_detail:
+                    detail["detail"] = self._driver_detail
+                fx.append(self._evt("media-up", detail))
         elif status.state is NodeState.ERROR:
+            self._driver_detail = _bounded_detail(status.detail)
             self._state = NodeState.ERROR
-            self._err = status.detail or None
-            fx.append(self._evt("driver-error", {"detail": status.detail}))
-            if (
-                self._config.role is Role.CONSUMER
-                and self._pairing.producer is not None
-            ):
-                self._retry_at = now + self._backoff
+            self._err = self._driver_detail or None
+            fx.append(self._evt("driver-error", {"detail": self._driver_detail}))
+            self._schedule_retry(now)
         elif status.state is NodeState.PENDING:
+            self._driver_detail = _bounded_detail(status.detail)
             if prev is not NodeState.PENDING:
                 self._state = NodeState.PENDING
                 self._err = None
                 fx.append(self._evt("media-pending", {}))
+            self._schedule_retry(now)
+        elif self._config.role is Role.CONSUMER and self._pairing.producer is not None:
+            self._teardown_pending = False
+            self._driver_detail = _bounded_detail(status.detail)
+            if prev is not NodeState.PENDING:
+                self._state = NodeState.PENDING
+                self._err = None
+                fx.append(
+                    self._evt("media-pending", {"producer": self._pairing.producer})
+                )
+            self._schedule_retry(now)
         elif prev is not NodeState.IDLE:  # IDLE
+            self._driver_detail = ""
             self._state = NodeState.IDLE
             self._err = None
             fx.append(self._evt("media-down", {}))
         if self._state is not prev:
             fx.append(self._ann(now))
-        return fx
+        return self._finish(fx)
 
     def set_media(self, media: Body, now: float) -> list[Effect]:
         self._touch(now)
+        self._validate_media_description(media)
         self._media = media
-        return [self._ann(now)]
+        if (
+            not self._started
+            or self._pending_save is not None
+            or self._deferred_effects is not None
+        ):
+            return []
+        return self._finish([self._ann(now)])
 
     def poll(self, now: float) -> list[Effect]:
         self._touch(now)
+        if self._pending_save is not None or not self._started:
+            return []
+        if self._deferred_effects is not None:
+            if self._reserve_retry_at is not None and now >= self._reserve_retry_at:
+                effects = self._deferred_effects
+                self._deferred_effects = None
+                self._reserve_retry_at = None
+                return self._begin_save("effects", self._pairing, effects)
+            return []
         fx: list[Effect] = []
         for pid, rec in self._peers.items():
             if not rec.departed and not rec.lost and now - rec.last_seen > PEER_TIMEOUT:
@@ -419,9 +569,13 @@ class Node:
             self._drops_reported = dict(self._drops)
             self._rx_drop_at = now
             fx.append(self._evt("rx-drop", dict(self._drops)))
-        return fx
+        return self._finish(fx)
 
     def next_deadline(self) -> float:
+        if self._pending_save is not None or not self._started:
+            return self._last_now + ANN_INTERVAL
+        if self._reserve_retry_at is not None:
+            return self._reserve_retry_at
         deadline = self._ann_due
         for rec in self._peers.values():
             if not rec.departed and not rec.lost:
@@ -457,12 +611,25 @@ class Node:
                 # compatible announce can re-attach cleanly.
                 if self._attached_media is not None:
                     self._attached_media = None
+                    self._teardown_pending = True
                     fx.append(DetachMedia())
                 fx.extend(self._paired_producer_gone(origin, now))
             elif rec.media is not None and (
                 returned or self._attached_media != rec.media
             ):
                 self._attached_media = rec.media
+                self._teardown_pending = False
+                self._retry_at = None
+                self._backoff = RETRY_BACKOFF_BASE
+                self._state = NodeState.PENDING
+                self._err = None
+                self._driver_detail = ""
+                fx.extend(
+                    [
+                        self._evt("media-pending", {"producer": origin}),
+                        self._ann(now),
+                    ]
+                )
                 fx.append(AttachMedia(origin, rec.media))
         if rec.role is Role.CONSUMER and rec.pairing is not None:
             entry = self._cache_get(origin, now)
@@ -481,6 +648,19 @@ class Node:
             self._drops["malformed"] += 1
             return [Log(f"malformed intent body from {frame.origin}")]
         op, consumer, producer, version = parsed
+        normalized: Body = {
+            "op": op,
+            "consumer": consumer,
+            "version": list(version),
+        }
+        cacheable = True
+        if op == "pair":
+            if isinstance(producer, str) and NODE_ID_RE.fullmatch(producer):
+                normalized["producer"] = producer
+            else:
+                # The target still emits its normative rejection ACK, but
+                # bystanders must not retain values that cannot be reissued.
+                cacheable = False
         rejected = self._rejected.get(consumer)
         is_rejected = (
             rejected is not None
@@ -489,9 +669,11 @@ class Node:
         )
         entry = self._cache_get(consumer, now)
         if (
-            entry is None or version_key(version) > version_key(entry.version)
-        ) and not is_rejected:
-            self._intent_cache[consumer] = _CachedIntent(version, dict(frame.body), now)
+            cacheable
+            and (entry is None or version_key(version) > version_key(entry.version))
+            and not is_rejected
+        ):
+            self._intent_cache[consumer] = _CachedIntent(version, normalized, now)
         cached = self._intent_cache.get(consumer)
         if (
             consumer in self._resend_at
@@ -533,27 +715,55 @@ class Node:
                 return [self._ack(version, applied=True, reason="applied")]
             return [self._ack(version, applied=False, reason="superseded")]
         if op == "pair":
-            if not isinstance(producer, str) or not NODE_ID_RE.match(producer):
+            if not isinstance(producer, str) or not NODE_ID_RE.fullmatch(producer):
                 self._note_rejection(self._config.node_id, version, producer)
                 return [self._ack(version, applied=False, reason="unknown-producer")]
             if producer == self._config.node_id:
                 self._note_rejection(self._config.node_id, version, producer)
                 return [self._ack(version, applied=False, reason="self-pair")]
             peer = self._peers.get(producer)
-            if peer is not None and peer.kind is not self._config.kind:
+            if peer is not None and (
+                peer.kind is not self._config.kind or peer.role is not Role.PRODUCER
+            ):
                 self._note_rejection(self._config.node_id, version, producer)
                 return [self._ack(version, applied=False, reason="kind-mismatch")]
             return self._apply_pair(producer, version, now)
         return self._apply_unpair(version, now)
 
     def _apply_pair(self, producer: str, version: Version, now: float) -> list[Effect]:
-        self._pairing = Pairing(producer, version)
+        return self._begin_save("pairing", Pairing(producer, version))
+
+    def _apply_unpair(self, version: Version, now: float) -> list[Effect]:
+        return self._begin_save("pairing", Pairing(None, version))
+
+    def _commit_pairing(self, pairing: Pairing, now: float) -> list[Effect]:
+        previous = self._pairing
+        had_media = self._attached_media is not None
+        self._pairing = pairing
+        producer, version = pairing.producer, pairing.version
         self._state = NodeState.PENDING
         self._err = None
+        self._driver_detail = ""
         self._attached_media = None
         self._retry_at = None
         self._backoff = RETRY_BACKOFF_BASE
-        fx: list[Effect] = [self._persist()]
+        fx: list[Effect] = []
+        self._teardown_pending = (
+            producer is None or had_media or previous.producer is not None
+        )
+        if producer is None or had_media or previous.producer is not None:
+            fx.append(DetachMedia())
+        if producer is None:
+            fx.extend(
+                [
+                    self._ack(version, applied=True, reason="applied"),
+                    self._evt(
+                        "pairing-applied", {"producer": None, "version": list(version)}
+                    ),
+                    self._ann(now),
+                ]
+            )
+            return fx
         peer = self._peers.get(producer)
         media = (
             peer.media
@@ -562,6 +772,7 @@ class Node:
         )
         if media is not None:
             self._attached_media = media
+            self._teardown_pending = False
             fx.append(AttachMedia(producer, media))
         else:
             fx.append(self._evt("media-pending", {"producer": producer}))
@@ -575,30 +786,14 @@ class Node:
         fx.append(self._ann(now))
         return fx
 
-    def _apply_unpair(self, version: Version, now: float) -> list[Effect]:
-        self._pairing = Pairing(None, version)
-        self._state = NodeState.IDLE
-        self._err = None
-        self._attached_media = None
-        self._retry_at = None
-        self._backoff = RETRY_BACKOFF_BASE
-        return [
-            self._persist(),
-            DetachMedia(),
-            self._ack(version, applied=True, reason="applied"),
-            self._evt(
-                "pairing-applied",
-                {"producer": None, "version": [version[0], version[1]]},
-            ),
-            self._ann(now),
-        ]
-
     # -- helpers -------------------------------------------------------------
 
     def _touch(self, now: float) -> None:
         self._last_now = max(self._last_now, now)
 
     def _next_seq(self) -> int:
+        if self._seq >= MAX_SEQUENCE:
+            raise ValueError("outbound sequence space is exhausted")
         self._seq += 1
         return self._seq
 
@@ -622,7 +817,57 @@ class Node:
         """Build an announce and reschedule the periodic timer."""
         jitter = self._rng.uniform(-ANN_JITTER, ANN_JITTER)
         self._ann_due = now + ANN_INTERVAL * (1 + jitter)
-        return self._send(FrameType.ANN, self._ann_body())
+        body = self._ann_body()
+        # Optional evidence must not crowd an otherwise valid media
+        # description out of the bounded wire frame. Budget for a PSK
+        # even in open mode; the actual shell supplies the signature.
+        if "driver_status" in body and self._announce_size(body) > MAX_FRAME_BYTES:
+            del body["driver_status"]
+        detail = body["err"]
+        if isinstance(detail, str) and self._announce_size(body) > MAX_FRAME_BYTES:
+            low, high = 0, len(detail)
+            while low < high:
+                middle = (low + high + 1) // 2
+                body["err"] = detail[:middle]
+                if self._announce_size(body) <= MAX_FRAME_BYTES:
+                    low = middle
+                else:
+                    high = middle - 1
+            body["err"] = detail[:low]
+        return self._send(FrameType.ANN, body)
+
+    def _announce_size(self, body: Body) -> int:
+        return len(
+            canonical_bytes(
+                {
+                    "v": PROTOCOL_VERSION,
+                    "t": FrameType.ANN.value,
+                    "id": self.node_id,
+                    "seq": MAX_SEQUENCE,
+                    "ts": -1.2345678901234567e308,
+                    "body": body,
+                    "sig": "0" * 64,
+                }
+            )
+        )
+
+    def _validate_media_description(self, media: Body | None) -> None:
+        body = self._ann_body()
+        if self._config.role is Role.PRODUCER:
+            body["media"] = media
+        body["state"] = NodeState.PENDING.value  # longest readiness state
+        body["err"] = None
+        body.pop("driver_status", None)
+        # Reject unsupported JSON or an opaque description that cannot fit
+        # even with all optional human status omitted. Never truncate media.
+        encode(
+            FrameType.ANN,
+            self.node_id,
+            MAX_SEQUENCE,
+            -1.2345678901234567e308,
+            body,
+            b"wire-budget",
+        )
 
     def _ann_body(self) -> Body:
         body: Body = {
@@ -642,10 +887,36 @@ class Node:
         else:
             body["pairing"] = None
             body["media"] = self._media
+        if self._driver_detail:
+            body["driver_status"] = {"detail": self._driver_detail}
         return body
 
-    def _persist(self) -> Persist:
-        return Persist(PersistedState(seq=self._seq, pairing=self._pairing))
+    def _begin_save(
+        self,
+        kind: str,
+        pairing: Pairing,
+        effects: tuple[Effect, ...] = (),
+    ) -> list[Effect]:
+        if self._pending_save is not None:
+            return []
+        self._save_serial += 1
+        state = PersistedState(
+            seq=min(MAX_SEQUENCE, self._seq + SEQUENCE_RESERVATION),
+            pairing=pairing,
+        )
+        self._pending_save = _PendingSave(self._save_serial, kind, state, effects)
+        return [Persist(state, self._save_serial)]
+
+    def _finish(self, effects: list[Effect]) -> list[Effect]:
+        """No outbound frame can escape its durable sequence reservation."""
+        if any(isinstance(effect, Persist) for effect in effects):
+            return effects
+        if any(
+            isinstance(effect, SendFrame) and effect.seq > self._reserved_until
+            for effect in effects
+        ):
+            return self._begin_save("effects", self._pairing, tuple(effects))
+        return effects
 
     def _paired_producer_gone(self, peer_id: str, now: float) -> list[Effect]:
         """Consumer's paired producer departed or timed out: go pending."""
@@ -655,15 +926,24 @@ class Node:
             or self._state is NodeState.PENDING
         ):
             return []
+        if self._teardown_pending and self._state is NodeState.ERROR:
+            return []
         self._state = NodeState.PENDING
         self._err = None
-        self._retry_at = None
+        if not self._teardown_pending:
+            self._retry_at = None
         return [
             self._evt("media-pending", {"producer": peer_id}),
             self._ann(now),
         ]
 
     def _fire_retry(self) -> list[Effect]:
+        if self._teardown_pending:
+            self._backoff = min(self._backoff * 2, RETRY_BACKOFF_CAP)
+            return [
+                DetachMedia(),
+                self._evt("driver-retry", {"operation": "detach"}),
+            ]
         producer = self._pairing.producer
         if producer is None:
             return []
@@ -677,6 +957,14 @@ class Node:
             self._evt("driver-retry", {"producer": producer}),
         ]
 
+    def _schedule_retry(self, now: float) -> None:
+        if (
+            self._config.role is Role.CONSUMER
+            and self._retry_at is None
+            and (self._teardown_pending or self._peer_ready())
+        ):
+            self._retry_at = now + self._backoff
+
     def _retry_media(self) -> Body | None:
         if self._attached_media is not None:
             return self._attached_media
@@ -687,6 +975,17 @@ class Node:
         if rec is not None and not rec.departed and not rec.lost:
             return rec.media
         return None
+
+    def _peer_ready(self) -> bool:
+        peer = self._peers.get(self._pairing.producer or "")
+        return (
+            peer is not None
+            and peer.role is Role.PRODUCER
+            and peer.kind is self._config.kind
+            and not peer.departed
+            and not peer.lost
+            and peer.media is not None
+        )
 
     def _prune(self, now: float) -> None:
         """Bound per-origin bookkeeping against id-cycling exhaustion
@@ -702,7 +1001,11 @@ class Node:
         for pid in forgotten:
             del self._peers[pid]
             self._replay.pop(pid, None)
-        for name in ("_replay", "_peers", "_rejected", "_intent_cache"):
+        self._bound_maps()
+
+    def _bound_maps(self) -> None:
+        keep = self._pairing.producer
+        for name in ("_replay", "_peers", "_rejected", "_intent_cache", "_resend_at"):
             self._cap_fifo(getattr(self, name), keep)
 
     @staticmethod
@@ -746,7 +1049,11 @@ class Node:
         version = _parse_version(body.get("version"), min_n=1)
         if version is None or body.get("applied") is not False:
             return []
-        if body.get("reason") not in self._REJECTION_REASONS:
+        reason = body.get("reason")
+        if not isinstance(reason, str):
+            self._drops["malformed"] += 1
+            return []
+        if reason not in self._REJECTION_REASONS:
             return []
         # The ack does not carry the producer; identify it from our own
         # cached copy of the rejected intent. Without one we cannot tell a

@@ -18,9 +18,8 @@ the receiver's own :meth:`IntegritySink.metrics`, and an independent
 XOR-parity units that never cross a real wire -- both ``fec="xor"`` and
 ``fec="dup"`` are exercised here.
 
-Two behaviours surfaced that are documented inline with ``# NOTE:`` and in
-the module epilogue rather than worked around; neither is a delivery bug
-(the stream reassembles correctly in every scenario).
+Capture time stays local to the source; the white-box observer joins source
+and sink taps to recover latency on this simulation's shared virtual clock.
 """
 
 from __future__ import annotations
@@ -127,7 +126,16 @@ def run_pipeline(
         if on_frame is not None:
             on_frame(i, now, sender, link)
 
+    final = sender.pipeline.finish(frames * DT)
+    events.extend(final.events)
+    units = final.emitted
+    if send_filter is not None:
+        units = [unit for unit in units if send_filter(unit)]
+    link.send(units)
     link.advance(frames * DT + drain)
+    final = receiver.pipeline.finish(link.now)
+    link.events.extend(final.events)
+    link.feedback.extend(final.feedback)
     # Receiver-side taps (and any feedback ADJUST taps) live on the link; add
     # them once at the end so nothing is double-counted.
     events.extend(link.events)
@@ -207,12 +215,14 @@ def test_clean_raw_none_is_lossless_and_bit_exact() -> None:
     assert totals["frames_sourced"] == n
     assert totals["frames_ok"] == n
     assert totals["frames_bad"] == 0
-    # NOTE: metrics["mean_latency"] is 0.0 here even though frames plainly
-    # took time to arrive: the Packetizer builds a fresh RTP meta dict and
+    assert totals["packets_sent"] == totals["packets_recv"] == 4 * n
+    # Sink latency is unknown: the Packetizer builds a fresh RTP meta dict and
     # does not carry the source's meta["capture_now"] onto PACKET units, so
     # it never reaches the sink. This is by design (capture_now is not an
     # on-wire RTP field). The white-box collector recovers true latency via
-    # the source-OUT/pts join, so its stream latency IS populated:
+    # the source-OUT/pts join on this shared virtual clock:
+    assert metrics["last_latency"] is None
+    assert metrics["mean_latency"] is None
     latency = result.snapshot["streams"]["-"]["latency"]
     assert latency is not None and latency["mean"] > 0.0
 
@@ -416,18 +426,234 @@ def test_property_bounded_loss_xor_stays_consistent(seed: int) -> None:
     assert metrics["frames_ok"] > 0
 
 
-# NOTE (findings, not delivery bugs -- reported to the caller):
-#
-# 1. IntegritySink.metrics()["mean_latency"]/["last_latency"] read 0.0 through
-#    the full pipeline. Packetizer builds a fresh RTP meta dict and drops the
-#    source's meta["capture_now"], so it never reaches the sink's latency
-#    calc. Arguably correct (capture_now is not an RTP field); the white-box
-#    MetricsCollector recovers true glass-to-glass latency via its source-OUT
-#    /pts join, and that value IS non-zero (asserted in scenario 1).
-#
-# 2. MetricsCollector's default StageRoles(wire_in="jitter") expects the first
-#    receiver stage to emit an IN tap per arrival, but JitterBuffer emits HOLD
-#    (and LATE), never IN -- so snapshot packets_recv is always 0 and the
-#    white-box "packet_loss" equals packets_sent for the canonical pipeline.
-#    These tests therefore assert loss via the sink metrics and via
-#    fec_recovered / stage RECOVER counts, not via the collector's packet_loss.
+def test_empty_frontier_does_not_skip_downstream_timers_or_feedback() -> None:
+    from yoke.media.pipeline import Pipeline, StageBase
+    from yoke.media.stages.source import SyntheticSource
+    from yoke.media.types import StageOutcome
+
+    unit = SyntheticSource(width=1, height=1, fps=60).frame(0).emit[0]
+    calls: list[str] = []
+
+    class HoldingStage(StageBase):
+        def process(self, unit: MediaUnit, now: float) -> StageOutcome:
+            calls.append("hold.process")
+            return StageOutcome()
+
+        def tick(self, now: float) -> StageOutcome:
+            calls.append("hold.tick")
+            return StageOutcome()
+
+        def on_feedback(self, report: NetworkReport, now: float) -> StageOutcome:
+            calls.append("hold.feedback")
+            return StageOutcome()
+
+    class EmittingStage(StageBase):
+        def process(self, unit: MediaUnit, now: float) -> StageOutcome:
+            calls.append("emit.process")
+            return StageOutcome(emit=[unit])
+
+        def tick(self, now: float) -> StageOutcome:
+            calls.append("emit.tick")
+            return StageOutcome(emit=[unit])
+
+        def on_feedback(self, report: NetworkReport, now: float) -> StageOutcome:
+            calls.append("emit.feedback")
+            return StageOutcome(emit=[unit])
+
+    pipeline = Pipeline([HoldingStage(), EmittingStage()])
+    assert pipeline.push(unit, 0).emitted == []
+    assert calls == ["hold.process"]
+    calls.clear()
+    assert pipeline.tick(1).emitted == [unit]
+    assert calls == ["hold.tick", "emit.tick"]
+    calls.clear()
+    assert pipeline.feed_back(NetworkReport(1, 0, 0, 0), 1).emitted == [unit]
+    assert calls == ["hold.feedback", "emit.feedback"]
+
+
+def test_finish_drains_each_stage_before_finalizing_downstream_once() -> None:
+    from yoke.media.pipeline import Pipeline, StageBase
+    from yoke.media.stages.source import SyntheticSource
+    from yoke.media.types import PipelineOutput, StageOutcome
+
+    unit = SyntheticSource(width=1, height=1, fps=60).frame(0).emit[0]
+    calls: list[tuple[str, float]] = []
+
+    class BufferedStage(StageBase):
+        def __init__(self, name: str) -> None:
+            self.name = name
+            self.pending: list[MediaUnit] = []
+
+        def process(self, item: MediaUnit, now: float) -> StageOutcome:
+            calls.append((f"{self.name}.process", now))
+            self.pending.append(item)
+            return StageOutcome(
+                events=[StageEvent(self.name, EventKind.IN, item.seq, item.pts, now)]
+            )
+
+        def flush(self, now: float) -> StageOutcome:
+            calls.append((f"{self.name}.flush", now))
+            emitted, self.pending = self.pending, []
+            return StageOutcome(
+                emit=emitted,
+                events=[StageEvent(self.name, EventKind.OUT, unit.seq, unit.pts, now)],
+                feedback=[NetworkReport(now, 0, 0, 0)],
+            )
+
+    pipeline = Pipeline(
+        [BufferedStage("one"), BufferedStage("two"), BufferedStage("three")]
+    )
+    assert not pipeline.finished
+    pipeline.push(unit, 0)
+    out = pipeline.finish(2)
+    assert out.emitted == [unit]
+    assert calls == [
+        ("one.process", 0),
+        ("one.flush", 2),
+        ("two.process", 2),
+        ("two.flush", 2),
+        ("three.process", 2),
+        ("three.flush", 2),
+    ]
+    assert [(event.stage, event.kind, event.now) for event in out.events] == [
+        ("one", EventKind.OUT, 2),
+        ("two", EventKind.IN, 2),
+        ("two", EventKind.OUT, 2),
+        ("three", EventKind.IN, 2),
+        ("three", EventKind.OUT, 2),
+    ]
+    assert len(out.feedback) == 3
+    assert pipeline.finished
+    assert pipeline.finish(3) == PipelineOutput()
+    assert pipeline.tick(3) == PipelineOutput()
+    assert pipeline.feed_back(NetworkReport(3, 0, 0, 0), 3) == PipelineOutput()
+    assert pipeline.next_deadline() is None
+    assert len(calls) == 6
+    with pytest.raises(RuntimeError, match="finished pipeline"):
+        pipeline.push(unit, 3)
+
+
+def test_finish_emits_xor_tail_parity_and_recovers_one_missing_member() -> None:
+    from yoke.media.types import UnitKind
+
+    config = MediaConfig(fec="xor", fec_group=8)
+    sender, receiver = build_sender(config), build_receiver(config)
+    sent = sender.pipeline.push(sender.source.frame(0).emit[0], 0)
+    assert len(sent.emitted) == 4
+    assert all(unit.kind is UnitKind.PACKET for unit in sent.emitted)
+    tail = sender.pipeline.finish(0.001)
+    assert len(tail.emitted) == 1
+    assert tail.emitted[0].kind is UnitKind.PARITY
+    for index, unit in enumerate(sent.emitted):
+        if index != 1:
+            receiver.pipeline.push(unit, 0.002)
+    recovered = receiver.pipeline.push(tail.emitted[0], 0.003)
+    assert _recover_count(recovered.events) == 1
+    assert receiver.sink.metrics()["frames_ok"] == 0
+    deadline = receiver.pipeline.next_deadline()
+    assert deadline is not None and deadline > 0.004
+    out = receiver.pipeline.finish(0.004)
+    assert receiver.sink.metrics()["frames_ok"] == 1
+    assert receiver.sink.metrics()["frames_bad"] == 0
+    assert all(event.now == 0.004 for event in out.events)
+    assert _integrity(out.events)[0].detail["ok"] is True
+    assert any(event.detail.get("reason") == "finalize" for event in out.events)
+    assert receiver.pipeline.next_deadline() is None
+    assert not receiver.pipeline.finish(1).events
+
+
+def test_finish_reports_short_single_path_recoveries_exactly_once() -> None:
+    config = MediaConfig(fec="dup")
+    sender, receiver = build_sender(config), build_receiver(config)
+    sent = sender.pipeline.push(sender.source.frame(0).emit[0], 0)
+    assert not sender.pipeline.finish(0.0005).emitted
+    surviving = [unit for unit in sent.emitted if unit.meta["path"] == "B"]
+    arrivals: list[StageEvent] = []
+    for unit in surviving:
+        arrivals.extend(receiver.pipeline.push(unit, 0.001).events)
+    arrivals.extend(receiver.pipeline.tick(0.03).events)
+    assert receiver.sink.metrics()["frames_ok"] == 1
+    assert _recover_count(arrivals) == 0
+    out = receiver.pipeline.finish(0.04)
+    recoveries = [event for event in out.events if event.kind is EventKind.RECOVER]
+    assert [event.seq for event in recoveries] == [unit.seq for unit in surviving]
+    assert all(event.now == 0.04 for event in recoveries)
+    assert receiver.sink.metrics()["frames_ok"] == 1
+    assert not receiver.pipeline.finish(1).events
+
+
+def test_finish_diagnoses_unrecoverable_fec_and_incomplete_packet_assembly() -> None:
+    config = MediaConfig(fec="xor", fec_group=8)
+    sender, receiver = build_sender(config), build_receiver(config)
+    sent = sender.pipeline.push(sender.source.frame(0).emit[0], 0)
+    tail = sender.pipeline.finish(0.001)
+    for index in (0, 3):
+        receiver.pipeline.push(sent.emitted[index], 0.002)
+    for parity in tail.emitted:
+        receiver.pipeline.push(parity, 0.003)
+    out = receiver.pipeline.finish(0.004)
+    assert (
+        receiver.sink.metrics()["frames_ok"]
+        == receiver.sink.metrics()["frames_bad"]
+        == 0
+    )
+    fec = [
+        event
+        for event in out.events
+        if event.stage == "fec-decode" and event.kind is EventKind.STAT
+    ]
+    assert fec[0].detail["missing"] == [1, 2]
+    partial = [
+        event
+        for event in out.events
+        if event.stage == "depacketize" and event.kind is EventKind.DROP
+    ]
+    assert partial[0].detail["why"] == "incomplete"
+    assert all(event.now == 0.004 for event in out.events)
+    assert not receiver.pipeline.finish(1).events
+
+
+def test_finish_partial_codec_frame_reaches_sink_as_bad_at_finish_time() -> None:
+    from yoke.media.pipeline import Pipeline
+    from yoke.media.stages.codec import CodecDecodeStage, PassthroughCodec
+    from yoke.media.stages.sink import IntegritySink
+    from yoke.media.stages.source import SyntheticSource
+
+    codec, sink = PassthroughCodec(), IntegritySink()
+    pipeline = Pipeline([CodecDecodeStage(codec), sink])
+    frame = SyntheticSource(width=64, height=64, fps=60).frame(0).emit[0]
+    for sl in codec.encode(frame, 1)[:2]:
+        pipeline.push(sl, 0.001)
+    out = pipeline.finish(0.002)
+    assert [(event.stage, event.kind) for event in out.events] == [
+        ("codec-decode", EventKind.OUT),
+        ("sink", EventKind.INTEGRITY),
+    ]
+    assert all(event.now == 0.002 for event in out.events)
+    assert _integrity(out.events)[0].detail["reason"] == "incomplete-frame"
+    assert sink.metrics()["frames_ok"] == 0
+    assert sink.metrics()["frames_bad"] == 1
+    assert not pipeline.finish(1).events
+
+
+def test_finite_link_finalization_reports_single_surviving_path_recoveries() -> None:
+    from yoke.media.simulation import Faults, SimLink
+
+    config = MediaConfig(fec="dup")
+    sender, receiver = build_sender(config), build_receiver(config)
+    link = SimLink(sender.pipeline, receiver.pipeline, seed=0, faults=Faults())
+    sent = sender.pipeline.push(sender.source.frame(0).emit[0], 0)
+    tail = sender.pipeline.finish(0)
+    link.send([unit for unit in sent.emitted if unit.meta["path"] == "B"])
+    link.send(tail.emitted)
+    link.drain()
+    finished_at = link.now
+    link.finish_receiver()
+    recoveries = [event for event in link.events if event.kind is EventKind.RECOVER]
+    assert len(recoveries) == 4
+    assert all(event.now == finished_at for event in recoveries)
+    assert receiver.sink.metrics()["frames_ok"] == 1
+    assert sender.pipeline.finished and receiver.pipeline.finished
+    events = list(link.events)
+    link.finish_receiver()
+    assert link.events == events

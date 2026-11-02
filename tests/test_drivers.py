@@ -1,4 +1,4 @@
-"""Driver tests: usbip via FakeRunner, SimDriver scripting, IgmpJoinDriver
+"""Driver tests: FakeRunner, SimDriver scripting, IgmpJoinDriver
 via a fake socket factory. No real subprocesses (one minimal, skip-marked
 /bin/echo exception for SubprocessRunner), no sockets, no network."""
 
@@ -16,54 +16,8 @@ from yoke.drivers.base import Driver, DriverError
 from yoke.drivers.igmp import IgmpJoinDriver, MembershipSocket
 from yoke.drivers.shellcmd import CommandResult, FakeRunner, SubprocessRunner
 from yoke.drivers.sim import SimDriver
-from yoke.drivers.usbip import UsbipAttachDriver, UsbipBindDriver
 
 OK = CommandResult(0, "", "")
-
-MEDIA: Body = {"host": "192.168.7.10", "port": 3240, "busids": ["1-1", "1-1.2"]}
-
-PORT_OUTPUT_BOTH = """\
-Imported USB devices
-====================
-Port 00: <Port in Use> at High Speed(480Mbps)
-       unknown vendor : unknown product (046d:c31c)
-       7-1 -> usbip://192.168.7.10:3240/1-1
-           -> remote bus/dev 001/002
-Port 01: <Port in Use> at High Speed(480Mbps)
-       unknown vendor : unknown product (046d:c534)
-       7-2 -> usbip://192.168.7.10:3240/1-1.2
-           -> remote bus/dev 001/003
-"""
-
-PORT_OUTPUT_PARTIAL = """\
-Imported USB devices
-====================
-Port 00: <Port in Use> at High Speed(480Mbps)
-       unknown vendor : unknown product (046d:c31c)
-       7-1 -> usbip://192.168.7.10:3240/1-1
-           -> remote bus/dev 001/002
-"""
-
-# Older tool variant: no colon after the port number.
-PORT_OUTPUT_NO_COLON = """\
-Imported USB devices
-====================
-Port 00 <Port in Use> at High Speed(480Mbps)
-       unknown vendor : unknown product (046d:c31c)
-       7-1 -> usbip://192.168.7.10:3240/1-1
-           -> remote bus/dev 001/002
-"""
-
-PORT_OUTPUT_EMPTY = "Imported USB devices\n====================\n"
-
-LIST_LOCAL_OUTPUT = """\
- - busid 1-1 (0557:2419)
-   ATEN International Co., Ltd : unknown product (0557:2419)
-
- - busid 1-1.2 (046d:c31c)
-   Logitech, Inc. : Keyboard K120 (046d:c31c)
-"""
-
 
 # --- shellcmd ---------------------------------------------------------------
 
@@ -102,215 +56,6 @@ class TestSubprocessRunner:
     def test_missing_binary_is_driver_error(self) -> None:
         with pytest.raises(DriverError, match="command not found"):
             SubprocessRunner().run(["/nonexistent/yoke-no-such-bin"], timeout=1.0)
-
-
-# --- usbip consumer ---------------------------------------------------------
-
-
-def attach_driver(runner: FakeRunner) -> UsbipAttachDriver:
-    return UsbipAttachDriver(runner, timeout=7.0)
-
-
-class TestUsbipAttach:
-    def test_attach_runs_one_command_per_busid(self) -> None:
-        runner = FakeRunner()
-        runner.script(["usbip", "attach"], OK)
-        attach_driver(runner).attach("prod-a", MEDIA)
-        assert runner.calls == [
-            ("usbip", "attach", "-r", "192.168.7.10", "-b", "1-1"),
-            ("usbip", "attach", "-r", "192.168.7.10", "-b", "1-1.2"),
-        ]
-        assert runner.timeouts == [7.0, 7.0]
-
-    def test_per_busid_failure_raises_with_stderr(self) -> None:
-        runner = FakeRunner()
-        runner.script(["usbip", "attach", "-r", "192.168.7.10", "-b", "1-1"], OK)
-        runner.script(
-            ["usbip", "attach", "-r", "192.168.7.10", "-b", "1-1.2"],
-            CommandResult(1, "", "usbip: error: attach failed: device busy"),
-        )
-        with pytest.raises(DriverError, match="device busy"):
-            attach_driver(runner).attach("prod-a", MEDIA)
-
-    def test_timeout_surfaces_as_driver_error(self) -> None:
-        runner = FakeRunner()
-        runner.script(
-            ["usbip", "attach"],
-            DriverError("command timed out after 7s: usbip attach"),
-        )
-        with pytest.raises(DriverError, match="timed out"):
-            attach_driver(runner).attach("prod-a", MEDIA)
-
-    def test_missing_binary_surfaces_as_driver_error(self) -> None:
-        runner = FakeRunner()
-        runner.script(["usbip"], DriverError("command not found: usbip"))
-        with pytest.raises(DriverError, match="not found"):
-            attach_driver(runner).attach("prod-a", MEDIA)
-
-    @pytest.mark.parametrize(
-        "media",
-        [
-            {},
-            {"host": "", "port": 3240, "busids": ["1-1"]},
-            {"host": "h", "port": "3240", "busids": ["1-1"]},
-            {"host": "h", "port": 0, "busids": ["1-1"]},
-            {"host": "h", "port": True, "busids": ["1-1"]},
-            {"host": "h", "port": 3240, "busids": []},
-            {"host": "h", "port": 3240, "busids": ["1-1", 7]},
-            {"host": "h", "port": 3240, "busids": "1-1"},
-        ],
-    )
-    def test_bad_media_shape(self, media: Body) -> None:
-        with pytest.raises(DriverError, match="usbip media"):
-            attach_driver(FakeRunner()).attach("prod-a", media)
-
-    def test_detach_detaches_each_parsed_port(self) -> None:
-        runner = FakeRunner()
-        runner.script(["usbip", "port"], CommandResult(0, PORT_OUTPUT_BOTH, ""))
-        runner.script(["usbip", "detach"], OK)
-        attach_driver(runner).detach()
-        assert runner.calls == [
-            ("usbip", "port"),
-            ("usbip", "detach", "-p", "0"),
-            ("usbip", "detach", "-p", "1"),
-        ]
-
-    def test_detach_handles_no_colon_port_variant(self) -> None:
-        runner = FakeRunner()
-        runner.script(["usbip", "port"], CommandResult(0, PORT_OUTPUT_NO_COLON, ""))
-        runner.script(["usbip", "detach"], OK)
-        attach_driver(runner).detach()
-        assert ("usbip", "detach", "-p", "0") in runner.calls
-
-    def test_detach_idempotent_when_nothing_attached(self) -> None:
-        runner = FakeRunner()
-        runner.script(["usbip", "port"], CommandResult(0, PORT_OUTPUT_EMPTY, ""))
-        driver = attach_driver(runner)
-        driver.detach()
-        driver.detach()
-        assert runner.calls == [("usbip", "port"), ("usbip", "port")]
-
-    def _attached(self, runner: FakeRunner) -> UsbipAttachDriver:
-        runner.script(["usbip", "attach"], OK)
-        driver = attach_driver(runner)
-        driver.attach("prod-a", MEDIA)
-        return driver
-
-    def test_poll_active_when_all_busids_imported(self) -> None:
-        runner = FakeRunner()
-        driver = self._attached(runner)
-        runner.script(["usbip", "port"], CommandResult(0, PORT_OUTPUT_BOTH, ""))
-        assert driver.poll().state is NodeState.ACTIVE
-
-    def test_poll_pending_when_partially_imported(self) -> None:
-        runner = FakeRunner()
-        driver = self._attached(runner)
-        runner.script(["usbip", "port"], CommandResult(0, PORT_OUTPUT_PARTIAL, ""))
-        status = driver.poll()
-        assert status.state is NodeState.PENDING
-        assert "1-1.2" in status.detail
-
-    def test_poll_idle_when_detached_and_none_imported(self) -> None:
-        runner = FakeRunner()
-        runner.script(["usbip", "port"], CommandResult(0, PORT_OUTPUT_EMPTY, ""))
-        assert attach_driver(runner).poll().state is NodeState.IDLE
-
-    def test_poll_error_on_unparseable_output_without_raising(self) -> None:
-        runner = FakeRunner()
-        driver = self._attached(runner)
-        runner.script(["usbip", "port"], CommandResult(0, "kernel spew\nnonsense", ""))
-        status = driver.poll()
-        assert status.state is NodeState.ERROR
-        assert "unparseable" in status.detail
-
-    def test_poll_error_on_command_failure_without_raising(self) -> None:
-        runner = FakeRunner()
-        driver = self._attached(runner)
-        runner.script(["usbip", "port"], CommandResult(1, "", "open vhci_driver"))
-        assert driver.poll().state is NodeState.ERROR
-
-    def test_poll_error_when_runner_raises(self) -> None:
-        runner = FakeRunner()
-        driver = self._attached(runner)
-        runner.script(["usbip", "port"], DriverError("command not found: usbip"))
-        status = driver.poll()
-        assert status.state is NodeState.ERROR
-        assert "not found" in status.detail
-
-    def test_describe_is_none_and_satisfies_protocol(self) -> None:
-        driver = attach_driver(FakeRunner())
-        assert driver.describe() is None
-        assert isinstance(driver, Driver)
-
-
-# --- usbip producer ---------------------------------------------------------
-
-
-def bind_driver(runner: FakeRunner) -> UsbipBindDriver:
-    return UsbipBindDriver(
-        runner, host="192.168.7.10", busids=["1-1", "1-1.2"], timeout=7.0
-    )
-
-
-class TestUsbipBind:
-    def test_describe_advertises_media(self) -> None:
-        assert bind_driver(FakeRunner()).describe() == MEDIA
-
-    def test_attach_refused_on_producer(self) -> None:
-        with pytest.raises(DriverError, match="producer driver"):
-            bind_driver(FakeRunner()).attach("x", {})
-
-    def test_detach_is_noop(self) -> None:
-        runner = FakeRunner()
-        bind_driver(runner).detach()
-        assert runner.calls == []
-
-    def test_bind_and_unbind_run_per_busid(self) -> None:
-        runner = FakeRunner()
-        runner.script(["usbip", "bind"], OK)
-        runner.script(["usbip", "unbind"], OK)
-        driver = bind_driver(runner)
-        driver.bind()
-        driver.unbind()
-        assert runner.calls == [
-            ("usbip", "bind", "-b", "1-1"),
-            ("usbip", "bind", "-b", "1-1.2"),
-            ("usbip", "unbind", "-b", "1-1"),
-            ("usbip", "unbind", "-b", "1-1.2"),
-        ]
-
-    def test_bind_failure_includes_stderr(self) -> None:
-        runner = FakeRunner()
-        runner.script(
-            ["usbip", "bind"],
-            CommandResult(1, "", "usbip: error: bind failed: no such device"),
-        )
-        with pytest.raises(DriverError, match="no such device"):
-            bind_driver(runner).bind()
-
-    def test_poll_active_when_all_busids_local(self) -> None:
-        runner = FakeRunner()
-        runner.script(["usbip", "list", "-l"], CommandResult(0, LIST_LOCAL_OUTPUT, ""))
-        assert bind_driver(runner).poll().state is NodeState.ACTIVE
-
-    def test_poll_error_names_missing_busids(self) -> None:
-        runner = FakeRunner()
-        runner.script(
-            ["usbip", "list", "-l"],
-            CommandResult(0, " - busid 1-1 (0557:2419)\n   x : y\n", ""),
-        )
-        status = bind_driver(runner).poll()
-        assert status.state is NodeState.ERROR
-        assert "1-1.2" in status.detail
-
-    def test_poll_error_on_command_failure_without_raising(self) -> None:
-        runner = FakeRunner()
-        runner.script(["usbip", "list"], DriverError("command not found: usbip"))
-        assert bind_driver(runner).poll().state is NodeState.ERROR
-
-    def test_empty_busids_rejected(self) -> None:
-        with pytest.raises(DriverError, match="at least one busid"):
-            UsbipBindDriver(FakeRunner(), host="h", busids=[])
 
 
 # --- sim --------------------------------------------------------------------
@@ -438,7 +183,7 @@ class TestIgmpJoinDriver:
             mreq,
         ) in sock.setsockopt_calls
         assert driver.poll() == DriverStatus(
-            NodeState.ACTIVE, "member of 239.10.0.7:5004"
+            NodeState.ACTIVE, "member of 239.10.0.7:5004; media flow unverified"
         )
         assert driver.describe() is None
         assert isinstance(driver, Driver)
@@ -460,7 +205,9 @@ class TestIgmpJoinDriver:
         first, second = factory.sockets
         assert first.closed
         assert not second.closed
-        assert driver.poll().detail == "member of 239.10.0.8:5004"
+        assert (
+            driver.poll().detail == "member of 239.10.0.8:5004; media flow unverified"
+        )
 
     @pytest.mark.parametrize(
         "media",

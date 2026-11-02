@@ -82,7 +82,12 @@ class IgmpJoinDriver:
             self._last_error = str(exc)
             raise
         self.detach()
-        sock = self._socket_factory()
+        try:
+            sock = self._socket_factory()
+        except OSError as exc:
+            self._last_error = f"join {group}:{port} failed: {exc}"
+            raise DriverError(self._last_error) from exc
+        self._sock = sock
         try:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             sock.bind(("", port))
@@ -91,10 +96,14 @@ class IgmpJoinDriver:
             )
             sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
         except OSError as exc:
-            sock.close()
             self._last_error = f"join {group}:{port} failed: {exc}"
+            try:
+                sock.close()
+            except OSError as close_exc:
+                self._last_error += f"; socket teardown unconfirmed: {close_exc}"
+            else:
+                self._sock = None
             raise DriverError(self._last_error) from exc
-        self._sock = sock
         self._joined = (group, port)
         self._last_error = ""
 
@@ -102,7 +111,11 @@ class IgmpJoinDriver:
         """Leave the group by closing the socket. Idempotent; also
         clears any recorded attach failure."""
         if self._sock is not None:
-            self._sock.close()
+            try:
+                self._sock.close()
+            except OSError as exc:
+                self._last_error = f"membership teardown unconfirmed: {exc}"
+                raise DriverError(self._last_error) from exc
             self._sock = None
         self._joined = None
         self._last_error = ""
@@ -112,7 +125,9 @@ class IgmpJoinDriver:
             return DriverStatus(NodeState.ERROR, self._last_error)
         if self._sock is not None and self._joined is not None:
             group, port = self._joined
-            return DriverStatus(NodeState.ACTIVE, f"member of {group}:{port}")
+            return DriverStatus(
+                NodeState.ACTIVE, f"member of {group}:{port}; media flow unverified"
+            )
         return DriverStatus(NodeState.IDLE)
 
     def describe(self) -> Body | None:

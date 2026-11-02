@@ -12,7 +12,7 @@ import json
 from typing import Any
 
 from yoke.core.frames import canonical_bytes, encode
-from yoke.core.types import FrameType
+from yoke.core.types import INTENT_CACHE_TTL, PEER_FORGET, PEER_TIMEOUT, FrameType
 from yoke.snoop import Snooper, render_json, render_text
 
 PSK = b"snoop-site-secret-0123"
@@ -330,12 +330,291 @@ def test_render_json_is_single_line_sorted_keys() -> None:
 
 def test_snooper_has_no_send_path() -> None:
     """The snooper takes no socket and exposes nothing that transmits:
-    the only inputs are (raw, now) via observe — a type-level guarantee
-    that it cannot send even in principle."""
+    inputs consist of raw datagrams and injected timestamps, with no
+    network capability or send callback."""
     parameters = list(inspect.signature(Snooper.__init__).parameters)
-    assert parameters == ["self", "psk"]
+    assert parameters == ["self", "psk", "now", "wall_time"]
     snooper = Snooper(PSK)
     for name in ("send", "sendto", "socket", "sock", "transmit", "write"):
         assert not hasattr(snooper, name)
     public = [name for name in vars(snooper) if not name.startswith("_")]
     assert sorted(public) == ["counts", "intents", "nodes"]
+
+
+def test_ack_observed_before_intent_preserves_fate() -> None:
+    snooper = Snooper(PSK)
+    one(snooper, ack(applied=False, reason="kind-mismatch", seq=1), T0)
+    one(snooper, intent(), T0 + 1)
+    assert snooper.intents["tv-den"].acked is True
+    assert snooper.intents["tv-den"].applied is False
+    assert snooper.intents["tv-den"].reason == "kind-mismatch"
+
+
+def test_unauthenticated_early_ack_never_changes_intent() -> None:
+    snooper = Snooper(PSK)
+    one(snooper, ack(psk=WRONG_PSK), T0)
+    one(snooper, intent(), T0 + 1)
+    assert snooper.intents["tv-den"].acked is False
+
+
+def test_invalid_body_does_not_enter_topology() -> None:
+    for frame_type, body in (
+        (
+            FrameType.ANN,
+            {
+                "role": "consumer",
+                "kind": "hdmi",
+                "state": "idle",
+                "name": "x",
+                "pairing": {"producer": None, "version": [-1, "cli-x"]},
+            },
+        ),
+        (
+            FrameType.INT,
+            {
+                "op": "pair",
+                "consumer": "bad\n",
+                "producer": "cam-1",
+                "version": [1, "cli-x"],
+            },
+        ),
+        (
+            FrameType.ACK,
+            {"version": [1, "cli-x"], "applied": "true", "reason": "applied"},
+        ),
+    ):
+        snooper = Snooper(PSK)
+        record = one(snooper, encode(frame_type, "cli-x", 1, TS, body, PSK), T0)
+        assert record.verdict == "malformed"
+        assert not snooper.nodes and not snooper.intents
+        assert record.frame is not None  # Bad bodies remain diagnosable.
+
+
+def test_control_retention_is_bounded_and_expires(monkeypatch: Any) -> None:
+    import yoke.snoop as snoop
+
+    monkeypatch.setattr(snoop, "MAX_TRACKED", 3)
+    snooper = Snooper(PSK)
+    for index in range(5):
+        origin = f"node-{index}"
+        one(snooper, ann_producer(origin), T0)
+        one(snooper, intent(consumer=f"tv-{index}", origin=f"cli-{index}"), T0)
+        one(snooper, ack(consumer=f"tv-{index}"), T0)
+    for mapping in (
+        snooper.nodes,
+        snooper.intents,
+        snooper._high_seq,
+        snooper._high_canon,
+        snooper._replay_seen,
+        snooper._intent_seen,
+        snooper._acks,
+    ):
+        assert len(mapping) <= 3
+    one(snooper, b"junk", T0 + PEER_FORGET + 1)
+    assert not snooper.nodes and not snooper._high_seq and not snooper._high_canon
+    one(snooper, b"junk", T0 + INTENT_CACHE_TTL + 1)
+    assert not snooper.intents and not snooper._acks
+
+
+def test_text_output_escapes_untrusted_line_breaks() -> None:
+    snooper = Snooper(PSK)
+    raw = ann_consumer(err="failure\nforged-line\r")
+    record = one(snooper, raw, T0)
+    text = render_text(record)
+    assert "\n" not in text and "\r" not in text
+    assert "failure\\nforged-line\\r" in text
+    assert json.loads(render_json(record))["body"]["err"] == "failure\nforged-line\r"
+
+
+def test_topology_does_not_expose_mutable_frame_body() -> None:
+    snooper = Snooper(PSK)
+    record = one(snooper, ann_producer(), T0)
+    assert record.frame is not None
+    record.frame.body["media"]["port"] = 9999
+    topology = snooper.topology()
+    assert topology["producers"]["cam-1"]["media"]["port"] == 5004
+    topology["producers"]["cam-1"]["media"]["port"] = 7777
+    assert snooper.topology()["producers"]["cam-1"]["media"]["port"] == 5004
+
+
+def test_node_liveness_uses_last_accepted_announce() -> None:
+    snooper = Snooper(PSK)
+    one(snooper, ann_producer(seq=2), T0)
+    one(snooper, ann_producer(seq=1), T0 + 7)
+    producer = snooper.topology()["producers"]["cam-1"]
+    assert producer["last_seen"] == T0
+    assert producer["live"] is False
+
+
+def test_expired_early_ack_cannot_attach_to_new_observation() -> None:
+    snooper = Snooper(PSK)
+    one(snooper, ack(), T0)
+    one(snooper, intent(), T0 + INTENT_CACHE_TTL + 1)
+    assert snooper.intents["tv-den"].acked is False
+
+
+def test_announce_preserves_driver_readiness_evidence() -> None:
+    body = json.loads(ann_producer())["body"]
+    body["driver_status"] = {"detail": "backend ready"}
+    raw = encode(FrameType.ANN, "cam-1", 1, TS, body, PSK)
+    snooper = Snooper(PSK)
+    record = one(snooper, raw, T0)
+    assert snooper.topology()["producers"]["cam-1"]["driver_status"] == {
+        "detail": "backend ready"
+    }
+    assert "backend ready" in render_text(record)
+
+
+def test_topology_labels_open_mode_without_implying_authentication() -> None:
+    snooper = Snooper(OPEN)
+    one(snooper, ann_producer(psk=OPEN), T0)
+    assert snooper.topology()["authentication"] == "open-unauthenticated"
+    assert Snooper(PSK).topology()["authentication"] == "site-psk"
+
+
+def test_silent_network_liveness_ages_without_datagrams() -> None:
+    snooper = Snooper(PSK)
+    one(snooper, ann_producer(), T0)
+    counts = dict(snooper.counts)
+    replay = dict(snooper._high_seq)
+
+    assert snooper.topology(now=T0 + PEER_TIMEOUT)["producers"]["cam-1"]["live"]
+    topology = snooper.topology(now=T0 + PEER_TIMEOUT + 0.001)
+    assert topology["producers"]["cam-1"]["live"] is False
+    assert topology["producers"]["cam-1"]["last_seen"] == T0
+    assert snooper.topology()["producers"]["cam-1"]["live"] is False
+    assert snooper.counts == counts
+    assert snooper._high_seq == replay
+    for name in ("send", "sendto", "socket", "sock", "transmit", "write"):
+        assert not hasattr(snooper, name)
+
+
+def test_silent_network_expires_retained_caches_without_datagrams() -> None:
+    snooper = Snooper(PSK)
+    one(snooper, ann_producer(), T0)
+    one(snooper, intent(), T0)
+    one(snooper, ack(), T0)
+    counts = dict(snooper.counts)
+
+    topology = snooper.topology(now=T0 + PEER_FORGET + 1)
+    assert topology["producers"] == topology["consumers"] == {}
+    assert (
+        not snooper._high_seq and not snooper._high_canon and not snooper._replay_seen
+    )
+    assert topology["intents"]["tv-den"]["acked"] is True
+    topology = snooper.topology(now=T0 + INTENT_CACHE_TTL + 1)
+    assert topology["intents"] == {}
+    assert not snooper._acks and not snooper._intent_seen
+    assert snooper.counts == counts
+
+
+def test_bad_signature_terminal_controls_are_inert_but_json_preserves_data() -> None:
+    import unicodedata
+
+    controls = "".join(chr(code) for code in (*range(32), *range(127, 160)))
+    attack = "\x1b]52;c;aGVsbG8=\x07\u009b31m\u202e\u2066\u2028\u2029\U000e0001"
+    payload = attack + controls + " Café 中🙂"
+    snooper = Snooper(PSK)
+    record = one(snooper, ann_consumer(psk=WRONG_PSK, err=payload), T0)
+    assert record.verdict == "bad-sig"
+    line = render_text(record)
+    assert not any(
+        unicodedata.category(char) in ("Cc", "Cf", "Cs", "Zl", "Zp") for char in line
+    )
+    assert "\\x1b]52;c;aGVsbG8=\\x07" in line
+    assert "\\x9b31m\\u202e\\u2066\\u2028\\u2029\\U000e0001" in line
+    assert "Café 中🙂" in line
+    assert json.loads(render_json(record))["body"]["err"] == payload
+    assert snooper.nodes == {} and snooper._high_seq == {}
+
+
+def test_corrected_rejected_version_cannot_misattribute_applied_ack() -> None:
+    snooper = Snooper(PSK)
+    one(snooper, intent(producer="tv-den"), T0)
+    one(snooper, ack(applied=False, reason="self-pair", seq=1), T0 + 0.1)
+    one(snooper, intent(producer="cam-1", seq=2), T0 + 0.2)
+    pending = snooper.topology()["intents"]["tv-den"]
+    assert pending["producer"] == "cam-1"
+    assert pending["ambiguous"] is True
+    assert pending["acked"] is False and pending["applied"] is None
+    one(snooper, ack(seq=2), T0 + 0.3)
+    ambiguous = snooper.topology()["intents"]["tv-den"]
+    assert ambiguous["producer"] == "cam-1"
+    assert ambiguous["acked"] is True and ambiguous["ack_applied"] is True
+    assert ambiguous["applied"] is None
+    one(snooper, intent(version=(2, "cli-x"), seq=3), T0 + 0.4)
+    one(snooper, ack(version=(2, "cli-x"), seq=3), T0 + 0.5)
+    resolved = snooper.topology()["intents"]["tv-den"]
+    assert resolved["applied"] is True and "ambiguous" not in resolved
+
+
+def test_same_version_conflict_is_ambiguous_even_without_rejection_observed() -> None:
+    snooper = Snooper(PSK)
+    one(snooper, ack(seq=1), T0)
+    one(snooper, intent(producer="cam-1"), T0 + 0.1)
+    assert snooper.intents["tv-den"].applied is True
+    one(snooper, intent(producer="cam-2", seq=2), T0 + 0.2)
+    one(snooper, ack(seq=2), T0 + 0.3)
+    assert snooper.intents["tv-den"].ambiguous is True
+    assert snooper.intents["tv-den"].applied is None
+
+
+def test_unauthenticated_correction_and_unknown_extensions_do_not_change_identity() -> (
+    None
+):
+    snooper = Snooper(PSK)
+    one(snooper, intent(producer="cam-1"), T0)
+    one(snooper, ack(seq=1), T0 + 0.1)
+    one(snooper, intent(producer="cam-2", seq=2, psk=WRONG_PSK), T0 + 0.2)
+    body = json.loads(intent())["body"]
+    body["future-extension"] = {"diagnostic": "ignored"}
+    one(snooper, encode(FrameType.INT, "cli-x", 2, TS, body, PSK), T0 + 0.3)
+    assert snooper.intents["tv-den"].producer == "cam-1"
+    assert snooper.intents["tv-den"].applied is True
+    assert snooper.intents["tv-den"].ambiguous is False
+
+
+def test_future_sequence_matches_agent_and_cannot_hide_legitimate_announce() -> None:
+    from yoke.core.frames import decode
+    from yoke.core.node import Node
+    from yoke.core.types import (
+        MAX_SEQUENCE,
+        NS_PER_S,
+        Kind,
+        NodeConfig,
+        Persist,
+        PersistedState,
+        Role,
+    )
+
+    node = Node(
+        NodeConfig("relay", Role.PRODUCER, Kind.HDMI),
+        state=PersistedState(),
+        now=T0,
+        wall_time=TS,
+    )
+    save = node.start(T0)[0]
+    assert isinstance(save, Persist)
+    node.on_persist_result(save.request_id, True, T0)
+    snooper = Snooper(PSK, now=T0, wall_time=TS)
+    future = ann_producer(seq=MAX_SEQUENCE)
+    node.on_frame(decode(future, PSK), future, T0)
+    assert node._drops["stale"] == 1
+    record = one(snooper, future, T0)
+    assert record.verdict == "stale" and record.frame is not None
+    assert not snooper._high_seq and not snooper.nodes
+    legitimate = ann_producer(seq=int(TS) * NS_PER_S + 1)
+    node.on_frame(decode(legitimate, PSK), legitimate, T0 + 0.1)
+    assert one(snooper, legitimate, T0 + 0.1).verdict == "ok"
+    assert "cam-1" in snooper.nodes
+    assert node._drops["stale"] == 1
+
+
+def test_future_sequence_ceiling_advances_from_injected_wall_origin() -> None:
+    from yoke.core.types import NS_PER_S, SEQ_FUTURE_MARGIN_S
+
+    elapsed = 2.5
+    ceiling = (int(TS + elapsed) + SEQ_FUTURE_MARGIN_S) * NS_PER_S
+    for seq, expected in ((ceiling, "ok"), (ceiling + 1, "stale")):
+        snooper = Snooper(PSK, now=T0, wall_time=TS)
+        assert one(snooper, ann_producer(seq=seq), T0 + elapsed).verdict == expected

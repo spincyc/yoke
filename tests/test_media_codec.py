@@ -228,3 +228,152 @@ def test_encode_stage_reads_meta_target_when_no_state() -> None:
     )
     slices = stage.process(frame, NOW).emit
     assert all(s.meta["ratio"] == 5.0 for s in slices)
+
+
+def test_codec_preserves_modeled_raster_size_and_capture_time() -> None:
+    from yoke.media.stages.source import SyntheticSource
+
+    frame = SyntheticSource(width=1920, height=1080, fps=60).frame(NOW).emit[0]
+    for codec, expected in (
+        (PassthroughCodec(), 1920 * 1080 * 3),
+        (RatioCodec(), int(1920 * 1080 * 3 / 2.5)),
+    ):
+        slices = codec.encode(frame, 2.5)
+        assert all(s.meta["frame_bytes"] == expected for s in slices)
+        assert b"".join(s.payload for s in slices) == frame.payload
+        decoded = codec.decode(slices)
+        assert decoded.meta["frame_bytes"] == expected
+        assert decoded.meta["capture_now"] == NOW
+
+
+def test_direct_decode_deduplicates_identical_slices() -> None:
+    codec = PassthroughCodec()
+    frame = make_frame(b"abcdefgh")
+    slices = codec.encode(frame, 1)
+    decoded = codec.decode([slices[0], *slices, slices[-1]])
+    assert decoded.payload == frame.payload
+    assert decoded.meta["incomplete"] is False
+
+
+def test_direct_decode_rejects_conflicting_identity() -> None:
+    import dataclasses
+
+    import pytest
+
+    codec = PassthroughCodec()
+    slices = codec.encode(make_frame(b"abcdefgh"), 1)
+    conflicts = [
+        dataclasses.replace(slices[1], seq=8),
+        dataclasses.replace(slices[1], source_digest="0" * 64),
+        slices[1].with_payload(slices[1].payload, slice_count=3),
+        slices[1].with_payload(slices[1].payload, slice_index=4),
+        slices[1].with_payload(slices[1].payload, slice_index=True),
+        slices[1].with_payload(slices[1].payload, slice_count="4"),
+    ]
+    for bad in conflicts:
+        with pytest.raises(ValueError):
+            codec.decode([slices[0], bad])
+    with pytest.raises(ValueError):
+        codec.decode([slices[0], slices[0].with_payload(b"bad")])
+
+
+def test_decode_stage_drops_malformed_slice_metadata() -> None:
+    codec = PassthroughCodec()
+    original = codec.encode(make_frame(b"abcdefgh"), 1)[0]
+    for patch in (
+        {"slice_count": 0},
+        {"slice_count": -1},
+        {"slice_count": 65536},
+        {"slice_count": True},
+        {"slice_index": -1},
+        {"slice_index": 4},
+        {"slice_index": 1.0},
+        {"ratio": float("nan")},
+        {"lossless": "false"},
+    ):
+        stage = CodecDecodeStage(codec)
+        out = stage.process(original.with_payload(original.payload, **patch), NOW)
+        assert not out.emit
+        assert out.events[0].kind is EventKind.DROP
+        assert not stage._buffers
+
+
+def test_decode_stage_conflicting_duplicates_cannot_overwrite_bytes() -> None:
+    codec = PassthroughCodec()
+    stage = CodecDecodeStage(codec)
+    slices = codec.encode(make_frame(b"abcdefgh"), 1)
+    stage.process(slices[0], NOW)
+    duplicate = stage.process(slices[0], NOW)
+    assert duplicate.events[0].detail["why"] == "duplicate-slice"
+    bad = stage.process(slices[0].with_payload(b"bad"), NOW)
+    assert bad.events[0].detail["why"] == "conflicting-slice"
+    assert not stage._buffers
+    assert not stage.process(slices[1], NOW).emit
+    assert not stage.flush(NOW).emit
+
+
+def test_completed_frame_duplicates_do_not_rebuild_partial_state() -> None:
+    codec = PassthroughCodec()
+    stage = CodecDecodeStage(codec, done_window=2)
+    slices = codec.encode(make_frame(b"abcdefgh"), 1)
+    for sl in slices:
+        stage.process(sl, NOW)
+    for sl in slices:
+        out = stage.process(sl, NOW)
+        assert not out.emit
+        assert out.events[0].detail["why"] == "frame-already-emitted"
+    assert not stage._buffers
+    for seq in range(8, 15):
+        for sl in codec.encode(make_frame(b"abc", seq=seq), 1):
+            stage.process(sl, NOW)
+    assert len(stage._done) == 2
+
+
+def test_decode_stage_capacity_evicts_oldest_partial_frame() -> None:
+    codec = PassthroughCodec()
+    stage = CodecDecodeStage(codec, max_frames=2)
+    frames = [codec.encode(make_frame(b"abcdefgh", seq=i), 1) for i in range(3)]
+    for slices in frames:
+        out = stage.process(slices[0], NOW)
+    assert len(stage._buffers) == 2
+    assert out.events[0].detail["why"] == "frame-capacity"
+    assert out.events[0].seq == 0
+    assert stage._bytes == 4
+    assert (
+        stage.process(frames[0][1], NOW).events[0].detail["why"]
+        == "frame-already-emitted"
+    )
+    stage.flush(NOW)
+    assert stage._bytes == 0
+
+
+def test_decode_stage_bounds_total_and_per_frame_bytes() -> None:
+    codec = PassthroughCodec(n_slices=2)
+    first = codec.encode(make_frame(b"abcd", seq=0), 1)
+    second = codec.encode(make_frame(b"efgh", seq=1), 1)
+    stage = CodecDecodeStage(codec, max_bytes=3)
+    stage.process(first[0], NOW)
+    out = stage.process(second[0], NOW)
+    assert out.events[0].detail["why"] == "buffer-byte-budget"
+    assert stage._bytes == 2
+    stage = CodecDecodeStage(codec, max_frame_bytes=3)
+    stage.process(first[0], NOW)
+    out = stage.process(first[1], NOW)
+    assert not out.emit
+    assert out.events[0].detail["why"] == "frame-byte-budget"
+    assert stage._bytes == 0
+
+
+def test_nonfinite_ratio_rejected_and_slice_count_bounded() -> None:
+    import math
+
+    import pytest
+
+    for ratio in (math.nan, math.inf, -math.inf, True):
+        with pytest.raises(ValueError):
+            RatioCodec().encode(make_frame(b"abc"), ratio)
+    for count in (0, -1, 65536, True, 1.5):
+        with pytest.raises(ValueError):
+            PassthroughCodec(count)
+        with pytest.raises(ValueError):
+            RatioCodec(count)

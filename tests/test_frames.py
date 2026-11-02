@@ -18,6 +18,7 @@ import pytest
 from yoke.core.frames import EncodeError, FrameDrop, canonical_bytes, decode, encode
 from yoke.core.types import (
     MAX_FRAME_BYTES,
+    MAX_JSON_DEPTH,
     DropReason,
     Frame,
     FrameType,
@@ -557,3 +558,63 @@ def test_bad_sig_format_drops_as_auth_never_raises(sig: str) -> None:
     with pytest.raises(FrameDrop) as excinfo_keyed:
         decode(_compact(obj), PSK)
     assert excinfo_keyed.value.reason is DropReason.AUTH
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        b'{"v":1,"v":1,"t":"bye","id":"n","seq":1,"ts":0,"body":{},"sig":""}',
+        b'{"v":1,"t":"bye","id":"n","seq":1,"ts":NaN,"body":{},"sig":""}',
+        b'{"v":1,"t":"bye","id":"n","seq":1,"ts":0,"body":{"x":Infinity},"sig":""}',
+        b'{"v":1,"t":"bye","id":"n","seq":1,"ts":0,"body":{"x":"\\ud800"},"sig":""}',
+        b'{"v":1,"t":[],"id":"n","seq":1,"ts":0,"body":{},"sig":""}',
+    ],
+)
+def test_adversarial_json_is_framedrop_only(raw: bytes) -> None:
+    for psk in (PSK, OPEN):
+        with pytest.raises(FrameDrop):
+            decode(raw, psk)
+
+
+def test_nested_json_work_is_bounded_before_authentication() -> None:
+    raw = (
+        b'{"v":1,"t":"bye","id":"n","seq":1,"ts":0,"body":{"x":'
+        + b"[" * 40
+        + b"0"
+        + b"]" * 40
+        + b'},"sig":""}'
+    )
+    assert len(raw) < MAX_FRAME_BYTES
+    with pytest.raises(FrameDrop) as exc:
+        decode(raw, OPEN)
+    assert exc.value.reason is DropReason.MALFORMED
+
+
+@pytest.mark.parametrize("seq", [1.5, "1", (1 << 63), True])
+def test_encode_rejects_noninteger_or_out_of_range_sequence(seq: Any) -> None:
+    with pytest.raises(EncodeError):
+        encode(FrameType.BYE, ORIGIN, seq, TS, {}, PSK)
+
+
+@pytest.mark.parametrize("ts", [float("nan"), float("inf"), -float("inf"), 10**1000])
+def test_encode_rejects_nonfinite_or_unrepresentable_timestamp(ts: Any) -> None:
+    with pytest.raises(EncodeError):
+        encode(FrameType.BYE, ORIGIN, 1, ts, {}, PSK)
+
+
+def test_trailing_newline_cannot_extend_origin_id() -> None:
+    with pytest.raises(EncodeError):
+        encode(FrameType.BYE, "node\n", 1, TS, {}, PSK)
+    with pytest.raises(FrameDrop):
+        decode(_compact(_open_frame(id="node\n")), OPEN)
+
+
+def test_json_depth_limit_round_trips_at_exact_wire_boundary() -> None:
+    value: Any = 0
+    for _ in range(MAX_JSON_DEPTH - 2):
+        value = [value]
+    body = {"nested": value}
+    raw = encode(FrameType.EVT, ORIGIN, 1, TS, body, PSK)
+    assert decode(raw, PSK).body == body
+    with pytest.raises(EncodeError):
+        encode(FrameType.EVT, ORIGIN, 2, TS, {"nested": [value]}, PSK)

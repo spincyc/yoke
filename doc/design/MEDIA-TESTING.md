@@ -1,73 +1,120 @@
-# Verifying the media pipeline
+# Verifying the reference media pipeline
 
-The rule: **every network path is proven over loopback on one host before
-any two-host run.** The layers, cheapest first:
+Every network path is proven over loopback on one host before a two-host
+run. All commands here exercise synthetic source bytes and codec models,
+not physical HDMI capture/display, a real JPEG XS/VC-2 codec, or hardware
+throughput. The media plane is separate from YWP control traffic. Multicast
+here carries unprotected reference content; ADR 0011 keeps protected HDCP
+ciphertext relay point-to-point.
 
-## 1. Offline (no sockets) — the bulk of the proof
+## Offline gate
 
-Every stage is sans-I/O and has its own suite; the whole pipeline is
-exercised over the seeded network simulator (`tests/media_simnet.py`) with
-drop / dup / reorder / delay / corrupt, including FEC recovery and rate
-adaptation (`tests/test_media_pipeline.py`). Deterministic, no hardware.
+The seeded simulator covers drop, duplication, reordering, delay,
+corruption, FEC recovery, jitter, and rate adaptation. It uses the same
+sans-I/O stages as the socket shell. Run the complete repository gate:
 
-## 2. Loopback (real sockets, one host) — the gate before two hosts
-
-`tests/test_media_loopback.py` runs a real `SenderRunner` and
-`ReceiverRunner` over `127.0.0.1`, verifying bit-exact delivery, the
-passive snooper's non-interference, malformed-datagram handling, the
-feedback loop, multi-fragment reassembly, dup-path FEC, and measured
-loopback latency. These skip cleanly where a sandbox forbids sockets.
-
-Both 1 and 2 run under one command:
-
-```
-make verify        # ruff + mypy --strict + pytest (offline + loopback)
+```sh
+make verify
 ```
 
-This is the **single-host gate**. It must be green before touching two
-hosts.
+`yoke-media probe --frames 30` gates on synthetic frame integrity;
+`simulate`, `trace`, and `snoop` without `--live` run offline. `--encoding
+jpegxs` and `--encoding vc2` select ratio models, not codec libraries.
+XOR FEC is offline-only because no parity wire representation is defined;
+live UDP accepts `--fec none` or `--fec dup`.
 
-## 3. Two hosts (real fabric) — one command on each
+Simulation JSON distinguishes actual simulated wire arrivals, injected
+network drops/duplicates, post-FEC data delivery, and recovered data. Loss
+uses all known source identities, including never-arriving first/last
+frames. Receiver reports return on a reliable modeled 0.5 ms reverse link;
+rate changes are causal model behavior, not a measured hardware response.
+The report adapter uses receiver packet inter-arrival jitter without
+assuming source and receiver clocks align. `--mtu` is the complete IPv4
+path MTU (98..65535); the packetizer reserves transport/framing overhead.
+The virtual link supports time up to 3600 seconds, fault delays/jitter up
+to 60 seconds, and a cumulative 100000-step budget. Unsupported inputs or
+exhausted work return an error; reduce the run or timing magnitudes.
+Finite runs finalize sender parity and receiver buffers before reporting,
+including diagnostics for incomplete assembly.
 
-Once `make verify` is green, verify across the real network. One command
-per host:
+## Single-host real sockets
 
+`tests/test_media_loopback.py` tests unicast UDP delivery, malformed
+feedback/datagrams, finite inputs, cancellation, fragmentation, duplicate
+FEC, and sender-to-sink time on a shared monotonic clock.
+`tests/test_media_multicast.py` adds actual IPv4 multicast on `127.0.0.1`:
+sender, receiver, and an independent passive observer each own a socket.
+It proves fanout, identical sender bytes and receiver counters with and
+without the observer, no observer application sends, explicit designated
+feedback, and socket/membership cleanup. Unsupported or forbidden socket
+errors may skip; timeouts, missing data, and unrelated I/O errors fail.
+
+To see three independent processes, run these in three terminals on one
+host, starting the receiver and snooper first:
+
+```sh
+yoke-media run --role receiver --group 239.255.42.42 --port 5004 \
+  --interface 127.0.0.1 --ttl 0 --loopback --duration 15 --snoop
 ```
-# host A — the display end (receiver), join the group and report:
-make media-recv                      # or: yoke-media run --role receiver --snoop
 
-# host B — the source end (sender), stream to host A:
-make media-send PEER=<host-A-ip>     # or: yoke-media run --role sender --peer <A> --frames 600
+```sh
+yoke-media snoop --live --group 239.255.42.42 --port 5004 \
+  --interface 127.0.0.1 --ttl 0 --loopback --duration 15
 ```
 
-The receiver prints end-to-end metrics (frames ok/bad, loss, FEC
-recoveries, effective ratio, latency) and, with `--snoop`, the
-reconstructed topology. Vary the run without editing anything:
-
-```
-make media-send PEER=10.0.0.5 ENCODING=jpegxs FEC=dup FRAMES=1200
+```sh
+yoke-media run --role sender --group 239.255.42.42 --port 5004 \
+  --interface 127.0.0.1 --ttl 0 --loopback --frames 300
 ```
 
-## 4. Passive verification, any layer
+Sender source ports are ephemeral; listeners share the destination port.
+`--no-loopback` disables same-host multicast delivery. The receiver's
+`--snoop` is an additional in-process tap, while `snoop --live` is the
+independent wire observer. Ctrl-C closes sockets; `--duration` provides a
+bounded live observation. Timestamps are actual monotonic arrivals.
 
-A third, non-participating host (or process) verifies a live stream
-without touching it:
+## Two hosts on a real fabric
 
+After the single-host gate passes, run the same three commands with the
+local AV-network interface address on **each** host instead of `127.0.0.1`,
+and `--ttl 1` instead of `0`. Keep group and port identical. Receiver and
+snooper may share one host or run on separate hosts. The sender needs no
+peer address in multicast mode. `0.0.0.0` lets the kernel choose the
+interface; set an explicit local IPv4 address on multihomed machines.
+
+An explicit unicast alternative is:
+
+```sh
+# receiver host A
+yoke-media run --role receiver --unicast --port 5004 --duration 15 --snoop
+# sender host B
+yoke-media run --role sender --unicast --peer <host-A-ip> --port 5004 --frames 300
 ```
-yoke-media snoop            # join the group, render per-stream health, transmit nothing
-```
 
-This is the media analogue of `yoke snoop` for the control plane — the
-conformance oracle. It reconstructs loss, reorder, dup, FEC recovery, and
-frame integrity from the wire alone.
+A separate same-port unicast listener cannot provide multicast's fanout
+guarantee. Use multicast for concurrent passive debugging.
 
-## What "green" means before hardware
+Feedback defaults off. A single designated active receiver may supply
+`--feedback-host <sender-ip> --feedback-port <sender-source-port>` to
+exercise the reference feedback channel. The runner API exposes the
+sender socket's selected source port; automated loopback tests use it.
+The CLI does not discover that port or elect a reporter. Feedback targets
+must be literal unicast IPv4 addresses; snoopers never send feedback.
+Do not configure every multicast receiver as a reporter: this reference
+does not implement multi-receiver aggregation or election.
 
-`make verify` proves the control plane, the media pipeline logic, the wire
-format, FEC recovery, jitter handling, rate adaptation, and the real
-socket path on one host — everything except the physical media front-end
-(capture/display) and the real fabric's behavior under load. Those are the
-⚠ bench items in `doc/research/HARDWARE.md` and the milestones in
-`doc/design/EDGE-DEVICES.md`. The two-host run closes the gap to the real
-network; the photodiode glass-to-glass rig closes it to physical
-latency.
+## Interpreting the result
+
+Receiver integrity counters describe synthetic frames. Passive wire
+observations infer packet continuity, duplication/reordering, frame
+boundaries, and arrival bitrate; they cannot infer unseen source stages
+or original content integrity from a header alone. Observer histories and
+inference limits appear in topology. Modeled compression ratios and
+modeled raster bandwidth are distinct from actual datagram byte counts.
+
+The shared-clock single-host test measures reference-software transit,
+including jitter playout. It is not physical glass-to-glass latency or a
+cross-host timing result. Real codec throughput, capture/display timing,
+switch load, and hardware behavior remain bench items in `HARDWARE.md`
+and `EDGE-DEVICES.md`.
+Unknown sink latency fields are `null`; measured zero remains `0.0`.

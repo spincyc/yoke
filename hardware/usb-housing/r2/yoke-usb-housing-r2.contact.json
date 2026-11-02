@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "mesh_sha256": "55dc109ba850569d339a86bc9a0b42037f8ab4a74be8b2cf707a0885b3420470",
+  "job_basename": "yoke-usb-housing-r2",
+  "expected_component_count": 2,
+  "envelope_mm": {
+    "minimum": [
+      0,
+      0,
+      0
+    ],
+    "maximum": [
+      220,
+      220,
+      220
+    ]
+  },
+  "components": {
+    "component-bdaf4e852134338c": {
+      "label": "R2 base",
+      "expected_bounds_mm": {
+        "minimum": [
+          3.0,
+          0.6,
+          0.0
+        ],
+        "maximum": [
+          79.400002,
+          35.400002,
+          10.0
+        ],
+        "tolerance_mm": 0.001
+      }
+    },
+    "component-0ee624bd4f505e29": {
+      "label": "R2 manufactured lid",
+      "expected_bounds_mm": {
+        "minimum": [
+          3.0,
+          42.599998,
+          0.0
+        ],
+        "maximum": [
+          79.400002,
+          77.400002,
+          11.48
+        ],
+        "tolerance_mm": 0.001
+      },
+      "policy": {
+        "maximum_bridge_span_mm": 6.2
+      },
+      "bridge_authority": "R2 design-review allowance only; not a print release. Unchanged R1 four AF5.25 nut-pocket roofs and 0.20mm sacrificial bore membranes; circumscribed span 6.063mm. The 0.45mm-deep exterior mark has 2mm broad strokes. Re-slice and review the exact R2 artifacts before printing."
+    }
+  }
+}

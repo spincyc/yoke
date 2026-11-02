@@ -44,3 +44,104 @@ def test_two_sockets_share_group_and_hear_sends() -> None:
 def test_loopback_disabled_socket_still_opens() -> None:
     sock = open_or_skip(loopback=False)
     sock.close()
+
+
+@pytest.mark.parametrize(
+    "group,port,kwargs",
+    [
+        ("127.0.0.1", PORT, {}),
+        ("239.1.2.3/24", PORT, {}),
+        ("239.1", PORT, {}),
+        ("ff02::1", PORT, {}),
+        (GROUP, 0, {}),
+        (GROUP, 65536, {}),
+        (GROUP, True, {}),
+        (GROUP, PORT, {"interface": "eth0"}),
+        (GROUP, PORT, {"interface": "239.1.1.1"}),
+        (GROUP, PORT, {"interface": "255.255.255.255"}),
+        (GROUP, PORT, {"ttl": 2}),
+        (GROUP, PORT, {"ttl": True}),
+        (GROUP, PORT, {"loopback": 1}),
+    ],
+)
+def test_invalid_inputs_never_allocate_socket(
+    group: str, port: int, kwargs: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def forbidden(*args: object, **options: object) -> socket.socket:
+        raise AssertionError("socket allocated before validation")
+
+    monkeypatch.setattr("yoke.net.mcast.socket.socket", forbidden)
+    with pytest.raises(ValueError):
+        open_multicast_socket(group, port, **kwargs)  # type: ignore[arg-type]
+
+
+def test_setup_failure_closes_socket(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FailingSocket:
+        closed = False
+
+        def setsockopt(self, *args: object) -> None:
+            raise OSError("injected socket setup failure")
+
+        def close(self) -> None:
+            self.closed = True
+
+    sock = FailingSocket()
+    monkeypatch.setattr("yoke.net.mcast.socket.socket", lambda *args: sock)
+    with pytest.raises(OSError, match="injected"):
+        open_multicast_socket(GROUP, PORT)
+    assert sock.closed
+
+
+def test_linux_membership_is_scoped_to_requested_group(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RecordingSocket:
+        def __init__(self) -> None:
+            self.options: list[tuple[object, ...]] = []
+
+        def setsockopt(self, *args: object) -> None:
+            self.options.append(args)
+
+        def bind(self, address: object) -> None:
+            pass
+
+    sock = RecordingSocket()
+    monkeypatch.setattr("yoke.net.mcast.sys.platform", "linux")
+    monkeypatch.setattr("yoke.net.mcast.socket.socket", lambda *args: sock)
+    opened = open_multicast_socket(GROUP, PORT, interface="127.0.0.1")
+    assert opened is sock
+    assert (
+        socket.IPPROTO_IP,
+        getattr(socket, "IP_MULTICAST_ALL", 49),
+        0,
+    ) in sock.options
+    assert (
+        socket.IPPROTO_IP,
+        socket.IP_MULTICAST_IF,
+        socket.inet_aton("127.0.0.1"),
+    ) in sock.options
+
+
+def test_other_group_on_shared_port_is_not_received() -> None:
+    import sys
+
+    if not sys.platform.startswith("linux"):
+        pytest.skip("Linux multicast-all isolation")
+    rx = open_or_skip(interface="127.0.0.1")
+    try:
+        other = open_multicast_socket("239.121.111.108", PORT, interface="127.0.0.1")
+        try:
+            rx.settimeout(1.0)
+            other.settimeout(0.05)
+            rx.sendto(b"isolated-group", (GROUP, PORT))
+            try:
+                data, _ = rx.recvfrom(2048)
+            except TimeoutError:
+                pytest.skip("loopback multicast unavailable")
+            assert data == b"isolated-group"
+            with pytest.raises(TimeoutError):
+                other.recvfrom(2048)
+        finally:
+            other.close()
+    finally:
+        rx.close()

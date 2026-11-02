@@ -1,0 +1,109 @@
+name = "Yoke"
+repository = "https://github.com/spincyc/yoke"
+branch = "feature/ir"
+description = "Controllerless endpoint pairing. Observable by design. Testable offline."
+
+[[pages]]
+source = "site/pages/index.md"
+output = "index.html"
+title = "Connect endpoints. Keep control at the edge."
+section = "Overview"
+summary = "A controllerless control plane for HDMI and USB endpoints over switched Ethernet."
+
+[[pages]]
+source = "site/pages/start.md"
+output = "start.html"
+title = "Start with the software"
+section = "Overview"
+summary = "Install Yoke, run its offline models, and understand the limits of the reference pipeline."
+
+[[pages]]
+source = "site/pages/verification.md"
+output = "verification.html"
+title = "Evidence before endpoints"
+section = "Overview"
+summary = "Reproduce correctness checks, fault simulations, performance measurements, and documentation builds."
+
+[[pages]]
+source = "doc/design/ARCHITECTURE.md"
+output = "design/architecture.html"
+title = "Architecture"
+section = "Design"
+summary = "Endpoint state, multicast intents, drivers, and the sans-I/O boundary."
+
+[[pages]]
+source = "doc/design/PROTOCOL.md"
+output = "design/protocol.html"
+title = "Wire protocol"
+section = "Design"
+summary = "The normative YWP/1 frame, authentication, persistence, and convergence contract."
+
+[[pages]]
+source = "doc/design/MEDIA.md"
+output = "design/media.html"
+title = "Media reference"
+section = "Design"
+summary = "Synthetic source, codec models, packetization, FEC, jitter, and passive observation."
+
+[[pages]]
+source = "doc/design/MEDIA-TESTING.md"
+output = "design/media-testing.html"
+title = "Media testing"
+section = "Design"
+summary = "The path from deterministic simulation to real sockets and hardware measurements."
+
+[[pages]]
+source = "doc/design/EDGE-DEVICES.md"
+output = "design/edge-devices.html"
+title = "Endpoint roadmap"
+section = "Design"
+summary = "Proposed video and USB endpoints, session state, open questions, and milestones."
+
+[[pages]]
+source = "doc/design/PERFORMANCE.md"
+output = "design/performance.html"
+title = "Software performance"
+section = "Design"
+summary = "Reproducible software measurements, workloads, and the limits of model timing."
+
+[[pages]]
+source = "doc/design/DEPLOYMENT.md"
+output = "design/deployment.html"
+title = "Deployment"
+section = "Design"
+summary = "Agent placement, site keys, multicast networks, and operational diagnosis."
+
+[[pages]]
+source = "doc/research/FEASIBILITY.md"
+output = "research/feasibility.html"
+title = "Feasibility study"
+section = "Research"
+summary = "The dated 10GbE bandwidth analysis, proposed 4K120 paths, and unresolved hardware assumptions."
+
+[[pages]]
+source = "doc/research/HARDWARE.md"
+output = "research/hardware.html"
+title = "Hardware survey"
+section = "Research"
+summary = "A dated survey of commercial endpoints, USB bridges, silicon, and bench questions."
+
+[[pages]]
+source = "doc/research/COMPRESSION.md"
+output = "research/compression.html"
+title = "Compression study"
+section = "Research"
+summary = "Codec trade-offs and proposed operating points; distinct from the implemented codec models."
+
+[[pages]]
+source = "CONTRIBUTING.md"
+output = "contributing.html"
+title = "Contributing"
+section = "Project"
+summary = "Contributor setup, verification, design changes, and reproducible fault reports."
+
+[[pages]]
+source = "SECURITY.md"
+output = "security.html"
+title = "Security"
+section = "Project"
+summary = "The site-key trust boundary, metadata visibility, and vulnerability reporting."

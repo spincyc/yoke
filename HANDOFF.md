@@ -1,103 +1,119 @@
-# Yoke — handoff for the next agent
+# Yoke — implementation handoff
 
-Date: 2026-09-24. Everything below is committed on `main`; `make verify`
-is green (ruff + mypy --strict + pytest, 581 tests). Push is not
-authorized unless the user asks.
+Updated 2026-11-02. This file describes the current development direction;
+run `make verify` for the current checkout's result rather than relying on a
+historical test count. The repository's deployment branch is `feature/ir`.
 
-## The goal (user, 2026-09-24)
+## Goal and present boundary
 
-A **fully decentralized, point-to-point, reconfigurable mesh of HDMI and
-USB bridge devices over a switched IP network**, with a **switched 10GbE**
-baseline, and **endpoint hardware as small as possible**. Deliverables
-the user asked for: the hardware to buy, and the code driven to
-completion. The first concrete link is a closet RTX 5090 gaming PC (4K120
-floor, competitive-gaming latency) to a desk monitor + USB peripherals
-including WinWing flight-sim gear. Personal use: nothing will be sold (user,
-2026-09-24), so product licensing (HDMI Adopter, commercial legal
-review) is out of scope.
+The goal is a decentralized, point-to-point, reconfigurable mesh of HDMI
+and USB endpoints over switched Ethernet, with a 10GbE baseline and small
+endpoints. The software reference exists; **no actual endpoint hardware
+has been bench-tested**. The proposed 4K120 DSC link, physical USB output,
+HDCP ciphertext relay, and competitive-gaming latency targets remain
+hardware or integration work.
 
-**Verdict: possible** (`doc/research/FEASIBILITY.md`). Impossible only:
-bit-exact 4K 4:4:4 at 60 Hz or above over 10G (physics) and decrypting or
-compressing HDCP content without a license (law). Protected sources can
-still cross the mesh as untouched ciphertext (HDCP pass-through, like an
-HDMI extender) up to ~4K60 4:2:0 or 4K24 on 10G, per ADR 0011.
-The leading 4K120-over-10G route carries the **GPU's own DSC stream**
-compressed over DisplayPort, ~8 Gb/s, sub-ms, gated on Lontium NDA
-silicon. An earlier session's "not possible" conclusion is settled
-there; don't re-raise it without new evidence.
+The September research is dated analysis. Its vendor availability,
+performance estimates, and legal interpretations have not been revalidated
+for publication. Its feasibility arguments are not an end-to-end
+implementation result. Keep its assumptions and ⚠ bench flags visible.
 
 ## Read in this order
 
-| Doc | What it is |
+| Document | Purpose |
 |---|---|
-| `doc/research/FEASIBILITY.md` | The verdict, the arithmetic, the 4K120 routes, corrections to earlier claims |
-| `doc/design/EDGE-DEVICES.md` | Endpoint design: DSC-link video path, USB path, session-state ownership, milestones |
-| `doc/research/HARDWARE.md` | Market survey (Sept 2026), shortlists, network rules, driver roadmap; ⚠ = bench-unverified |
-| `doc/research/COMPRESSION.md` | Codec regimes and how each 4K120 route uses the compression dial |
-| `doc/design/ARCHITECTURE.md`, `PROTOCOL.md` (normative), `doc/decisions/` | The control plane |
-| `doc/design/MEDIA.md`, `MEDIA-TESTING.md` | The software media pipeline (reference model and test oracle) |
-| `doc/design/DEPLOYMENT.md` | Running agents on a site |
+| `README.md` | Public software status and commands |
+| `doc/design/ARCHITECTURE.md` | Current state ownership, driver execution, and trust boundaries |
+| `doc/design/PROTOCOL.md` | Normative YWP/1 contract |
+| `doc/decisions/0012-*` through `0017-*` | Durable transitions, serialized effects, USB ownership, media bounds, explicit provisioning, and status evidence |
+| `doc/design/SIMULATION.md` | Installed offline fault campaign and control benchmark |
+| `doc/design/MEDIA.md`, `MEDIA-TESTING.md` | Synthetic media transport and verification layers |
+| `doc/design/PERFORMANCE.md` | Reproducible software measurements and their limits |
+| `doc/design/UPDATES.md`, `ESP32-UPDATES.md` | Operator-controlled Linux releases and the ESP32 Ethernet OTA reference |
+| `doc/design/USB-HOUSING.md`, `BRANDING.md` | Enclosure revisions, assembly limits, and shared identity assets |
+| `doc/design/EDGE-DEVICES.md`, `doc/research/` | Proposed endpoints and dated hardware research |
+| `CONTRIBUTING.md`, `SECURITY.md` | Verification, contribution, and security reporting |
 
-Documents removed on 2026-09-24 as superseded (Aug 2026 lanes, build
-plan, FPGA cost, 4K120 floor, platform pick, closet-KVM build spec,
-sanity report) are retrievable with `git show 4e28967:<path>`.
+## Implemented software
 
-## What exists
+- **Control core:** sans-I/O state machines, HMAC-authenticated multicast
+  frames, bounded input validation, explicit durable-save feedback, reserved
+  sequence blocks, deterministic reconciliation, and passive observation.
+- **Agent shell:** serialized effects, route-generation fencing, driver
+  teardown barriers, durable state files, a local single-writer state lease,
+  and explicit first-install or recovery decisions.
+- **Driver adapters:** simulation, IGMP membership, USB/IP host imports,
+  Just Add Power channel control, and supervised external stream consumers.
+  Vendor transcripts and mocks establish adapter contracts, not hardware
+  compatibility. A generic `active` state is backend-confirmed readiness,
+  not an independent measurement of media or physical output. USB/IP imports
+  into the local host; a physical USB output to another computer requires a
+  separate gadget/proxy backend.
+- **Media reference:** synthetic source patterns, raw transport, ratio
+  models, packetization, bounded FEC/jitter/reassembly, passive observers,
+  deterministic faults, and real UDP multicast/unicast runners. `jpegxs` and
+  `vc2` are model names; neither invokes a production codec. Live transport
+  supports `none` and duplicate-path FEC; XOR is an offline model.
+- **Reproduction tools:** an installed control fault campaign, repeated
+  software benchmarks, and a local static documentation builder with link,
+  anchor, asset, and deterministic-output checks.
+- **Updates:** standalone Linux release staging, activation, readiness,
+  rollback and crash recovery; a separate ESP32-S3/W5500 Ethernet OTA
+  reference with locally provisioned mutual TLS and dual app slots. The
+  ESP32 reference does not implement IR routing. Hardware acceptance for
+  both update paths remains outstanding; see ADRs 0018 and 0019.
+- **Housing:** a Radxa ZERO 3E R1 first article was submitted for printing.
+  The separately branded R2 changes exterior identity only and has not
+  been printed. No physical fit, strength or thermal result is established.
 
-1. **Control plane** (`src/yoke/core`, `net`, `drivers`, `cli.py`,
-   `snoop.py`): controllerless, sans-I/O pairing over signed UDP
-   multicast, with a passive snooper. Proven offline, including seeded
-   convergence properties and an adversarial review. Drivers: `sim`,
-   `igmp`, `usbip`, `jap`, `stream`.
-2. **Software media pipeline** (`src/yoke/media`): sans-I/O stages,
-   wire codec, asyncio UDP runner, passive snooper, network simulator,
-   `yoke-media` CLI. A correctness oracle, not a latency oracle: its
-   loopback timing is Python overhead, not a system prediction.
+The agent never receives media payload. Separate reference media tools may
+process unprotected synthetic content. The full HDCP boundary remains
+ADR 0011; no component may decrypt, hold HDCP secrets, alter HDCP messages
+or capabilities, or instruct endpoints to weaken protection.
 
-Nothing has touched real endpoint hardware yet.
+## Verification and publication
 
-## Open decisions (the user owns these)
+```sh
+make verify
+make simulate
+make benchmark-control
+make benchmark-media
+make docs-serve
+```
 
-1. **The v1 trade.** On 10G, something gives: (a) staged — buy 4K60
-   HDCP-capable commercial endpoints for the mesh now (controller-free
-   only at 1G, Just Add Power; 10G ZeeVee needs a site server) and build
-   the 4K120 DSC link in parallel; (b) build only: the 4K120 DSC link
-   for the PC plus HDCP pass-through (ADR 0011) for protected sources
-   up to 4K60 4:2:0 / 4K24; (c) 4K60 buy only; or (d) add 25G ports
-   after all. The user's pending clarification was the HDCP question,
-   now answered by ADR 0011; the trade itself is still unanswered.
-2. **Desk monitor model:** connector and max mode; for route A it must
-   accept DSC over DisplayPort.
-3. **DisplayPort from the 5090:** acceptable (route A), or must the PC
-   side stay HDMI (route B, Lontium re-encode)?
-4. **Switch inventory:** which 10G SFP+ ports serve closet and desk, and
-   can both land on one switch?
+The Makefile creates `.scratch/venv`; `VENV=.scratch/dev` can reuse an
+existing developer environment. All generated output, caches, and test
+temporaries belong under `.scratch`. Runtime code is stdlib-only, with
+pinned developer tooling in the `dev` extra. Preserve any pre-existing
+user environment outside `.scratch`.
 
-## Next actions
+CI runs the gate and an isolated wheel smoke test on Python 3.12 and 3.14,
+plus a pinned ESP32 SDK target build and complete firmware host tests.
+The `feature/ir` workflow publishes `.scratch/site` only after all gates
+pass. GitHub Pages must use the GitHub Actions publishing source. There
+are no runtime CDN assets or analytics. Canonical `doc/` Markdown feeds
+the site directly; ADRs and new design pages appear automatically.
 
-Independent of the open decisions (except as noted):
+Socket tests may skip where sockets are unavailable; a passing run with
+such skips does not establish the real-socket layer. Synthetic simulation
+latency, Python benchmark timing, and historical real-codec timings are
+separate forms of evidence. None establishes physical glass-to-glass
+latency.
 
-- **M1 brain:** model EDID/DPCD synthesis and the HPD hysteresis state
-  machine sans-I/O with offline tests (`EDGE-DEVICES.md` §session state).
-  Moot if the user picks (c), 4K60 buy only.
-- **`vhusb` driver:** VirtualHere named-pipe client API behind the
-  existing driver seam, offline-tested against scripted transcripts;
-  the USB mesh seam.
-- **Known races** (`ARCHITECTURE.md` §known limitations): single-thread
-  driver executor with generation-tagged statuses.
+## Remaining engineering work
 
-Needs the user (purchases or external contact):
+Hardware work begins with the unresolved endpoint choices: monitor/connector
+compatibility, the GPU DSC policy, accessible bridge silicon/firmware,
+clock-locked transport, and real USB device behavior. The roadmap's vendor
+questions and bench milestones remain pending. No simulated outcome should
+be used to mark those complete.
 
-- **M2 USB bench** (~$150): NanoPi R76S + powered hub + VirtualHere
-  trial; first question is USB3 DisplayLink (D1) over VirtualHere.
-- **L2Tek/Lontium engagement** for LT6911GXD samples, firmware, and the
-  question list in `EDGE-DEVICES.md`: the longest lead item. Moot under
-  (c).
+YWP/1 retains one site-wide key. Any key holder can impersonate origins and
+author intents. Per-device identity, enrollment, and source authorization
+need a separately designed protocol version and ADR; current parser and
+DoS hardening do not provide that authority model.
 
-## Working notes
-
-- Runtime is stdlib-only (ADR 0008); dev tools via the `dev` extra.
-- `make verify` is the commit gate; `make media-recv` / `make media-send
-  PEER=` are the two-host media commands.
-- Git identity for this repo: "Yoke Project". Commit messages end with
-  the Co-Authored-By line.
+For each new field failure, retain a deterministic regression with the fix.
+Protocol changes begin in the normative document and an ADR. Hardware
+assumptions stay isolated behind driver seams and labeled until a bench
+result establishes them.

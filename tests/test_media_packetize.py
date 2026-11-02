@@ -329,3 +329,140 @@ def test_events_in_out_emitted() -> None:
     _, dp_events = depacketize(dp, packets)
     assert sum(e.kind is EventKind.IN for e in dp_events) == 2
     assert sum(e.kind is EventKind.OUT for e in dp_events) == 1  # one slice reassembled
+
+
+@pytest.mark.parametrize(
+    "meta",
+    [
+        {"slice_count": 0},
+        {"slice_index": -1},
+        {"frag_index": -1},
+        {"frag_index": 65535},
+        {"frag_count": 0},
+        {"frag_count": 1e300},
+        {"slice_count": True},
+        {"frame_pts": "1"},
+        {"rtp_ssrc": 123},
+    ],
+)
+def test_malformed_metadata_is_dropped_without_state(meta: dict) -> None:
+    pk = Packetizer(mtu=14)
+    packet = packetize(
+        pk, make_slice(seq=1, pts=1, slice_index=0, slice_count=1, payload=b"abcd")
+    )[0]
+    dp = Depacketizer()
+    result = dp.process(packet.with_payload(packet.payload, **meta), NOW)
+    assert not result.emit
+    assert any(e.kind is EventKind.DROP for e in result.events)
+    assert dp.flush(NOW).events == []
+
+
+def test_conflicting_duplicate_retires_frame_and_cannot_mix_bytes() -> None:
+    pk = Packetizer(mtu=14)
+    packets = packetize(
+        pk, make_slice(seq=1, pts=1, slice_index=0, slice_count=1, payload=b"abcd")
+    )
+    dp = Depacketizer()
+    dp.process(packets[0], NOW)
+    conflict = packets[0].with_payload(packets[0].payload[:12] + b"zz")
+    result = dp.process(conflict, NOW)
+    assert any(e.detail.get("why") == "conflicting-fragment" for e in result.events)
+    assert dp.process(packets[1], NOW).emit == []
+    assert dp.flush(NOW).events == []
+
+
+def test_pending_frames_and_aggregate_bytes_retire_oldest() -> None:
+    pk = Packetizer(mtu=14)
+    dp = Depacketizer(max_frames=2, max_bytes=4)
+    all_packets = [
+        packetize(
+            pk, make_slice(seq=i, pts=i, slice_index=0, slice_count=1, payload=b"abcd")
+        )
+        for i in range(3)
+    ]
+    for packets in all_packets[:2]:
+        assert dp.process(packets[0], NOW).emit == []
+    overflow = dp.process(all_packets[2][0], NOW)
+    assert any(
+        e.seq == 0 and e.detail.get("why") == "frame-capacity" for e in overflow.events
+    )
+    assert len(dp._frames) == 2
+    assert dp._bytes == 4
+    assert dp.process(all_packets[0][1], NOW).emit == []
+    assert len(dp.flush(NOW).events) == 2
+    assert dp._bytes == 0
+
+
+def test_fragment_budget_and_missing_diagnostics_are_bounded() -> None:
+    pk = Packetizer(mtu=14)
+    original = packetize(
+        pk, make_slice(seq=1, pts=1, slice_index=0, slice_count=1, payload=b"abcd")
+    )[0]
+    dp = Depacketizer(max_fragments=2)
+    result = dp.process(original.with_payload(original.payload, frag_count=65535), NOW)
+    assert any(e.detail.get("why") == "fragment-budget" for e in result.events)
+    dp = Depacketizer()
+    dp.process(original.with_payload(original.payload, frag_count=65535), NOW)
+    drop = dp.flush(NOW).events[0]
+    assert drop.detail["missing_total"] == 65534
+    assert len(drop.detail["missing"]) == 256
+
+
+def test_completed_identity_window_stays_bounded() -> None:
+    pk = Packetizer()
+    dp = Depacketizer(done_window=3)
+    for seq in range(20):
+        packet = packetize(
+            pk, make_slice(seq=seq, pts=seq, slice_index=0, slice_count=1, payload=b"x")
+        )[0]
+        assert dp.process(packet, NOW).emit
+    assert len(dp._done) == 3
+
+
+@pytest.mark.parametrize(
+    "kwargs", [{"payload_type": 128}, {"mtu": 12}, {"mtu": 1e300}, {"ssrc": True}]
+)
+def test_packetizer_rejects_bad_constructor_before_work(kwargs: dict) -> None:
+    with pytest.raises(ValueError):
+        Packetizer(**kwargs)
+
+
+@pytest.mark.parametrize(
+    "meta,reason",
+    [
+        ({"slice_count": 2}, "conflicting-frame-meta"),
+        ({"frag_count": 4}, "conflicting-fragment-count"),
+    ],
+)
+def test_conflicting_counts_retire_instead_of_overwriting(
+    meta: dict, reason: str
+) -> None:
+    packet = packetize(
+        Packetizer(mtu=14),
+        make_slice(seq=1, pts=1, slice_index=0, slice_count=1, payload=b"abcdef"),
+    )[0]
+    dp = Depacketizer()
+    dp.process(packet, NOW)
+    out = dp.process(packet.with_payload(packet.payload, **meta), NOW)
+    assert any(e.detail.get("why") == reason for e in out.events)
+    assert dp.flush(NOW).events == []
+
+
+def test_frame_and_aggregate_byte_budgets_are_independent() -> None:
+    pk = Packetizer(mtu=14)
+    first = packetize(
+        pk, make_slice(seq=1, pts=1, slice_index=0, slice_count=1, payload=b"abcdef")
+    )
+    second = packetize(
+        pk, make_slice(seq=2, pts=2, slice_index=0, slice_count=1, payload=b"abcdef")
+    )
+    dp = Depacketizer(max_bytes=3)
+    dp.process(first[0], NOW)
+    out = dp.process(second[0], NOW)
+    assert any(e.detail.get("why") == "buffer-byte-budget" for e in out.events)
+    assert dp._bytes == 2
+    dp = Depacketizer(max_frame_bytes=3)
+    dp.process(first[0], NOW)
+    out = dp.process(first[1], NOW)
+    assert any(e.detail.get("why") == "frame-byte-budget" for e in out.events)
+    assert dp._bytes == 0
