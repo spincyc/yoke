@@ -477,6 +477,7 @@ def _read_psk(path: Path) -> bytes:
 
 def build_parser() -> argparse.ArgumentParser:
     from yoke import simulation
+    from yoke.telemetry.cli import configure_parsers
 
     parser = argparse.ArgumentParser(
         prog="yoke", description="controllerless HDMI/USB pairing control plane"
@@ -524,6 +525,7 @@ def build_parser() -> argparse.ArgumentParser:
         "simulate", help="run deterministic offline failure scenarios"
     )
     simulation.configure_parser(simulate)
+    configure_parsers(sub)
     return parser
 
 
@@ -578,6 +580,11 @@ def main(argv: list[str] | None = None) -> int:
         from yoke import simulation
 
         return simulation.cmd_simulate(args, _out)
+
+    if command in ("metrics", "top"):
+        from yoke.telemetry.cli import run_command
+
+        return run_command(args)
 
     try:
         psk, warning = resolve_psk(args.psk_file)

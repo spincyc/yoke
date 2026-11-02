@@ -11,7 +11,7 @@ export PYTHONPYCACHEPREFIX := $(abspath .scratch/cache/pycache)
 export TMPDIR := $(abspath .scratch/tmp)
 
 .PHONY: venv lint type test verify docs docs-serve simulate \
-	benchmark-control benchmark-media verify-firmware verify-net \
+	benchmark-control benchmark-media benchmark-telemetry verify-firmware verify-net \
 	media-send media-recv clean
 
 ROLE ?= recv
@@ -73,6 +73,9 @@ benchmark-control: venv
 
 benchmark-media: venv
 	$(BIN)/python benchmarks/media.py --frames $(BENCH_FRAMES) --repeat $(REPEAT)
+
+benchmark-telemetry: venv
+	$(BIN)/python benchmarks/telemetry.py --nodes $(NODES) --repeat $(REPEAT)
 
 # First pass make verify, then use one command on each host. Multicast sends
 # to GROUP; set INTERFACE to each host's local IPv4 address. For unicast use

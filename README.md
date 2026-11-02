@@ -17,6 +17,7 @@ yoke pair cam-garage tv-den
 yoke unpair tv-den
 yoke status
 yoke snoop
+yoke top
 ```
 
 ## Project status
@@ -116,6 +117,14 @@ renderer; it adds no runtime dependency. CI verifies Python 3.12 and 3.14,
 smoke-tests an isolated wheel install, and publishes the verified static
 site from `feature/ir` after both Python jobs and the separate ESP32
 firmware build/test gate pass.
+
+## Monitoring
+
+`yoke top --demo` previews the optional terminal dashboard without devices.
+`yoke metrics` exposes cached Prometheus and JSON snapshots for Thermite or
+other tools. Both reuse passive control observations and keep collector-host
+resource usage separate from endpoint health. See the
+[telemetry design and research](doc/design/TELEMETRY.md).
 
 ## Endpoint prototypes
 

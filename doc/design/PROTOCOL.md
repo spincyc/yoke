@@ -394,3 +394,12 @@ ACK cannot establish which body it acknowledges: report ambiguity rather
 than attributing success to one body. A fresh operation version resolves
 that ambiguity; observing a corrected legacy retry is not proof of intent
 identity.
+
+## Optional telemetry
+
+Read-only telemetry observers may derive metrics from accepted existing
+frames. They MUST NOT send control frames or make pairing depend on a
+collector, scrape, dashboard or management heartbeat. The optional HTTP
+metrics/JSON interface in [ADR 0020](../decisions/0020-optional-read-only-telemetry.md)
+is separate from YWP/1 and adds no envelope or body fields. Observed event
+counts are observation-relative, not guaranteed device lifetime totals.

@@ -124,6 +124,7 @@ src/yoke/
     stream.py    starts/stops an out-of-process media pipeline (RTP)
     shellcmd.py  command-runner abstraction (mockable; never shell=True)
   media/         software media pipeline + yoke-media CLI (MEDIA.md)
+  telemetry/     optional passive metrics, collector-host sampling and terminal UI
   config.py      per-agent TOML config with fail-fast validation
   statefile.py   exclusive local lease and atomic durable state replacement
   simulation.py installed deterministic software fault campaign

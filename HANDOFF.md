@@ -31,6 +31,7 @@ implementation result. Keep its assumptions and ⚠ bench flags visible.
 | `doc/design/PERFORMANCE.md` | Reproducible software measurements and their limits |
 | `doc/design/UPDATES.md`, `ESP32-UPDATES.md` | Operator-controlled Linux releases and the ESP32 Ethernet OTA reference |
 | `doc/design/USB-HOUSING.md`, `BRANDING.md` | Enclosure revisions, assembly limits, and shared identity assets |
+| `doc/design/TELEMETRY.md` | Optional passive metrics, JSON API, host sampling and terminal monitoring |
 | `doc/design/EDGE-DEVICES.md`, `doc/research/` | Proposed endpoints and dated hardware research |
 | `CONTRIBUTING.md`, `SECURITY.md` | Verification, contribution, and security reporting |
 
