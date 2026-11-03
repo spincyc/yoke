@@ -1,5 +1,9 @@
 # Deploying yoke
 
+This page covers the current software agents and backend labs. The USB
+product is the [two-box ZERO 3E hardware design](USB-ENDPOINT.md); a Linux
+USB/IP import on a separate computer is not that product.
+
 ## Topology
 
 One agent per endpoint. Where the endpoint is embeddable Linux, the agent
@@ -11,6 +15,11 @@ device, with no shared state and no global knowledge (ARCHITECTURE.md,
 "Where the agent runs"). The CLI and snooper run anywhere on the LAN.
 
 ## Network (summary of doc/research/HARDWARE.md prerequisites)
+
+The following AV network checklist belongs to the earlier high-bandwidth
+video research. Jumbo frames, a dedicated 10G port and PoE are not blanket
+requirements for the selected USB 2 prototype. Use the requirements of the
+backend actually being tested.
 
 Dedicated AV VLAN; IGMP snooping on; exactly one pinned querier;
 fast-leave on; jumbo frames on all AV ports and trunks; one endpoint per

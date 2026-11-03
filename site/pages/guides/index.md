@@ -1,15 +1,16 @@
 # Guides
 
-Follow a task from setup to a result you can inspect. Start with
-[Get started](../start.md) if you have not installed Yoke.
+For the hardware, start with the [USB boxes and wiring](../usb.md).
+For software development without boards, [run the tests](../start.md).
 
 ## Connect and operate
 
 | Task | Guide |
 |---|---|
-| Change the source for a destination | [Pair configured endpoints](pairing.md) |
+| USB hardware and firmware work | [Selected design](../../../doc/design/USB-ENDPOINT.md) |
+| Change a pairing | [Pair configured endpoints](pairing.md) |
 | Inspect devices or add a manager | [Monitor and integrate](monitoring.md) |
-| Choose an endpoint integration | [Backend reference](../reference/backends.md) |
+| Test a software adapter | [Backend reference](../reference/backends.md) |
 | Provision identities, keys, and services | [Deployment](../../../doc/design/DEPLOYMENT.md) |
 | Exercise sender, receiver, and observer | [Media testing](../../../doc/design/MEDIA-TESTING.md) |
 
@@ -17,9 +18,9 @@ Follow a task from setup to a result you can inspect. Start with
 
 | Task | Guide |
 |---|---|
-| Release, activate, or roll back a Linux agent | [Linux updates](../../../doc/design/UPDATES.md) |
+| Update software running inside a box | [Linux updates](../../../doc/design/UPDATES.md) |
 | Provision or update the ESP32 reference firmware | [ESP32 updater](../../../doc/design/ESP32-UPDATES.md) |
-| Assemble the current USB housing design | [R3 assembly](../../../hardware/usb-housing/r3/README.md) |
+| Check the case redesign | [Housing status](../../../doc/design/USB-HOUSING.md) |
 | Understand the enclosure design and revisions | [USB housing design](../../../doc/design/USB-HOUSING.md) |
 
 Update and enclosure guides document development references; see

@@ -1,9 +1,14 @@
 # USB endpoint housing R3
 
+**RETIRED: the owner reports that this housing failed assembly. Do not print
+R3 again.** The [owner result](owner-result.json) records the failure and the
+new requirements. R4 is being redesigned as a rectangular slotted case using
+Lacuna's M3 screws and heat-set inserts. The instructions below are historical.
+
 R3 adds a real locating joint, captive **metal** nuts and fully recessed screw
 heads to the bare Radxa ZERO 3E V1.2 enclosure. **The first R3 main-plate job
 was submitted and verified printing.** See the [dispatch record](print.json).
-Physical fit and function remain untested. R1 and R2 files remain unchanged.
+The owner has since reported assembly failure. R1 and R2 files remain unchanged.
 
 **Use M2.5 × 16 mm PH1 pan-head screws, measured under the head. Do not reuse
 the R1/R2 20 mm screws: they can bottom in the blind pockets and crack the lid.**
@@ -133,8 +138,10 @@ exceed its zero-area threshold. These checks do not constitute a print release.
 The vendor board mesh is nonmanifold; it is not a Boolean collision proof, and
 samples do not establish continuous collision-free movement.
 
-Physical board/peg/key/nut fit, capture, screw stack, cable access, 5 N trial
-retention and 30-minute thermal testing remain **NOT RUN**. The model targets
+The owner reports that assembly failed. The specific failure mechanism
+and dimensions have not been recorded. The remaining prescribed fit
+measurements, cable checks, 5 N retention and 30-minute thermal tests
+remain **NOT RUN**. The model targets
 the bare board, with USB-C overmoulds no larger than 12 × 7 mm. No PoE HAT,
 added heatsink, bracket, ingress rating or qualified tightening torque is
 included. Follow the PDF’s measurements, test limits and stop conditions.

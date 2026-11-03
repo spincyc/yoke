@@ -1,5 +1,11 @@
 # Feasibility: can yoke's goal be built?
 
+> **USB selection update:** the current product uses two Radxa ZERO 3E
+> hardware boxes and targets USB 2 first. See the
+> [agreed USB design](../design/USB-ENDPOINT.md). Earlier NanoPi/VirtualHere
+> and USB3 recommendations in this dated study are not the selected design.
+
+
 Status: cold review, 2026-09-24, from four live-web research lanes plus
 local benchmarks. This is the canonical verdict; `HARDWARE.md` holds the
 market detail, `COMPRESSION.md` the codec trade-offs, and

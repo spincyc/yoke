@@ -1,5 +1,11 @@
 # Edge devices: the HDMI and USB endpoints of the 10G mesh
 
+> **Earlier HDMI/USB3 research.** The current USB prototype is the
+> [two-box Radxa ZERO 3E design](USB-ENDPOINT.md), with USB 2 first.
+> The NanoPi, VirtualHere, USB3 and 10G recommendations below are earlier
+> alternatives, not the selected USB product or its first-delivery requirements.
+
+
 Status: rewritten 2026-09-24 for the switched-10GbE baseline. It absorbs
 the former closet-KVM build spec and keeps the Aug 2026 WinWing, USB,
 and session-state findings, corrected against current research. The

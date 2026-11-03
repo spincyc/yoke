@@ -1,7 +1,16 @@
 # USB endpoint housing
 
+**R1 and R3 were printed and rejected by the owner. Do not print either
+revision again.** [R3 owner result](../../hardware/usb-housing/r3/owner-result.json).
+
+The replacement is being designed as a compact rectangular shell with no
+projecting ears, a slot joint, recessed M3 socket-head screws and heat-set
+inserts from the same kit as Lacuna. Insert dimensions are still being
+confirmed. The R3 material below is historical, not the current build
+recommendation. The board is the [selected USB hardware](USB-ENDPOINT.md).
+
 The USB endpoint case is a screw-closed two-piece prototype for the
-**Radxa ZERO 3E V1.2**. **R3 is the current mechanical revision:** locating
+**Radxa ZERO 3E V1.2**. **R3 was the last printed mechanical revision:** locating
 tongues register the halves, screw heads sit in recesses, and metal nuts
 supply the threads. R1 and R2 retain their original geometry for reference.
 
@@ -9,8 +18,8 @@ R1 was the first-article print revision. R2 added the canonical brand without
 changing its mechanics. **R2 has not been printed. The first R3 main-plate
 job was submitted and verified printing**; see its
 [dispatch record](../../hardware/usb-housing/r3/print.json). The R3 files do
-not replace the original R1 G-code or its print record. Physical fit, cable
-access, retention and thermal testing of the revised case remain **NOT RUN**.
+not replace the original R1 G-code or its print record. The owner reports that assembly failed. Specific fit measurements have
+not been recorded; cable access, retention and thermal tests remain **NOT RUN**.
 
 ## R3: locating joint and recessed fasteners
 
@@ -31,14 +40,14 @@ head height and 16 ± 0.35 mm under-head length, based on the
 [manufacturer's specification](https://www.accu.co.uk/phillips-pan-head-screws/174946-SIP-M2-5-16-A4-BL).
 R1's 20 mm screws are not interchangeable with these fasteners.
 
-![R3 enclosure with recessed fasteners](../../hardware/usb-housing/r3/preview.png)
+![Rejected R3 enclosure with projecting fastener ears](../../hardware/usb-housing/r3/preview.png)
 
 The nut pockets load from the sides. Integral keeper fingers close their
 exits when the halves are seated, so the nuts are captured in the closed
 assembly. Opening the case reopens those exits; follow the service sequence
 over a tray. Plastic holes are clearance holes, **not printed threads**.
 
-![R3 locating tongues and nut keepers](../../hardware/usb-housing/r3/exploded.png)
+![Historical R3 locating tongues and nut keepers](../../hardware/usb-housing/r3/exploded.png)
 
 Use the [R3 assembly guide](../../hardware/usb-housing/r3/README.md) and its
 [assembly PDF](../../hardware/usb-housing/r3/assembly.pdf) for the actual
@@ -80,8 +89,8 @@ digital checks, not a physical qualification.
 
 | Revision | Native CAD | Two-part plate | Instructions and evidence |
 | --- | --- | --- | --- |
-| R3 — current, print submitted | [OpenSCAD](../../hardware/usb-housing/r3/housing.scad) | [R3 STL](../../hardware/usb-housing/r3/yoke-usb-housing-r3.stl) | [Assembly PDF](../../hardware/usb-housing/r3/assembly.pdf), [guide](../../hardware/usb-housing/r3/README.md), [print record](../../hardware/usb-housing/r3/print.json) |
-| R1 — first article | [OpenSCAD](../../hardware/usb-housing/housing.scad) | [R1 STL](../../hardware/usb-housing/yoke-usb-housing-r1.stl) | [Assembly PDF](../../hardware/usb-housing/assembly.pdf), [print record](../../hardware/usb-housing/print.json) |
+| R3 — rejected; do not print | [OpenSCAD](../../hardware/usb-housing/r3/housing.scad) | [R3 STL](../../hardware/usb-housing/r3/yoke-usb-housing-r3.stl) | [Assembly PDF](../../hardware/usb-housing/r3/assembly.pdf), [guide](../../hardware/usb-housing/r3/README.md), [print record](../../hardware/usb-housing/r3/print.json) |
+| R1 — rejected first article | [OpenSCAD](../../hardware/usb-housing/housing.scad) | [R1 STL](../../hardware/usb-housing/yoke-usb-housing-r1.stl) | [Assembly PDF](../../hardware/usb-housing/assembly.pdf), [print record](../../hardware/usb-housing/print.json) |
 | R2 — NOT PRINTED | [OpenSCAD](../../hardware/usb-housing/r2/housing.scad) | [R2 STL](../../hardware/usb-housing/r2/yoke-usb-housing-r2.stl) | [Rebuild script](../../hardware/usb-housing/r2/build.py), [mesh validation](../../hardware/usb-housing/r2/validation.json) |
 
 The R2 [base](../../hardware/usb-housing/r2/base.stl) and

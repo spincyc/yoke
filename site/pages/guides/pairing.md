@@ -1,15 +1,14 @@
-# Pair configured endpoints
+<span id="pair-configured-endpoints" class="legacy-anchor" aria-hidden="true"></span>
+# Pair Yoke boxes
 
-Use this guide after installing Yoke and commissioning a producer and
-consumer with compatible backends. The
-[deployment guide](../../../doc/design/DEPLOYMENT.md) covers identities,
-site keys, interface selection, persistent state, and service setup.
-The [backend reference](../reference/backends.md) helps you choose the
-right integration.
+These are the pairing commands in the current software. The USB hardware
+uses two ZERO 3E boxes; its complete USB firmware is still in development.
+See [USB hardware](../usb.md) for the wiring.
 
-The examples below use the identities in the repository’s Just Add Power
-configs. Substitute the identities and local interface address from your
-own test network.
+The examples call the device-side box `usb-device-box` and the computer-side
+box `desk-usb-box`. Replace these names and the example local network
+address with your configured names and address. See
+[software setup](../../../doc/design/DEPLOYMENT.md) for configuration.
 
 ## Find the endpoints
 
@@ -17,20 +16,20 @@ own test network.
 yoke --interface 192.0.2.10 --psk-file /etc/yoke/psk status
 ```
 
-Both endpoint agents must be running on the same control network and
-use the same site key. On a machine with multiple interfaces, the address
-must belong to the local host. An empty result means no accepted
-announcements were collected; it does not create or start endpoints.
+The software on both boxes must be running on the same network and use
+the same site key. On a machine with multiple interfaces, the address
+must belong to the local host. An empty result means no box was heard from; the command does not start
+the box software.
 
 ## Select a source
 
 ```sh
-yoke --interface 192.0.2.10 --psk-file /etc/yoke/psk pair cam-garage tv-den
+yoke --interface 192.0.2.10 --psk-file /etc/yoke/psk pair usb-device-box desk-usb-box
 ```
 
-The order is **producer, then consumer**. The consumer saves the pairing
-before it acknowledges the request. Exit code zero confirms that saved
-choice. The driver may still be connecting.
+The device-side box comes first; the computer-side box comes second.
+The computer-side box saves the pairing before replying. Exit code zero
+confirms that it saved the choice; the USB connection can still be pending.
 
 ## Check the result
 
@@ -40,12 +39,12 @@ yoke --interface 192.0.2.10 --psk-file /etc/yoke/psk status --json
 
 | Announced state | What to do |
 |---|---|
-| `idle` | Check whether the consumer is paired |
-| `pending` | Check that the selected producer is online and the backend is ready |
-| `active` | The backend confirms attachment; check the actual display or USB application |
-| `error` | Read the driver detail and inspect the backend |
+| `idle` | Check whether the box is paired |
+| `pending` | Check that the paired box is online and its software is running |
+| `active` | Connection software reports ready; check the actual USB device |
+| `error` | Read the error message and check both boxes |
 
-To inspect the control conversation as it happens, run this in another
+To watch pairing and status messages, run this in another
 terminal before pairing:
 
 ```sh
@@ -53,20 +52,20 @@ yoke --interface 192.0.2.10 --psk-file /etc/yoke/psk snoop
 ```
 
 The observer does not change pairings. Stop it with Ctrl-C.
-Its view covers traffic it received, not a complete historical log.
+It shows the messages it receives, not a full history.
 
 ## Change or remove the connection
 
-Pair the consumer to another compatible producer to replace its route.
-Explicitly unpair it to clear the saved choice:
+Pair the computer-side box with another device-side box to change the
+connection. To clear the pairing:
 
 ```sh
-yoke --interface 192.0.2.10 --psk-file /etc/yoke/psk unpair tv-den
+yoke --interface 192.0.2.10 --psk-file /etc/yoke/psk unpair desk-usb-box
 ```
 
-Closing the CLI or monitor preserves the pairing. A missing producer also
-preserves it; the consumer waits for that source to return. Orderly agent
-shutdown quiesces the local driver and retains the route for restart.
+Closing the command-line tool or monitor keeps the pairing saved.
+If the paired box goes offline, the other box waits for it to return.
+Restarting the software restores its saved pairing.
 
 See [Deployment’s failure playbook](../../../doc/design/DEPLOYMENT.md#failure-playbook)
 for authentication drops, missing multicast traffic, and device failures.

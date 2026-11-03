@@ -1,6 +1,6 @@
-# Evidence before endpoints
+# Testing Yoke
 
-Every result needs a boundary. A deterministic simulation can establish
+Software tests can check
 state-machine behavior under its fault model. A UDP loopback test can
 establish behavior through real local sockets. Neither measures an HDMI
 link's physical latency or proves a device vendor's API assumptions.
@@ -23,7 +23,7 @@ caches stay under `.scratch`.
 | Seeded simulations | Repeatable loss, delay, duplication, partitions, replay, and recovery scenarios | Unmodeled network behavior |
 | Real-socket loopback | Local UDP paths, independent observers, and transport integration | A loaded physical fabric |
 | Software benchmarks | Timing and resource behavior on the machine that ran them | Codec silicon or glass-to-glass latency |
-| Endpoint bench work | Still pending | Capture/display, real USB gear, HDCP relay timing, and hardware latency |
+| Hardware tests | Still pending | Capture/display, real USB gear, HDCP relay timing, and hardware latency |
 
 Tests requiring socket support skip when the execution environment forbids
 sockets. Read the skip summary before claiming that the loopback layer ran.

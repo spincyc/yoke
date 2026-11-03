@@ -39,10 +39,10 @@
       const sourceId = source.value;
       const sourceName = sourceNames.get(sourceId);
       const sourceOnline = online.get(sourceId);
-      controllerState.textContent = clientOpen ? "Open" : "Closed — pairings retained";
-      controller.textContent = clientOpen ? "Close control client" : "Open control client";
-      sourceState.textContent = `${sourceName}: ${sourceOnline ? "available" : "offline"}`;
-      sourceToggle.textContent = sourceOnline ? "Take selected input offline" : "Bring selected input online";
+      controllerState.textContent = clientOpen ? "Open" : "Closed; pairing stays saved";
+      controller.textContent = clientOpen ? "Close setup tool" : "Open setup tool";
+      sourceState.textContent = `${sourceName}: ${sourceOnline ? "online" : "offline"}`;
+      sourceToggle.textContent = sourceOnline ? "Disconnect device box" : "Reconnect device box";
       pair.disabled = !clientOpen;
       unpair.disabled = !clientOpen || !routes.get(destination.value);
 
@@ -52,16 +52,16 @@
         const name = element.querySelector("[data-demo-route-name]");
         const state = element.querySelector("[data-demo-route-state]");
         if (!name || !state) return;
-        name.textContent = configuredSource ? sourceNames.get(configuredSource) : "No input selected";
+        name.textContent = configuredSource ? sourceNames.get(configuredSource) : "Not paired";
         if (!configuredSource) {
           element.dataset.routeState = "unpaired";
           state.textContent = "Unpaired";
         } else if (!online.get(configuredSource)) {
           element.dataset.routeState = "pending";
-          state.textContent = "Waiting for input · pairing retained";
+          state.textContent = "Waiting for device box; pairing saved";
         } else {
           element.dataset.routeState = "paired";
-          state.textContent = "Paired · input available";
+          state.textContent = "Paired · device box online";
         }
       });
     }
@@ -75,9 +75,9 @@
       if (!clientOpen || !sourceNames.has(source.value) || !routes.has(destination.value)) return;
       routes.set(destination.value, source.value);
       const availability = online.get(source.value)
-        ? "The selected input is available in this demonstration."
-        : "The input is offline; the pairing remains saved while it waits.";
-      announce(`${destinationNames.get(destination.value)} now follows ${sourceNames.get(source.value)}. ${availability}`);
+        ? "The device-side box is online in this example."
+        : "The device-side box is offline; the pairing stays saved.";
+      announce(`${destinationNames.get(destination.value)} is now paired with ${sourceNames.get(source.value)}. ${availability}`);
     });
 
     unpair.addEventListener("click", () => {
@@ -89,8 +89,8 @@
     controller.addEventListener("click", () => {
       clientOpen = !clientOpen;
       announce(clientOpen
-        ? "Control client opened. You can change the saved pairings."
-        : "Control client closed. Each display endpoint keeps its saved pairing; no resident controller is needed.");
+        ? "Setup tool opened. You can change the pairing."
+        : "Setup tool closed. The computer-side box keeps its saved pairing.");
     });
 
     sourceToggle.addEventListener("click", () => {
@@ -98,8 +98,8 @@
       if (!online.has(id)) return;
       online.set(id, !online.get(id));
       announce(online.get(id)
-        ? `${sourceNames.get(id)} is available again. Display endpoints that kept this pairing can resume.`
-        : `${sourceNames.get(id)} is offline. Display endpoints keep this pairing and wait for the input to return.`);
+        ? `${sourceNames.get(id)} is online again. The paired computer-side box can reconnect.`
+        : `${sourceNames.get(id)} is offline. The computer-side box keeps its pairing while the device box is offline.`);
     });
 
     source.addEventListener("change", render);

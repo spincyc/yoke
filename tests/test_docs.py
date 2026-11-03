@@ -50,6 +50,11 @@ def test_site_is_deterministic_complete_and_self_contained(tmp_path: Path) -> No
     status = (nested / "docs/project-status.html").read_text()
     assert "ratio models, not codec implementations" in status
     assert "has not been built and bench-tested" in " ".join(status.split())
+    usb = (nested / "usb.html").read_text()
+    assert "design/usb-endpoint.html" in usb
+    assert "Radxa ZERO 3E" in usb
+    assert "USB 2" in usb
+    assert "Linux host" not in usb
 
 
 def test_brand_derivatives_preserve_the_canonical_cad_geometry() -> None:

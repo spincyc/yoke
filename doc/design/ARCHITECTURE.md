@@ -7,14 +7,17 @@ records the protocol and operational decisions.
 ## Problem
 
 Route HDMI and USB point-to-point links over a switched Ethernet network.
-Endpoints are small boxes whose only ports are HDMI (or USB) plus
-Ethernet/PoE. Any single producer must be re-pairable to any single
+The selected USB prototype is two Radxa ZERO 3E hardware boxes, one
+beside the USB device and one connected by USB to the user's computer.
+USB 2 is the first deliverable; power and any PoE adapter need separate
+validation. See [USB hardware endpoint](USB-ENDPOINT.md).
+Any single producer must be re-pairable to any single
 consumer at runtime. The payload must be transported transparently — the
 control plane never interprets media payload. Content protection (HDCP)
 remains between the endpoint hardware and the sink/source. There
 is no central controller process; reconfiguration is signaled on the
 network itself. A passive snooper must be able to verify and debug the
-system out of band. This must hold up in production, not as a lab toy.
+system out of band. Failure and recovery behavior must have repeatable tests.
 
 ## Shape of the solution
 
@@ -33,14 +36,15 @@ The media plane is whatever the endpoint hardware does natively:
   the switch fabric prunes traffic via IGMP snooping.
 - **USB**: USB-over-IP endpoint pairs (appliance, or usbip on an
   embeddable Linux box). The producer side exports the physically attached
-  USB devices; the reference consumer imports them into its local Linux
-  USB stack. A physical USB output to another computer needs a separate
-  gadget/proxy backend, which is not implemented. Sessions are
-  consumer-initiated, matching the pairing model below.
+  USB devices. The product has a second hardware box that connects by USB
+  to a separate user computer; it is not a Linux application host. The
+  existing USB/IP adapter imports into the box's Linux USB stack, but the
+  physical USB device/gadget bridge to the user computer is unfinished.
+  The [USB design](USB-ENDPOINT.md) owns this product topology and the
+  USB 2 first milestone. Sessions are consumer-initiated.
 
-Where no commercial endpoint meets the requirement (4K120 over 10G, a
-supervised USB3 mesh), Yoke's endpoint proposals describe the media-plane
-role (`EDGE-DEVICES.md`). They keep the same split: the agent drives the
+The selected USB hardware is described in [USB-ENDPOINT.md](USB-ENDPOINT.md).
+Earlier HDMI/USB3 proposals are preserved in `EDGE-DEVICES.md`. They keep the same split: the agent drives the
 endpoint through a driver, and gateware or an external process carries
 the media (ADR 0011).
 

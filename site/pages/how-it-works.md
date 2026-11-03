@@ -1,72 +1,64 @@
-<header class="product-intro"><p class="eyebrow">How it works</p><h1>One request. Two endpoints.<br>A saved connection.</h1>
-<p class="hero-lead">Yoke separates choosing a connection from carrying its traffic. Agents remember who should connect; the endpoint backend carries video or USB data.</p></header>
+<header class="product-intro"><p class="eyebrow">How it works</p><h1>Connect the boxes, then pair them.</h1>
+<p class="hero-lead">The USB device connects to one box. Your computer connects by USB to a second box. Ethernet carries the connection between them.</p></header>
 
-<figure class="product-figure"><picture><source media="(max-width: 720px)" srcset="../assets/diagrams/control-and-payload-mobile.svg"><img src="../assets/diagrams/control-and-payload.svg" alt="A temporary control client sends pairing intent to local endpoint agents. HDMI travels separately from a computer through input hardware, an Ethernet switch, and output hardware to a display." loading="lazy"></picture><figcaption>Yoke chooses the route. The endpoint backend carries the traffic.</figcaption></figure>
+<figure class="product-figure"><picture><source media="(max-width: 760px)" srcset="../assets/diagrams/control-and-payload-mobile.svg"><img src="../assets/diagrams/control-and-payload.svg" alt="Two Yoke USB hardware boxes connect a USB device to a separate computer through Ethernet. An optional setup tool pairs the boxes and can then close."></picture><figcaption>The setup tool can close after pairing. Both hardware boxes keep running.</figcaption></figure>
 
-## 1. Give each end an identity
+<span id="1-give-each-end-an-identity" class="legacy-anchor" aria-hidden="true"></span>
+## 1. Connect the USB cables
 
-A **producer** offers a source: a video stream or exported USB device.
-A **consumer** uses one source: a display endpoint or a Linux USB/IP host.
-Each has its own agent and durable state file.
+Plug the USB device into the device-side box. Connect the computer-side
+box to your computer with another USB cable. Both Yoke boxes are separate from your computer.
 
-The agent can run on an open Linux endpoint, or beside a closed appliance
-as that device’s dedicated **warden**. Several wardens may share a
-computer; each still owns only its own endpoint’s state.
+<span id="2-choose-the-source-for-a-destination" class="legacy-anchor" aria-hidden="true"></span>
+## 2. Connect the boxes to Ethernet
 
-## 2. Choose the source for a destination
+Both boxes connect to your Ethernet switch. The prototype uses a Radxa
+ZERO 3E board in each box and targets USB 2 first.
+
+<span id="3-let-the-endpoints-keep-the-route" class="legacy-anchor" aria-hidden="true"></span>
+## 3. Pair the boxes
+
+Tell the computer-side box which device-side box to use. A command looks
+like this, using the names assigned to your boxes:
 
 ```sh
-yoke pair cam-garage tv-den
+yoke pair usb-device-box desk-usb-box
 ```
 
-The command sends a signed request on the local network. The consumer
-saves the new pairing, acknowledges it, then asks its driver to connect.
-The CLI can exit as soon as the request has been accepted.
-
-The acknowledgment confirms saved configuration. Use `yoke status` to see
-the driver’s progress, and check the actual device to establish physical
-output. These are separate steps with different evidence.
-
-## 3. Let the endpoints keep the route
-
-Agents announce their state and reconcile missed requests with peers.
-After a restart, a consumer restores its saved pairing. If a source goes
-offline, the consumer keeps that choice and reports `pending` while it
-waits. Re-pairing or an explicit `unpair` changes the saved route.
-
-There is no central database of pairings and no management lease to renew.
-The optional monitor, Thermite, or another manager can be absent. Endpoint
-agents and their backend services still need to be running.
+The box saves that choice. Closing the setup tool does not clear it.
+After a restart or a lost network connection, it keeps the pairing and
+tries to reconnect. Use a new pair or unpair command to change it.
 
 <div class="pairing-demo" data-pairing-demo>
-  <div class="demo-heading"><span class="section-kicker">Interactive concept</span><h3>Change the route. Close the client.</h3><p>This local demonstration illustrates saved pairing behavior. It is not live device status and sends no network commands.</p></div>
-  <div class="demo-routes" aria-label="Demonstration display pairings">
-    <div class="demo-route" data-demo-route="display-a" data-demo-initial-source="studio" data-route-state="paired"><span class="demo-destination">Meeting room display</span><strong data-demo-route-name>Studio PC</strong><span data-demo-route-state>Paired · input available</span></div>
-    <div class="demo-route" data-demo-route="display-b" data-route-state="unpaired"><span class="demo-destination">Workbench display</span><strong data-demo-route-name>No input selected</strong><span data-demo-route-state>Unpaired</span></div>
-  </div>
-  <div data-demo-controls hidden>
-    <div class="demo-choices"><label>Input<select data-demo-source><option value="studio">Studio PC</option><option value="laptop">Laptop</option></select></label><label>Display<select data-demo-destination><option value="display-a">Meeting room display</option><option value="display-b">Workbench display</option></select></label></div>
-    <div class="demo-actions"><button type="button" data-demo-pair>Save pairing</button><button type="button" data-demo-unpair>Unpair display</button></div>
-    <div class="demo-environment"><p><span>Control client</span><strong data-demo-controller-state>Open</strong></p><button type="button" data-demo-controller>Close control client</button><p><span>Selected input</span><strong data-demo-source-state>Studio PC: available</strong></p><button type="button" data-demo-source-toggle>Take selected input offline</button></div>
-    <p class="demo-status" role="status" aria-live="polite" aria-atomic="true" data-demo-status>Try a different pairing, close the control client, or take an input offline.</p>
-  </div>
-  <p class="demo-caption">The pairing is desired configuration. An unavailable input leaves it pending; only a new pairing or an explicit unpair changes it. Available input in this illustration does not verify physical video output. Reloading resets the demonstration.</p>
-  <noscript><p>The static example shows one paired display and one unpaired display. Saved pairings remain after a control client exits.</p></noscript>
+<div class="demo-heading"><h3>Try pairing a box</h3><p>This example runs in your browser. It does not connect to any hardware.</p></div>
+<div class="demo-routes" aria-label="Example USB pairing">
+<div class="demo-route" data-demo-route="display-a" data-demo-initial-source="controller" data-route-state="paired"><span class="demo-destination">Box beside your computer</span><strong data-demo-route-name>USB controller box</strong><span data-demo-route-state>Paired · device box online</span></div>
+</div>
+<div data-demo-controls hidden>
+<div class="demo-choices"><label>Device-side box<select data-demo-source><option value="controller">USB controller box</option><option value="keyboard">Keyboard box</option></select></label><label>Computer-side box<select data-demo-destination><option value="display-a">Box beside your computer</option></select></label></div>
+<div class="demo-actions"><button type="button" data-demo-pair>Pair boxes</button><button type="button" data-demo-unpair>Unpair</button></div>
+<div class="demo-environment"><p><span>Setup tool</span><strong data-demo-controller-state>Open</strong></p><button type="button" data-demo-controller>Close setup tool</button><p><span>Device-side box</span><strong data-demo-source-state>USB controller box: online</strong></p><button type="button" data-demo-source-toggle>Disconnect device box</button></div>
+<p class="demo-status" role="status" aria-live="polite" aria-atomic="true" data-demo-status>Choose a device box, close the setup tool, or disconnect a box.</p>
+</div>
+<p class="demo-caption">Disconnecting a box keeps its pairing saved. Pair or unpair changes it. Reloading this page resets the example.</p>
+<noscript><p>The example shows the computer-side box paired with the USB controller box. That pairing stays saved after the setup tool closes.</p></noscript>
 </div>
 
-## 4. Keep the traffic on its own path
+<span id="4-keep-the-traffic-on-its-own-path" class="legacy-anchor" aria-hidden="true"></span>
+## 4. Use the device from your computer
 
-For HDMI, the driver may select an appliance channel or start an external
-receiver. For USB/IP, the consumer imports devices through the Linux USB
-stack. The Yoke agent configures that path and never receives or inspects
-the media payload.
+The computer sends and receives USB traffic through its USB cable. The two
+boxes carry that traffic over Ethernet. The boxes handle the connection; your computer uses its USB port.
 
-The control protocol uses authenticated multicast on the local network.
-Payload transport depends on the backend. Protected-content handling
-stays with the endpoint’s permitted media path; the agent never decrypts
-it or changes protection behavior.
+This is the agreed hardware design. The complete USB bridge firmware and
+hardware tests are still unfinished. See the
+[USB hardware page](usb.md) and [development status](docs/project-status.md).
 
-## 5. Observe from anywhere on the control network
+<span id="5-observe-from-anywhere-on-the-control-network" class="legacy-anchor" aria-hidden="true"></span>
+## Optional management and monitoring
+
+Use the command line, Thermite, or another manager to change pairings.
+The boxes do not depend on a manager remaining connected.
 
 ```sh
 yoke status
@@ -74,12 +66,9 @@ yoke snoop
 yoke top
 ```
 
-`status` gives a recent view of endpoint announcements. `snoop` shows the
-control conversation. `top` adds an optional terminal dashboard. Observers
-send no application control traffic and do not own the routes they show.
+These tools show saved pairings, recent status, and errors. A status
+message cannot establish that a physical device is working; hardware
+tests check that separately.
 
-The control network uses a shared site key: everyone holding that key
-belongs to the same trust domain. The [security guide](../../SECURITY.md)
-describes the exact boundary.
-
-<div class="link-cards"><a class="link-card" href="start.md"><strong>Try it without devices</strong><span>Run the pairing fault suite and preview the monitor.</span></a><a class="link-card" href="guides/pairing.md"><strong>Pair configured endpoints</strong><span>Choose a source, inspect acceptance, and verify activation.</span></a><a class="link-card" href="../../doc/design/ARCHITECTURE.md"><strong>Read the architecture</strong><span>Go deeper into persistence, convergence, and drivers.</span></a></div>
+[USB hardware](usb.md) · [Software tests](start.md) ·
+[Technical documentation](engineering/index.md)

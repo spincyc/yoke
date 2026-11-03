@@ -29,7 +29,7 @@ yoke-media --help
 
 | Reference | Covers |
 |---|---|
-| [Endpoint backends](backends.md) | Driver roles, requirements, and the meaning of activation |
+| [Software adapters](backends.md) | Existing adapters and their limits |
 | [Deployment](../../../doc/design/DEPLOYMENT.md) | Agent TOML, identities, site keys, state files, network, and services |
 | [Example configs](../../../examples) | Starting points for backend-specific agent configuration |
 | [Wire protocol](../../../doc/design/PROTOCOL.md) | Normative YWP/1 frames, authentication, persistence, and convergence |
@@ -38,5 +38,5 @@ yoke-media --help
 | [Telemetry](../../../doc/design/TELEMETRY.md) | Terminal monitor, Prometheus metrics, and JSON schema |
 | [Security](../../../SECURITY.md) | Shared-key trust and reporting |
 
-For an operational walkthrough, use the [guides](../guides/index.md).
+For setup instructions, use the [guides](../guides/index.md).
 For design rationale, use the [engineering map](../engineering/index.md).

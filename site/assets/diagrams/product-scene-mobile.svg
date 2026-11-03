@@ -1,82 +1,73 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 686" width="360" height="686" role="img" aria-labelledby="mobile-scene-title mobile-scene-description">
-  <title id="mobile-scene-title">An HDMI connection through your Ethernet network</title>
-  <desc id="mobile-scene-description">Endpoint design concept: a computer connects by HDMI to an input endpoint, which connects through an Ethernet switch to an output endpoint. HDMI then connects to the display. Video travels downward through this path. Hardware has not been bench-tested.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 795" width="360" height="795" role="img" aria-labelledby="diagram-title diagram-description">
+  <title id="diagram-title">Two dedicated Yoke USB boxes connect a peripheral to your computer over Ethernet</title>
+  <desc id="diagram-description">USB 2 hardware design. A USB peripheral connects by USB cable to a dedicated device-side Yoke USB box. An Ethernet switch connects it to a second dedicated computer-side Yoke USB box. A second USB cable connects that box to the user’s external computer, whose operating system is unspecified. USB requests and responses travel in both directions. The boxes are hardware appliances; the Radxa ZERO 3E prototype is an engineering path, not a ready-to-ship product.</desc>
   <defs>
-    <marker id="mobile-arrow" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="m2 2 4 3-4 3" fill="none" stroke="#315fcd" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></marker>
+    <marker id="both" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="m2 2 4 3-4 3" class="arrow"/></marker>
     <style>
-      text {font-family:Arial,Helvetica,sans-serif;fill:#17202a}
-      .label {font-size:21px;font-weight:600;letter-spacing:-.3px}
-      .detail {font-size:16px;fill:#52606c}
-      .device {fill:#efede8;stroke:#17202a;stroke-width:1.8;stroke-linejoin:round}
-      .wire {fill:none;stroke:#315fcd;stroke-width:3;stroke-linecap:round;marker-end:url(#mobile-arrow)}
-
+      :root {color-scheme:light dark;--paper:#f8f7f4;--ink:#17202a;--muted:#52606c;--rule:#d9dce0;--face:#efede8;--top:#fff;--side:#dfe2e3;--port:#17202a;--insert:#b4bbc0;--blue:#315fcd;--screen:#17202a;--setup:#52606c}
+      text {font-family:Arial,Helvetica,sans-serif;fill:var(--ink)}
+      .canvas {fill:var(--paper)}
+      .face {fill:var(--face);stroke:var(--ink);stroke-width:2;stroke-linejoin:round}
+      .top {fill:var(--top);stroke:var(--ink);stroke-width:2;stroke-linejoin:round}
+      .side {fill:var(--side);stroke:var(--ink);stroke-width:2;stroke-linejoin:round}
+      .port {fill:var(--port)}
+      .insert {fill:var(--insert)}
+      .blue {fill:var(--blue)}
+      .screen {fill:var(--screen)}
+      .label {font-weight:600;letter-spacing:-.4px}
+      .detail {fill:var(--muted)}
+      .rule {fill:none;stroke:var(--rule);stroke-width:1}
+      .trim {fill:none;stroke:var(--insert);stroke-width:2;stroke-linecap:round}
+      .traffic {fill:none;stroke:var(--blue);stroke-width:5;stroke-linecap:round;stroke-linejoin:round}
+      .direction {fill:none;stroke:var(--blue);stroke-width:2.5;stroke-linecap:round;marker-start:url(#both);marker-end:url(#both)}
+      .setup {fill:none;stroke:var(--setup);stroke-width:2;stroke-dasharray:6 6;stroke-linejoin:round}
+      .setup-box {fill:var(--paper);stroke:var(--setup);stroke-width:1.6;stroke-dasharray:5 4}
+      .arrow {fill:none;stroke:var(--blue);stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
       @media (prefers-color-scheme:dark) {
-        [fill="#f8f7f4"] {fill:#15191f}
-        [fill="#fff"], [fill="#efede8"] {fill:#303943}
-        [fill="#dfe2e3"], [fill="#e0e2e2"], [fill="#d9dce0"] {fill:#242d36}
-        [fill="#17202a"] {fill:#11161d}
-        [fill="#315fcd"] {fill:#82a7ff}
-        [fill="#52606c"] {fill:#aeb8c7}
-        [stroke="#17202a"] {stroke:#b9c4d3}
-        [stroke="#d9dce0"], [stroke="#b4bbc0"] {stroke:#465260}
-        [stroke="#315fcd"] {stroke:#82a7ff}
-        [stroke="#52606c"] {stroke:#aeb8c7}
-        stop[stop-color="#fff"] {stop-color:#38434f}
-        stop[stop-color="#efede8"] {stop-color:#242d36}
-        .box, .device {fill:#303943;stroke:#b9c4d3}
-        .outline {stroke:#b9c4d3}
-        .port {fill:#11161d;stroke:#b9c4d3}
-        .payload, .cable, .wire {stroke:#82a7ff}
-        .control {stroke:#aeb8c7}
-        text {fill:#f3f4f6}
-        .detail {fill:#aeb8c7}
+        :root {--paper:#15191f;--ink:#f3f4f6;--muted:#aeb8c7;--rule:#38434f;--face:#303943;--top:#38434f;--side:#242d36;--port:#11161d;--insert:#aeb8c7;--blue:#82a7ff;--screen:#11161d;--setup:#aeb8c7}
       }
     </style>
   </defs>
-  <rect width="360" height="686" fill="#f8f7f4"/>
-  <text x="18" y="31" font-size="14" font-weight="700" letter-spacing="1">HDMI / DESIGN CONCEPT</text>
-  <path d="M18 47H342" stroke="#d9dce0"/>
-  <rect x="42" y="70" width="51" height="77" rx="3" class="device"/>
-  <path d="M51 84h32M51 90h32" stroke="#b4bbc0" stroke-width="2"/>
-  <circle cx="54" cy="133" r="2.5" fill="#315fcd"/>
-  <text x="125" y="101" class="label">Your computer</text>
-  <text x="125" y="126" class="detail">HDMI source</text>
-  <path d="M68 153v43" class="wire"/>
-  <text x="94" y="180" class="detail">HDMI</text>
-  <path d="m24 215 77-8 14 10-77 8Z" fill="#fff" class="device"/>
-  <path d="M24 215h77v48H24Z" class="device"/>
-  <path d="m101 207 14 10v38l-14 8Z" fill="#d9dce0" class="device"/>
-  <rect x="34" y="242" width="20" height="9" rx="1" fill="#17202a"/>
-  <rect x="78" y="239" width="14" height="14" rx="1" fill="#315fcd"/>
-  <text x="34" y="231" font-size="9" letter-spacing="1">YOKE / IN</text>
-  <text x="125" y="230" class="label">Input endpoint</text>
-  <text x="125" y="255" class="detail">Sends the picture</text>
-  <path d="M68 272v37" class="wire"/>
-  <text x="94" y="296" class="detail">Ethernet</text>
-  <rect x="24" y="325" width="91" height="45" rx="3" class="device"/>
-  <path d="M35 337h33" stroke="#b4bbc0" stroke-width="2"/>
-  <g fill="#17202a"><rect x="34" y="347" width="13" height="11"/><rect x="52" y="347" width="13" height="11"/><rect x="70" y="347" width="13" height="11"/><rect x="88" y="347" width="13" height="11"/></g>
-  <path d="M36 349h9v7h-9ZM54 349h9v7h-9Z" fill="#315fcd"/>
-  <text x="125" y="342" class="label">Your network</text>
-  <text x="125" y="367" class="detail">Ethernet switch</text>
-  <path d="M68 381v37" class="wire"/>
-  <text x="94" y="405" class="detail">Ethernet</text>
-  <path d="m24 439 77-8 14 10-77 8Z" fill="#fff" class="device"/>
-  <path d="M24 439h77v48H24Z" class="device"/>
-  <path d="m101 431 14 10v38l-14 8Z" fill="#d9dce0" class="device"/>
-  <rect x="34" y="463" width="14" height="14" rx="1" fill="#315fcd"/>
-  <rect x="70" y="466" width="20" height="9" rx="1" fill="#17202a"/>
-  <text x="34" y="455" font-size="9" letter-spacing="1">YOKE / OUT</text>
-  <text x="125" y="454" class="label">Output endpoint</text>
-  <text x="125" y="479" class="detail">Follows your pairing</text>
-  <path d="M68 497v37" class="wire"/>
-  <text x="94" y="521" class="detail">HDMI</text>
-  <rect x="21" y="550" width="96" height="61" rx="2" class="device"/>
-  <rect x="26" y="555" width="86" height="51" fill="#17202a"/>
-  <path d="m33 596 21-25 18 15 14-9 18 19Z" fill="#315fcd"/>
-  <path d="M63 612v8H48M73 612v8h15" stroke="#17202a" stroke-width="3"/>
-  <text x="125" y="575" class="label">Your display</text>
-  <text x="125" y="600" class="detail">HDMI destination</text>
-  <path d="M18 640H342" stroke="#d9dce0"/>
-  <text x="18" y="668" class="detail">Hardware has not been bench-tested.</text>
+  <rect width="360" height="795" class="canvas"/>
+  <text x="18" y="30" font-size="16" class="label">USB 2 / HARDWARE DESIGN</text><path d="M18 47H342" class="rule" /><path d="M70 142V199" class="traffic" /><path d="M70 152V189" class="direction" /><text x="96" y="176" font-size="16" class="detail">USB cable</text><path d="M70 286V344" class="traffic" /><path d="M70 296V334" class="direction" /><text x="96" y="321" font-size="16" class="detail">Ethernet</text><path d="M70 431V489" class="traffic" /><path d="M70 441V479" class="direction" /><text x="96" y="466" font-size="16" class="detail">Ethernet</text><path d="M70 576V634" class="traffic" /><path d="M70 586V624" class="direction" /><text x="96" y="611" font-size="16" class="detail">USB cable</text><g transform="translate(26 72) scale(0.6)">
+      <path d="M35 10c-15 0-23 10-28 28L-5 80c-4 16 12 25 23 13l19-21h67l19 21c11 12 27 3 23-13l-12-42c-5-18-13-28-28-28Z" class="face"/>
+      <path d="M28 40h25M40 28v25" fill="none" stroke="var(--ink)" stroke-width="6" stroke-linecap="round"/>
+      <circle cx="109" cy="35" r="5" class="blue"/><circle cx="125" cy="51" r="5" class="blue"/>
+      <path d="M65 33h12" fill="none" stroke="var(--ink)" stroke-width="3" stroke-linecap="round"/>
+      <rect x="63" y="84" width="15" height="13" rx="2" class="port"/>
+    </g><g transform="translate(24 208) scale(0.6)"><g>
+      <path d="m0 18 116-17 40 25-116 17Z" class="top"/>
+      <path d="m116 1 40 25v62l-40 15Z" class="side"/>
+      <path d="M0 18h116v85H0Z" class="face"/>
+      <rect x="12" y="59" width="29" height="16" rx="1" class="port"/>
+      <rect x="17" y="64" width="19" height="5" class="insert"/>
+      <path d="m133 47 17-7v26l-17 6Z" class="port"/>
+      <path d="m137 51 9-4v15l-9 3Z" class="insert"/>
+      <circle cx="92" cy="83" r="3" class="blue"/>
+      </g><text x="15" y="47" font-size="13" font-weight="700" letter-spacing="1.5">YOKE</text>
+    </g><g transform="translate(19 354) scale(0.51)">
+      <path d="m0 18 157-18 36 25-157 19Z" class="top"/>
+      <path d="m157 0 36 25v56l-36 17Z" class="side"/>
+      <path d="M0 18h157v80H0Z" class="face"/>
+      <path d="M17 39h71" class="trim"/>
+      <g class="port"><rect x="17" y="60" width="25" height="20" rx="2"/><rect x="52" y="60" width="25" height="20" rx="2"/><rect x="87" y="60" width="25" height="20" rx="2"/><rect x="122" y="60" width="25" height="20" rx="2"/></g>
+      <path d="M21 64h17v12H21ZM56 64h17v12H56ZM91 64h17v12H91ZM126 64h17v12h-17Z" class="insert"/>
+    </g><g transform="translate(24 498) scale(0.6)"><g transform="translate(156 0) scale(-1 1)">
+      <path d="m0 18 116-17 40 25-116 17Z" class="top"/>
+      <path d="m116 1 40 25v62l-40 15Z" class="side"/>
+      <path d="M0 18h116v85H0Z" class="face"/>
+      <rect x="12" y="59" width="29" height="16" rx="1" class="port"/>
+      <rect x="17" y="64" width="19" height="5" class="insert"/>
+      <path d="m133 47 17-7v26l-17 6Z" class="port"/>
+      <path d="m137 51 9-4v15l-9 3Z" class="insert"/>
+      <circle cx="92" cy="83" r="3" class="blue"/>
+      </g><text x="52" y="47" font-size="13" font-weight="700" letter-spacing="1.5">YOKE</text>
+    </g><g transform="translate(10 646) scale(0.55)">
+      <rect x="15" y="0" width="180" height="120" rx="5" class="face"/>
+      <rect x="24" y="9" width="162" height="101" rx="1" class="screen"/>
+      <path d="m24 110 48-55 34 31 32-20 48 44Z" class="blue" opacity=".85"/>
+      <path d="M0 124h210l-10 14H10Z" class="face"/>
+      <path d="M82 126h46l4 5H78Z" class="insert"/>
+      <rect x="170" y="127" width="22" height="6" rx="1" class="port"/>
+    </g><text x="135" y="100" font-size="21" class="label">USB peripheral</text><text x="135" y="125" font-size="16" class="detail">Your device</text><text x="135" y="238" font-size="21" class="label">Device-side box</text><text x="135" y="263" font-size="16" class="detail">Dedicated Yoke box</text><text x="135" y="385" font-size="21" class="label">Ethernet switch</text><text x="135" y="410" font-size="16" class="detail">USB requests + responses</text><text x="135" y="528" font-size="20" class="label">Computer-side box</text><text x="135" y="553" font-size="16" class="detail">Dedicated Yoke box</text><text x="135" y="675" font-size="21" class="label">Your computer</text><text x="135" y="700" font-size="16" class="detail">Connected by USB cable</text><path d="M18 747H342" class="rule" /><text x="18" y="776" font-size="16" class="detail">USB traffic moves in both directions.</text>
 </svg>

@@ -1,5 +1,11 @@
 # Hardware research: what exists, what to buy, what to avoid
 
+> **USB selection update:** the current product uses two Radxa ZERO 3E
+> hardware boxes and targets USB 2 first. See the
+> [agreed USB design](../design/USB-ENDPOINT.md). Earlier NanoPi/VirtualHere
+> and USB3 recommendations in this dated study are not the selected design.
+
+
 Status: live-web research 2026-09-24 (four lanes: commercial endpoints,
 USB, 4K120 compression path, commodity capture). The verdict these
 support is in `FEASIBILITY.md`; the endpoint design in

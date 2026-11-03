@@ -1,77 +1,73 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 744" width="360" height="744" role="img" aria-labelledby="control-mobile-title control-mobile-description">
-  <title id="control-mobile-title">Separate paths for control and picture</title>
-  <desc id="control-mobile-description">The payload flows downward from a computer through input hardware, an Ethernet switch, and output hardware to a display. Local agents sit beside the hardware, outside that path. A temporary control client sends a signed intent over the LAN to the output agent, which saves the pairing and configures the hardware through a driver. The client can then exit. Hardware is not bench-tested.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 940" width="360" height="940" role="img" aria-labelledby="diagram-title diagram-description">
+  <title id="diagram-title">Pair the USB boxes with optional setup outside the USB traffic path</title>
+  <desc id="diagram-description">USB 2 hardware design. A USB peripheral connects by USB cable to a dedicated device-side Yoke USB box. An Ethernet switch connects it to a second dedicated computer-side Yoke USB box. A second USB cable connects that box to the user’s external computer, whose operating system is unspecified. USB requests and responses travel in both directions. The boxes are hardware appliances; the Radxa ZERO 3E prototype is an engineering path, not a ready-to-ship product. Optional setup sits outside the USB traffic path. A setup tool pairs the two boxes over the Ethernet network and can disconnect after the pairing is saved.</desc>
   <defs>
-    <marker id="cm-payload" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="m2 2 4 3-4 3" fill="none" stroke="#315fcd" stroke-width="1.7" stroke-linecap="round"/></marker>
-    <marker id="cm-control" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="m2 2 4 3-4 3" fill="none" stroke="#52606c" stroke-width="1.7" stroke-linecap="round"/></marker>
+    <marker id="both" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="m2 2 4 3-4 3" class="arrow"/></marker>
     <style>
-      text {font-family:Arial,Helvetica,sans-serif;fill:#17202a}
-      .label {font-size:19px;font-weight:600;letter-spacing:-.3px}
-      .detail {font-size:15px;fill:#52606c}
-      .box {fill:#f8f7f4;stroke:#17202a;stroke-width:1.6}
-      .payload {fill:none;stroke:#315fcd;stroke-width:3.5;marker-end:url(#cm-payload)}
-      .control {fill:none;stroke:#52606c;stroke-width:1.8;stroke-dasharray:4 4;marker-end:url(#cm-control)}
-
+      :root {color-scheme:light dark;--paper:#f8f7f4;--ink:#17202a;--muted:#52606c;--rule:#d9dce0;--face:#efede8;--top:#fff;--side:#dfe2e3;--port:#17202a;--insert:#b4bbc0;--blue:#315fcd;--screen:#17202a;--setup:#52606c}
+      text {font-family:Arial,Helvetica,sans-serif;fill:var(--ink)}
+      .canvas {fill:var(--paper)}
+      .face {fill:var(--face);stroke:var(--ink);stroke-width:2;stroke-linejoin:round}
+      .top {fill:var(--top);stroke:var(--ink);stroke-width:2;stroke-linejoin:round}
+      .side {fill:var(--side);stroke:var(--ink);stroke-width:2;stroke-linejoin:round}
+      .port {fill:var(--port)}
+      .insert {fill:var(--insert)}
+      .blue {fill:var(--blue)}
+      .screen {fill:var(--screen)}
+      .label {font-weight:600;letter-spacing:-.4px}
+      .detail {fill:var(--muted)}
+      .rule {fill:none;stroke:var(--rule);stroke-width:1}
+      .trim {fill:none;stroke:var(--insert);stroke-width:2;stroke-linecap:round}
+      .traffic {fill:none;stroke:var(--blue);stroke-width:5;stroke-linecap:round;stroke-linejoin:round}
+      .direction {fill:none;stroke:var(--blue);stroke-width:2.5;stroke-linecap:round;marker-start:url(#both);marker-end:url(#both)}
+      .setup {fill:none;stroke:var(--setup);stroke-width:2;stroke-dasharray:6 6;stroke-linejoin:round}
+      .setup-box {fill:var(--paper);stroke:var(--setup);stroke-width:1.6;stroke-dasharray:5 4}
+      .arrow {fill:none;stroke:var(--blue);stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
       @media (prefers-color-scheme:dark) {
-        [fill="#f8f7f4"] {fill:#15191f}
-        [fill="#fff"], [fill="#efede8"] {fill:#303943}
-        [fill="#dfe2e3"], [fill="#e0e2e2"], [fill="#d9dce0"] {fill:#242d36}
-        [fill="#17202a"] {fill:#11161d}
-        [fill="#315fcd"] {fill:#82a7ff}
-        [fill="#52606c"] {fill:#aeb8c7}
-        [stroke="#17202a"] {stroke:#b9c4d3}
-        [stroke="#d9dce0"], [stroke="#b4bbc0"] {stroke:#465260}
-        [stroke="#315fcd"] {stroke:#82a7ff}
-        [stroke="#52606c"] {stroke:#aeb8c7}
-        stop[stop-color="#fff"] {stop-color:#38434f}
-        stop[stop-color="#efede8"] {stop-color:#242d36}
-        .box, .device {fill:#303943;stroke:#b9c4d3}
-        .outline {stroke:#b9c4d3}
-        .port {fill:#11161d;stroke:#b9c4d3}
-        .payload, .cable, .wire {stroke:#82a7ff}
-        .control {stroke:#aeb8c7}
-        text {fill:#f3f4f6}
-        .detail {fill:#aeb8c7}
+        :root {--paper:#15191f;--ink:#f3f4f6;--muted:#aeb8c7;--rule:#38434f;--face:#303943;--top:#38434f;--side:#242d36;--port:#11161d;--insert:#aeb8c7;--blue:#82a7ff;--screen:#11161d;--setup:#aeb8c7}
       }
     </style>
   </defs>
-  <rect width="360" height="744" fill="#f8f7f4"/>
-  <text x="18" y="29" font-size="14" font-weight="700" letter-spacing="1">CONTROL / PAYLOAD</text>
-  <path d="M18 46H342" stroke="#d9dce0"/>
-  <rect x="20" y="65" width="320" height="81" rx="3" class="box"/>
-  <text x="37" y="96" class="label">Temporary control client</text>
-  <text x="37" y="122" class="detail">Sends a signed pairing intent over LAN</text>
-  <path d="M328 146v369h-13" class="control"/>
-  <text x="214" y="180" class="detail">Control path</text>
-
-  <text x="100" y="196" text-anchor="middle" class="label">Computer</text>
-  <path d="M100 208v46" class="payload"/>
-  <text x="117" y="240" class="detail">HDMI</text>
-  <rect x="20" y="266" width="160" height="64" rx="3" class="box"/>
-  <text x="100" y="293" text-anchor="middle" class="label">Input hardware</text>
-  <text x="100" y="316" text-anchor="middle" class="detail">Encodes / sends</text>
-  <rect x="220" y="266" width="95" height="64" rx="3" class="box"/>
-  <text x="267" y="293" text-anchor="middle" class="label">Agent</text>
-  <text x="267" y="316" text-anchor="middle" class="detail">Local control</text>
-  <path d="M220 298h-28" class="control"/>
-  <text x="189" y="353" class="detail">Driver</text>
-  <path d="M100 342v43" class="payload"/>
-  <rect x="20" y="396" width="160" height="64" rx="3" class="box"/>
-  <text x="100" y="423" text-anchor="middle" class="label">Ethernet switch</text>
-  <text x="100" y="446" text-anchor="middle" class="detail">Carries the payload</text>
-  <path d="M100 472v43" class="payload"/>
-  <rect x="20" y="526" width="160" height="64" rx="3" class="box"/>
-  <text x="100" y="553" text-anchor="middle" class="label">Output hardware</text>
-  <text x="100" y="576" text-anchor="middle" class="detail">Receives / decodes</text>
-  <rect x="220" y="490" width="95" height="100" rx="3" class="box"/>
-  <text x="267" y="521" text-anchor="middle" class="label">Agent</text>
-  <text x="267" y="545" text-anchor="middle" class="detail">Saves</text>
-  <text x="267" y="566" text-anchor="middle" class="detail">pairing</text>
-  <path d="M220 558h-28" class="control"/>
-  <text x="189" y="615" class="detail">Driver</text>
-  <path d="M100 602v44" class="payload"/>
-  <text x="117" y="633" class="detail">HDMI</text>
-  <text x="100" y="675" text-anchor="middle" class="label">Display</text>
-  <path d="M18 698H342" stroke="#d9dce0"/>
-  <text x="18" y="726" class="detail">The client exits. The saved pairing remains.</text>
+  <rect width="360" height="940" class="canvas"/>
+  <text x="18" y="30" font-size="16" class="label">USB 2 / HARDWARE DESIGN</text><path d="M18 47H342" class="rule" /><path d="M70 142V199" class="traffic" /><path d="M70 152V189" class="direction" /><text x="96" y="176" font-size="16" class="detail">USB cable</text><path d="M70 286V344" class="traffic" /><path d="M70 296V334" class="direction" /><text x="96" y="321" font-size="16" class="detail">Ethernet</text><path d="M70 431V489" class="traffic" /><path d="M70 441V479" class="direction" /><text x="96" y="466" font-size="16" class="detail">Ethernet</text><path d="M70 576V634" class="traffic" /><path d="M70 586V624" class="direction" /><text x="96" y="611" font-size="16" class="detail">USB cable</text><g transform="translate(26 72) scale(0.6)">
+      <path d="M35 10c-15 0-23 10-28 28L-5 80c-4 16 12 25 23 13l19-21h67l19 21c11 12 27 3 23-13l-12-42c-5-18-13-28-28-28Z" class="face"/>
+      <path d="M28 40h25M40 28v25" fill="none" stroke="var(--ink)" stroke-width="6" stroke-linecap="round"/>
+      <circle cx="109" cy="35" r="5" class="blue"/><circle cx="125" cy="51" r="5" class="blue"/>
+      <path d="M65 33h12" fill="none" stroke="var(--ink)" stroke-width="3" stroke-linecap="round"/>
+      <rect x="63" y="84" width="15" height="13" rx="2" class="port"/>
+    </g><g transform="translate(24 208) scale(0.6)"><g>
+      <path d="m0 18 116-17 40 25-116 17Z" class="top"/>
+      <path d="m116 1 40 25v62l-40 15Z" class="side"/>
+      <path d="M0 18h116v85H0Z" class="face"/>
+      <rect x="12" y="59" width="29" height="16" rx="1" class="port"/>
+      <rect x="17" y="64" width="19" height="5" class="insert"/>
+      <path d="m133 47 17-7v26l-17 6Z" class="port"/>
+      <path d="m137 51 9-4v15l-9 3Z" class="insert"/>
+      <circle cx="92" cy="83" r="3" class="blue"/>
+      </g><text x="15" y="47" font-size="13" font-weight="700" letter-spacing="1.5">YOKE</text>
+    </g><g transform="translate(19 354) scale(0.51)">
+      <path d="m0 18 157-18 36 25-157 19Z" class="top"/>
+      <path d="m157 0 36 25v56l-36 17Z" class="side"/>
+      <path d="M0 18h157v80H0Z" class="face"/>
+      <path d="M17 39h71" class="trim"/>
+      <g class="port"><rect x="17" y="60" width="25" height="20" rx="2"/><rect x="52" y="60" width="25" height="20" rx="2"/><rect x="87" y="60" width="25" height="20" rx="2"/><rect x="122" y="60" width="25" height="20" rx="2"/></g>
+      <path d="M21 64h17v12H21ZM56 64h17v12H56ZM91 64h17v12H91ZM126 64h17v12h-17Z" class="insert"/>
+    </g><g transform="translate(24 498) scale(0.6)"><g transform="translate(156 0) scale(-1 1)">
+      <path d="m0 18 116-17 40 25-116 17Z" class="top"/>
+      <path d="m116 1 40 25v62l-40 15Z" class="side"/>
+      <path d="M0 18h116v85H0Z" class="face"/>
+      <rect x="12" y="59" width="29" height="16" rx="1" class="port"/>
+      <rect x="17" y="64" width="19" height="5" class="insert"/>
+      <path d="m133 47 17-7v26l-17 6Z" class="port"/>
+      <path d="m137 51 9-4v15l-9 3Z" class="insert"/>
+      <circle cx="92" cy="83" r="3" class="blue"/>
+      </g><text x="52" y="47" font-size="13" font-weight="700" letter-spacing="1.5">YOKE</text>
+    </g><g transform="translate(10 646) scale(0.55)">
+      <rect x="15" y="0" width="180" height="120" rx="5" class="face"/>
+      <rect x="24" y="9" width="162" height="101" rx="1" class="screen"/>
+      <path d="m24 110 48-55 34 31 32-20 48 44Z" class="blue" opacity=".85"/>
+      <path d="M0 124h210l-10 14H10Z" class="face"/>
+      <path d="M82 126h46l4 5H78Z" class="insert"/>
+      <rect x="170" y="127" width="22" height="6" rx="1" class="port"/>
+    </g><text x="135" y="100" font-size="21" class="label">USB peripheral</text><text x="135" y="125" font-size="16" class="detail">Your device</text><text x="135" y="238" font-size="21" class="label">Device-side box</text><text x="135" y="263" font-size="16" class="detail">Dedicated Yoke box</text><text x="135" y="385" font-size="21" class="label">Ethernet switch</text><text x="135" y="410" font-size="16" class="detail">USB requests + responses</text><text x="135" y="528" font-size="20" class="label">Computer-side box</text><text x="135" y="553" font-size="16" class="detail">Dedicated Yoke box</text><text x="135" y="675" font-size="21" class="label">Your computer</text><text x="135" y="700" font-size="16" class="detail">Connected by USB cable</text><path d="M18 747H342" class="rule" /><text x="18" y="776" font-size="16" class="detail">USB traffic moves in both directions.</text><rect x="18" y="805" width="324" height="115" rx="3" class="setup-box"/><text x="35" y="834" font-size="20" class="label">Optional setup</text><text x="35" y="863" font-size="21" class="label">Pair boxes</text><text x="35" y="890" font-size="16" class="detail">The setup tool can disconnect</text><text x="35" y="912" font-size="16" class="detail">after the pairing is saved.</text>
 </svg>

@@ -1,10 +1,12 @@
 <span id="start-with-the-software" class="legacy-anchor" aria-hidden="true"></span>
 # Get started
 
-Run Yoke on one computer before choosing endpoint hardware. These first
-steps need no devices, network configuration, or management service.
+These steps run the software tests on one computer. They need no Yoke
+boxes or network setup. The [USB hardware](usb.md) uses two Radxa ZERO 3E
+boards; a complete device firmware image is not available yet.
 
-## Install from source
+<span id="install-from-source" class="legacy-anchor" aria-hidden="true"></span>
+## Install the test software
 
 Use Python 3.12 or later:
 
@@ -22,14 +24,15 @@ a development environment and run the repository checks.
 
 <span id="inspect-the-control-plane" class="legacy-anchor" aria-hidden="true"></span>
 
-## Run the pairing software offline
+<span id="run-the-pairing-software-offline" class="legacy-anchor" aria-hidden="true"></span>
+## Test pairing without hardware
 
 ```sh
 .scratch/run/bin/yoke simulate --json
 ```
 
-The installed fault suite runs the real pairing state machines through
-loss, duplication, partitions, restarts, and storage failures. It uses
+The test suite runs the pairing code through
+loss, duplication, split networks, restarts, and storage failures. It uses
 virtual time and simulated drivers. Exit status zero means every selected
 scenario passed.
 
@@ -41,7 +44,7 @@ To inspect a single scenario:
 
 The trace shows control messages and their virtual timestamps. See the
 [simulation reference](../../doc/design/SIMULATION.md) for the scenarios
-and the finite fault schedules they test.
+and the test cases they test.
 
 ## Preview the monitor
 
@@ -49,9 +52,9 @@ and the finite fault schedules they test.
 .scratch/run/bin/yoke top --demo --once
 ```
 
-This prints a synthetic dashboard without opening sockets or reading host
+This prints a sample dashboard without opening sockets or reading host
 resources. Use `top --demo` in an interactive terminal to explore its
-controls. The demo is explicitly labeled; it does not show real devices.
+controls. The demo uses sample data.
 
 <span id="run-a-repeatable-media-model" class="legacy-anchor" aria-hidden="true"></span>
 
@@ -74,4 +77,4 @@ they do not run those codecs or measure hardware latency.
 
 ## Choose your next step
 
-<div class="link-cards"><a class="link-card" href="guides/pairing.md"><strong>Pair configured endpoints</strong><span>Commission agents, select a route, and inspect driver state.</span></a><a class="link-card" href="../../doc/design/MEDIA-TESTING.md"><strong>Exercise real sockets</strong><span>Run sender, receiver, and passive observer on loopback before using a network.</span></a><a class="link-card" href="verification.md"><strong>Verify a checkout</strong><span>Run tests, fault campaigns, and reproducible software measurements.</span></a><a class="link-card" href="docs/project-status.md"><strong>Plan endpoint work</strong><span>Check the available backends and remaining hardware boundaries.</span></a></div>
+<div class="link-cards"><a class="link-card" href="guides/pairing.md"><strong>Pair configured endpoints</strong><span>Commission agents, select a route, and inspect driver state.</span></a><a class="link-card" href="../../doc/design/MEDIA-TESTING.md"><strong>Exercise real sockets</strong><span>Run sender, receiver, and passive observer on loopback before using a network.</span></a><a class="link-card" href="verification.md"><strong>Verify a checkout</strong><span>Run tests, fault campaigns, and reproducible software measurements.</span></a><a class="link-card" href="usb.md"><strong>USB hardware</strong><span>See the two-box design and remaining firmware work.</span></a></div>

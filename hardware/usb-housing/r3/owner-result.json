@@ -1,0 +1,20 @@
+{
+  "schema": "yoke.usb-housing-owner-result/1",
+  "revision": "R3",
+  "result": "FAIL",
+  "basis": "OWNER_REPORT",
+  "on": "2026-11-02",
+  "owner_statement": "this is the second failed housing print",
+  "assembly_result": "FAIL",
+  "specific_failure_mode": "NOT ESTABLISHED",
+  "measured_dimensions": null,
+  "repeat_print_allowed": false,
+  "replacement_requirements": [
+    "Rectangular shell following the board and connector envelope; no projecting fastener ears or turrets.",
+    "Halves must slot together for alignment and also screw together.",
+    "Use the same M3 socket-head screw assortment and heat-set inserts as Lacuna.",
+    "Verify complete assembly, hardware reach and tool access; digital checks do not establish physical fit."
+  ],
+  "physical_test_limit": "Owner reports failure; exact dimensions and failure mechanism have not been measured by this agent.",
+  "next_revision": "R4"
+}

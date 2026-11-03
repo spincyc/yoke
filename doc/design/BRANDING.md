@@ -1,6 +1,6 @@
 # Yoke identity and interface guide
 
-Yoke pairs endpoints while keeping control at the edge. Its identity should
+Yoke connects equipment through small hardware boxes and Ethernet. Its identity should
 feel like the equipment and tools an operator can depend on: clear, quiet,
 and easy to identify. Use the same name and mark on documentation,
 interfaces, and proposed endpoint enclosures.
@@ -12,10 +12,17 @@ interfaces, and proposed endpoint enclosures.
 Write **Yoke** in prose. Use `yoke` for commands, package names, and code;
 use **Yoke** in the outlined website wordmark. Existing **YOKE** equipment
 labels remain valid. The short line
-is **Control at the edge.** The explanatory description is **Controllerless
-pairing for HDMI and USB endpoints over switched Ethernet.**
+is **USB, HDMI and IR over Ethernet.** Describe the USB product as
+**two hardware boxes: one beside the USB device, one connected by USB to
+the computer**. The selected prototype uses Radxa ZERO 3E and targets USB 2
+first. The [USB design](USB-ENDPOINT.md) is the authority for that choice.
 
-Lead with an operator's task, then state the evidence and any limit. Keep
+Name the equipment, cables, and action. Explain the product before its
+implementation. On product pages, say "USB device", "Yoke box", "Ethernet
+switch", "computer", and "pair". Keep terms such as "control plane",
+"payload", "intent", "producer", "consumer", and "warden" in technical
+reference pages. Do not use vague slogans such as "Connections, made
+explicit" or "A connection should follow the task". Keep
 commands, endpoint IDs, error messages, and measured units exact. Distinguish
 configured pairing, backend readiness, and independently observed media.
 Describe proposed hardware as proposed until a documented bench result

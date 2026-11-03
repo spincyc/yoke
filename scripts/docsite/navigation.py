@@ -130,9 +130,9 @@ def status_notice(page: Page) -> str:
     if page.source.name == "EDGE-DEVICES.md":
         return (
             '<aside class="notice" aria-label="Endpoint status">'
-            "<strong>Engineering roadmap · no endpoint hardware bench results</strong>"
-            "These are proposed endpoints and milestones. DSC transport, physical "
-            "latency, USB compatibility, and protected-content relay behavior "
-            "remain subject to hardware validation.</aside>"
+            "<strong>Earlier hardware research</strong>"
+            "The selected USB prototype uses two ZERO 3E boxes and USB 2 first. "
+            "The earlier video and USB3 proposals below "
+            "have not been validated on hardware.</aside>"
         )
     return ""

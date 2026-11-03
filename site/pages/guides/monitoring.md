@@ -1,8 +1,7 @@
 # Monitor and integrate
 
-Choose the view you need. Every Yoke monitor is optional and read-only:
-pairing and reconciliation run without it, Thermite, Prometheus, or a
-cloud service.
+The monitors show status without changing pairings. They are optional;
+boxes do not need a monitor, Thermite, or Prometheus to keep working.
 
 ## Inspect a connection
 
@@ -11,8 +10,8 @@ yoke status
 yoke snoop
 ```
 
-`status` collects recent endpoint announcements. `snoop` renders the
-control conversation as it arrives. Add global
+`status` shows the latest messages from the boxes. `snoop` shows new
+messages as they arrive. Add global
 `--interface <local-ip>` and `--psk-file <path>` options before the command
 when your test network requires them.
 
@@ -24,7 +23,7 @@ yoke top --demo
 ```
 
 The first command prints a plain-text preview. The second opens an
-interactive synthetic dashboard. Use arrows or `j`/`k` to select a
+interactive monitor with sample data. Use arrows or `j`/`k` to select a
 device, `s` to sort, `?` for help, and `q` to exit.
 
 For live devices, omit `--demo` and select the control interface and key:
@@ -35,7 +34,7 @@ yoke --interface 192.0.2.10 --psk-file /etc/yoke/psk top
 
 The dashboard labels the machine it samples **COLLECTOR HOST**. Those CPU,
 memory, network, and temperature values describe the monitor’s host.
-A remote appliance’s announcement is a separate source of information.
+These are not measurements of a remote Yoke box.
 
 ## Add Prometheus or a manager
 
@@ -53,8 +52,8 @@ It binds to loopback by default and serves cached snapshots:
 | `http://127.0.0.1:9754/v1/snapshot` | Versioned JSON for a manager or custom display |
 
 Thermite or another manager can consume these views. The exporter exposes
-no command or upload API and grants no authority over pairings. Closing
-it leaves endpoint operation in place.
+no commands for changing pairings or uploading firmware. Closing it
+does not stop the boxes.
 
 Reuse the exporter from another terminal to avoid a second collector:
 
@@ -62,12 +61,13 @@ Reuse the exporter from another terminal to avoid a second collector:
 yoke top --url http://127.0.0.1:9754
 ```
 
-## Interpret the evidence
+<span id="interpret-the-evidence" class="legacy-anchor" aria-hidden="true"></span>
+## Read the status
 
-An endpoint’s **liveness** says whether its announcement was recently
-observed. Its **state** is what its backend last reported. Neither is an
-independent measurement of physical video output or USB application
-success. Missing samples appear as unknown rather than fabricated zeros.
+A box is shown as online when the monitor has heard from it recently.
+Its connection state is the last state reported by its software. Check
+the actual USB device or screen to confirm it works. Missing measurements
+are shown as unknown, not zero.
 
 The [telemetry reference](../../../doc/design/TELEMETRY.md) defines fields,
 metric names, retention, trust, resource limits, and exporter settings.

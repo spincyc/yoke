@@ -1,7 +1,7 @@
 name = "Yoke"
 repository = "https://github.com/spincyc/yoke"
 branch = "feature/ir"
-description = "Open connections for HDMI, USB and future IR over Ethernet."
+description = "USB hardware boxes over Ethernet. Radxa ZERO 3E prototype, USB 2 first."
 
 [[primary_navigation]]
 title = "Product"
@@ -20,7 +20,7 @@ output = "docs/index.html"
 
 [[navigation]]
 title = "Start here"
-pages = ["docs/index.html", "start.html", "docs/project-status.html"]
+pages = ["docs/index.html", "usb.html", "start.html", "docs/project-status.html"]
 
 [[navigation]]
 title = "Guides"
@@ -41,18 +41,28 @@ pages = ["contributing.html", "security.html"]
 [[pages]]
 source = "site/pages/index.md"
 output = "index.html"
-title = "Put your devices where you need them."
+title = "Connect USB devices over Ethernet."
 section = "Product"
-summary = "Open hardware and software for HDMI, USB and future IR connections over Ethernet."
+summary = "A USB device, two Yoke hardware boxes, an Ethernet switch, and your computer."
 layout = "product"
 nav = "product"
 
 [[pages]]
+source = "site/pages/usb.md"
+output = "usb.html"
+title = "USB hardware"
+section = "Product"
+summary = "Two Radxa ZERO 3E hardware boxes, physical USB at each end, and USB 2 first."
+layout = "product"
+nav = "product"
+parent = "index.html"
+
+[[pages]]
 source = "site/pages/product.md"
 output = "product.html"
-title = "Connections"
+title = "Yoke hardware"
 section = "Product"
-summary = "Concrete HDMI, Linux USB/IP, and planned IR connections."
+summary = "USB hardware boxes, with HDMI and IR hardware planned."
 layout = "product"
 nav = "product"
 parent = "index.html"
@@ -109,9 +119,9 @@ parent = "docs/index.html"
 [[pages]]
 source = "site/pages/guides/pairing.md"
 output = "guides/pairing.html"
-title = "Pair endpoints"
+title = "Pair boxes"
 section = "Guides"
-summary = "Select a source for a configured consumer and inspect the connection."
+summary = "Pair the device-side and computer-side boxes, check status, or remove a pairing."
 layout = "docs"
 nav = "docs"
 parent = "guides/index.html"
@@ -139,9 +149,9 @@ parent = "docs/index.html"
 [[pages]]
 source = "site/pages/reference/backends.md"
 output = "reference/backends.html"
-title = "Endpoint backends"
+title = "USB/IP and video adapters"
 section = "Reference"
-summary = "Implemented drivers, their requirements, and what backend activation establishes."
+summary = "Technical reference for the USB/IP and video software adapters, their requirements and limits."
 layout = "docs"
 nav = "docs"
 parent = "reference/index.html"
@@ -229,9 +239,9 @@ parent = "engineering/index.html"
 [[pages]]
 source = "doc/design/EDGE-DEVICES.md"
 output = "design/edge-devices.html"
-title = "Endpoint roadmap"
+title = "Earlier HDMI and USB3 study"
 section = "Design"
-summary = "Proposed video and USB endpoints, session state, open questions, and milestones."
+summary = "Earlier video and USB3 research; the selected USB prototype uses ZERO 3E boards and USB 2."
 layout = "docs"
 nav = "docs"
 parent = "engineering/index.html"
@@ -259,9 +269,9 @@ parent = "guides/index.html"
 [[pages]]
 source = "hardware/usb-housing/r3/README.md"
 output = "hardware/usb-housing-r3.html"
-title = "USB housing R3 assembly"
+title = "Retired USB housing R3"
 section = "Hardware"
-summary = "Locating joints, recessed screw heads, captive metal nuts, assembly and first-article checks."
+summary = "Rejected R3 case, retained for history. Do not print; a rectangular case with M3 heat-set inserts is being redesigned."
 layout = "docs"
 nav = "docs"
 parent = "guides/index.html"

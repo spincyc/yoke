@@ -1,4 +1,9 @@
-# Endpoint backends
+# USB/IP and video adapters
+
+This page describes adapters already in the code. The USB product is the
+[two-box ZERO 3E hardware design](../../../doc/design/USB-ENDPOINT.md).
+The Linux USB/IP adapter below is one part of its development, not the
+product wiring diagram.
 
 A driver translates a saved pairing into a specific endpoint action.
 The agent configures the backend; it never carries or inspects its media
@@ -41,7 +46,9 @@ It requires Linux USB/IP tooling, kernel support, and narrowly scoped
 device privileges. The Linux kernel carries the USB payload.
 
 A physical USB output that presents the imported device to a separate
-computer requires a gadget/proxy backend; that backend is unimplemented.
+computer is required by the selected hardware design. Its device/gadget
+bridge is unimplemented. The computer-side Yoke box remains part of the
+product even though that firmware work is unfinished.
 YWP/1 stores a route per consumer and has no distributed source-owner
 transaction. USB/IP refuses simultaneous device attachment, and the
 reference driver reconciles its locally owned imports. Plan a single
@@ -56,8 +63,9 @@ There is no IR routing driver. The
 [ESP32 firmware reference](../../../doc/design/ESP32-UPDATES.md) implements
 an updater, not IR learning, routing, or emission.
 
-The [endpoint roadmap](../../../doc/design/EDGE-DEVICES.md) describes
-proposed dedicated video and USB hardware. Candidate backends named in
+The [endpoint roadmap](../../../doc/design/EDGE-DEVICES.md) preserves earlier video and USB3 research. The
+[USB hardware design](../../../doc/design/USB-ENDPOINT.md) records the
+selected ZERO 3E platform and USB 2 first scope. Candidate backends named in
 that roadmap are not implemented simply because they appear in a design
 table. The [project status](../docs/project-status.md) is the concise
 capability map.

@@ -197,9 +197,12 @@ def check_search(page: Page, site: Path, base: str) -> None:
         if route.startswith("decisions/")
     ), f"historical ADRs outrank pairing task guide: {pairing}"
 
-    # Slash-separated protocol names still match after short-term tokenization.
+    hardware = results_for("USB hardware")
+    assert "usb.html" in hardware[:2], f"USB hardware page missing: {hardware}"
+
+    # Implementation searches lead to technical docs, not a different product.
     usbip = results_for("USB/IP")
-    assert "product.html" in usbip[:5], f"USB/IP connection search: {usbip}"
+    assert "reference/backends.html" in usbip[:5], f"USB/IP adapter search: {usbip}"
 
 
 def verify_site(site: Path, artifacts: Path) -> dict[str, int | str]:
