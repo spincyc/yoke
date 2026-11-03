@@ -1,0 +1,105 @@
+{
+  "schema": "yoke.usb-housing-design/1",
+  "revision": "R3",
+  "state": "DESIGN_REVIEW_ONLY",
+  "digital_checks": {
+    "result": "PASS",
+    "rebuild": "All 17 generated artifacts byte-identical with OpenSCAD2026.09.19",
+    "mesh": "8 individual finished/manufactured/coupon parts watertight, single-component; both plates watertight, 2 components",
+    "assembly": "Zero nominal base/lid or maximum specified metal-envelope overlap",
+    "sampled_paths": {
+      "lid": 61,
+      "nut": 68,
+      "screw": 204,
+      "collision_count": 0
+    },
+    "nut_capture": "Outward exit intersects integral keeper with halves seated; physical six-orientation test NOT RUN",
+    "official_board": "Fresh conservative triangle bounds: no component candidates in4 support-post regions; all front-window candidate boxes fit opening",
+    "floor_clearance_mm": 1.24,
+    "roof_clearance_mm": 1.0,
+    "author_evidence_sha256": "1dffd24db4fc84fa058dc63743391881dd903b91a993c82ee1169c8147d39016",
+    "main_mesh_preflight": {
+      "result": "PASS",
+      "supports": "DISABLED",
+      "evidence_sha256": "c7e89cf285d88c3214eba56031127998a921fdb41bf5816942fcae466c97ce19"
+    },
+    "coupon_mesh_preflight": {
+      "result": "PASS",
+      "supports": "DISABLED",
+      "evidence_sha256": "b82b649524b4cb2d5d255dfd00c622ab3b54e42c6799abadf830fb05caf370e7"
+    },
+    "export_topology": {
+      "zero_area_facets": 0,
+      "bounds_unchanged": true,
+      "nominal_volume_max_difference_mm3": 2.854048588574186e-07,
+      "evidence_sha256": "b4c70444925c3e5da0751b63d7492a6159cd457c976fe16715375c5a30f23f9c"
+    }
+  },
+  "nominal_mm": {
+    "body": [
+      79.6,
+      38,
+      20
+    ],
+    "maximum_envelope": [
+      90.4,
+      39.6,
+      20
+    ],
+    "head_well_diameter": 5.8,
+    "head_recess_depth": 2.4,
+    "nut_trap_across_flats": 5.25,
+    "ear_stop_z": 10.15,
+    "wall_seam_gap": 0.15,
+    "pad_capture_gap": 1.64,
+    "board_STEP_hole_diameter": 2.75,
+    "round_peg_diameter": 2.35,
+    "key_width_height": [
+      1.4,
+      1.35
+    ],
+    "key_side_clearance": 0.25,
+    "key_ceiling_clearance": 0.35,
+    "worst_specified_hardware_head_recess": 0.28,
+    "worst_specified_hardware_tip_clearance": 0.45,
+    "worst_specified_hardware_past_nut": 0.65
+  },
+  "hardware": {
+    "screws": "4 x M2.5 x16 PH1 pan-head, under-head L15.65..16.35, head<=D5 xH2.12, pitch0.45",
+    "nuts": "4 x M2.5 metal hex, AF4.82..5.00, thickness1.75..2.00",
+    "screw_spec": "https://www.accu.co.uk/phillips-pan-head-screws/174946-SIP-M2-5-16-A4-BL",
+    "nut_spec": "https://www.inoxfasteners.com/wp-content/uploads/2016/11/Catalogo-2014.pdf"
+  },
+  "physical_validation": "NOT RUN",
+  "slice_release_dispatch": "NOT RUN",
+  "limits": [
+    "Vendor board mesh is nonmanifold: surface bounds are not a Boolean-volume proof.",
+    "Sampled paths do not prove continuous collision-free movement.",
+    "Nominal hardware stack margins exclude print error; PDF requires measured acceptance.",
+    "No R1/R2 release carries over. Future prints require exact-file release and clear-bed authorization."
+  ],
+  "sha256": {
+    "README.md": "1959f705a7cc120374db285d069ba8038b5ec7d05d6de866be1beb3dd05ee2c6",
+    "assembly.pdf": "cb3b23ae6ba265d8b553b6b4062c657b19c527ff7e40e2f39daf0bbdd0bb7530",
+    "base-printed.stl": "fd23544b55aea49c676d7a713cb64c69114c80c45beec7fe278c195e22f67ae7",
+    "base.stl": "13ddb5724bae0900056bfb310d28058e892e3fc1ae3a85b44fc73863e6b0296a",
+    "build.py": "d13c109793d7c1a4ed138e9cea10082bec94ae57856f4614032ccd1b98b11d06",
+    "coupon-base-printed.stl": "297eea8adfdd28ce7706e50169e8bdbcf234a0ce8e15816f1f4b541607b0ab78",
+    "coupon-base.stl": "58a269367ded1f979b0fb45a3be173af5645439ab72e58b2e435148dc0a68d8f",
+    "coupon-lid-printed.stl": "67738b59efb7d9455d6cbbe1c4d738a4e0549f1910eaa720fd74e0da04b077b4",
+    "coupon-lid.stl": "303146f082b0311562f8a836360d66e70c0f9f194e16c9f38c52925d25550df1",
+    "document.py": "f01a755d11f5125bdbbfbec85715463efe2b34e76f17f8476c860b2d64afbf40",
+    "exploded.png": "23d2af467d1b667ae54f001561639689c6a3481312551cb705d9362a8c78b253",
+    "housing.scad": "e0d7814b69e70962846793985b5b34dac6658c234efc98f1acdbfe689e7d5395",
+    "lid-detail.png": "36fc2a4057512e2f54901eace93cd2f3c61e7f57868975697b378b097da683fa",
+    "lid-printed.stl": "e03ddfe139e54c2d27a2aa8c66ef783cbcb04449c2619c2ed89b6de34a484a7a",
+    "lid.stl": "9947f78e5b04ddc1f00621012f8d35bba68b2ac6cce650af00a7fde6b8547006",
+    "preview.png": "52471da6566bb7ca570fc9324208fccc13ceb3d207cdd9fc3e60e004b99365e9",
+    "render.py": "c56884bb7c167813ea9bf8487c3b4c2285fbd806d8fca4901a1b5bc78d50638d",
+    "section.png": "7ce975966b49a5c7dc44597305a85e89667bb2088f405be571edd3588f2f7511",
+    "yoke-usb-housing-r3-coupon.contact.json": "9cd857e622e40db9be04333d5558ed7f710fd52572a116c09504b1a8b001c6cb",
+    "yoke-usb-housing-r3-coupon.stl": "159323efcbc521fb9ffb863411266760a726861fa754bb3cc2c646cd7d5ab2b2",
+    "yoke-usb-housing-r3.contact.json": "21ba2e2eaedf5ba36c273da2069f0301589b323379df4d7d9644a1df16d62c75",
+    "yoke-usb-housing-r3.stl": "892be46f24ee5b9398ba411cb970c68323f240a7e60258bdeebd78f7074ea763"
+  }
+}

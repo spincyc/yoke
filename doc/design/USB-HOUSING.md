@@ -1,14 +1,57 @@
 # USB endpoint housing
 
-The USB endpoint case is a snug, screw-closed two-piece prototype for the
-**Radxa ZERO 3E V1.2**. Its body is 76.4 × 34.8 × 20 mm, with screw heads
-below the base. The mounting-pad regions are designed to carry the clamp
-load while avoiding contact with IC packages and GPIO pins.
+The USB endpoint case is a screw-closed two-piece prototype for the
+**Radxa ZERO 3E V1.2**. **R3 is the current mechanical revision:** locating
+tongues register the halves, screw heads sit in recesses, and metal nuts
+supply the threads. R1 and R2 retain their original geometry for reference.
 
-**R1 is the first-article print revision. R2 is the branded CAD revision and
-has not been printed.** The existing R1 job uses its original released
-G-code and `YOKE R1` wordmark. The R2 files below do not replace that job.
-Physical fit, cable access, retention and thermal testing remain **NOT RUN**.
+R1 was the first-article print revision. R2 added the canonical brand without
+changing its mechanics. **R2 and R3 have not been printed.** The R3 files do
+not replace the original R1 G-code or its print record. Physical fit, cable
+access, retention and thermal testing of the revised case remain **NOT RUN**.
+
+## R3: locating joint and recessed fasteners
+
+Three chamfered tongues enter matching lid pockets before tightening. They
+register the halves without acting as the vertical clamp stops. Two locating
+pegs register the board; one is relieved to accommodate hole-spacing error.
+The board cavity retains the original nominal edge clearances.
+
+Four end lugs move the case screws away from the PCB mounting holes and
+connector cutouts. Their mating faces carry screw preload, leaving the board
+on its mounting-pad supports. The body is **79.6 × 38 × 20 mm**; the end-lug
+envelope is **90.4 × 39.6 × 20 mm**. This is larger than R1 to provide material
+around the head recesses and metal-thread seats.
+
+Use four **M2.5 × 16 mm Phillips pan-head screws** and four **M2.5 hex nuts**.
+The modeled screw envelope is 5 mm maximum head diameter, 2.12 mm maximum
+head height and 16 ± 0.35 mm under-head length, based on the
+[manufacturer's specification](https://www.accu.co.uk/phillips-pan-head-screws/174946-SIP-M2-5-16-A4-BL).
+R1's 20 mm screws are not interchangeable with these fasteners.
+
+![R3 enclosure with recessed fasteners](../../hardware/usb-housing/r3/preview.png)
+
+The nut pockets load from the sides. Integral keeper fingers close their
+exits when the halves are seated, so the nuts are captured in the closed
+assembly. Opening the case reopens those exits; follow the service sequence
+over a tray. Plastic holes are clearance holes, **not printed threads**.
+
+![R3 locating tongues and nut keepers](../../hardware/usb-housing/r3/exploded.png)
+
+Use the [R3 assembly guide](../../hardware/usb-housing/r3/README.md) and its
+[assembly PDF](../../hardware/usb-housing/r3/assembly.pdf) for the actual
+hardware inventory, bore cleanup, locating-joint fit, screw/nut section and
+unpowered first-article checks. Manufacturing membranes in both halves
+require clearing **eight bores** with a 3 mm bit used by hand before fitting
+the hardware. A small fit coupon is included so these interfaces can be
+checked before committing to a complete case print.
+
+Download the [R3 fit coupon](../../hardware/usb-housing/r3/yoke-usb-housing-r3-coupon.stl)
+for the actual corner joint, head seat, nut trap and keeper interfaces.
+The coupon also needs its own reviewed print preparation before use.
+
+R3 is a CAD prototype, not a released print job. A future print
+needs an exact slice, assembly/manufacturing review and a clear bed.
 
 ![R2 branded housing, exact-mesh CAD preview](../../hardware/usb-housing/r2/preview.png)
 
@@ -34,6 +77,7 @@ digital checks, not a physical qualification.
 
 | Revision | Native CAD | Two-part plate | Instructions and evidence |
 | --- | --- | --- | --- |
+| R3 — current, NOT PRINTED | [OpenSCAD](../../hardware/usb-housing/r3/housing.scad) | [R3 STL](../../hardware/usb-housing/r3/yoke-usb-housing-r3.stl) | [Assembly PDF](../../hardware/usb-housing/r3/assembly.pdf), [guide](../../hardware/usb-housing/r3/README.md) |
 | R1 — first article | [OpenSCAD](../../hardware/usb-housing/housing.scad) | [R1 STL](../../hardware/usb-housing/yoke-usb-housing-r1.stl) | [Assembly PDF](../../hardware/usb-housing/assembly.pdf), [print record](../../hardware/usb-housing/print.json) |
 | R2 — NOT PRINTED | [OpenSCAD](../../hardware/usb-housing/r2/housing.scad) | [R2 STL](../../hardware/usb-housing/r2/yoke-usb-housing-r2.stl) | [Rebuild script](../../hardware/usb-housing/r2/build.py), [mesh validation](../../hardware/usb-housing/r2/validation.json) |
 
@@ -52,7 +96,7 @@ either requires review. The R2 plate and component declarations are design
 artifacts; they carry no print release. A future print needs a fresh slice,
 exact-artifact manufacturing and assembly review, release and a clear bed.
 
-## Assemble and test
+## R1/R2 assembly reference
 
 Supply four **M2.5 × 20 mm pan-head machine screws**, four **M2.5 hex nuts**,
 a matching screwdriver and a **3 mm drill bit used by hand**. Follow the

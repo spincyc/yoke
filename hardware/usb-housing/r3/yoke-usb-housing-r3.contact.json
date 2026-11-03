@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "mesh_sha256": "892be46f24ee5b9398ba411cb970c68323f240a7e60258bdeebd78f7074ea763",
+  "job_basename": "yoke-usb-housing-r3",
+  "expected_component_count": 2,
+  "envelope_mm": {
+    "minimum": [
+      0,
+      0,
+      0
+    ],
+    "maximum": [
+      220,
+      220,
+      220
+    ]
+  },
+  "components": {
+    "component-6acc8d08455143c8": {
+      "label": "R3 manufactured base",
+      "expected_bounds_mm": {
+        "minimum": [
+          2.0,
+          5.2,
+          0.0
+        ],
+        "maximum": [
+          92.400002,
+          44.799999,
+          17.85
+        ],
+        "tolerance_mm": 0.001
+      },
+      "policy": {
+        "maximum_bridge_span_mm": 6.2
+      },
+      "bridge_authority": "R3 design allowance, not a release: D5.8 head wells and AF5.25 hex nut traps (6.063mm corners), each with removable 0.20mm bore membrane. Side-load channels span5.25mm; blind tip relief spans3mm. Fresh exact-toolpath review required before printing."
+    },
+    "component-8c92a1c49aed0d8b": {
+      "label": "R3 manufactured lid",
+      "expected_bounds_mm": {
+        "minimum": [
+          2.0,
+          60.200001,
+          0.0
+        ],
+        "maximum": [
+          92.400002,
+          99.800003,
+          11.48
+        ],
+        "tolerance_mm": 0.001
+      },
+      "policy": {
+        "maximum_bridge_span_mm": 6.2
+      },
+      "bridge_authority": "R3 design allowance, not a release: D5.8 head wells and AF5.25 hex nut traps (6.063mm corners), each with removable 0.20mm bore membrane. Side-load channels span5.25mm; blind tip relief spans3mm. Fresh exact-toolpath review required before printing."
+    }
+  }
+}

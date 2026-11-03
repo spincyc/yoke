@@ -74,6 +74,13 @@ section = "Design"
 summary = "Agent placement, site keys, multicast networks, and operational diagnosis."
 
 [[pages]]
+source = "hardware/usb-housing/r3/README.md"
+output = "hardware/usb-housing-r3.html"
+title = "USB housing R3 assembly"
+section = "Hardware"
+summary = "Locating joints, recessed screw heads, captive metal nuts, assembly and first-article checks."
+
+[[pages]]
 source = "doc/research/FEASIBILITY.md"
 output = "research/feasibility.html"
 title = "Feasibility study"
