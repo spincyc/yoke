@@ -1,0 +1,95 @@
+{
+  "schema": "yoke.housing-validation/1",
+  "revision": "R6",
+  "scope": "Nominal full PoE housing first article; ordered hardware has not arrived.",
+  "plate_sha256": "672572238f0cd0b97be8bb5aefaab631d5213c3c00b8ad67739b1ef8ed2d89e1",
+  "gcode_sha256": "ad8bfc2a298593ef535a69888254477dfed5e1d54088e99fa7522b28f8c01fa1",
+  "dimensions_mm": [
+    89,
+    45.5,
+    46
+  ],
+  "physical_validation": "NOT RUN",
+  "checks": [
+    {
+      "id": "native_reference_clearance",
+      "result": "PASS",
+      "record_sha256": "894f0d20d70c5e98b3815927e2bbe6437d51a4c4a51afc0d3a44f25448a85318",
+      "method": "Each complete printed STL converted to a valid OCCT solid, intersected with all 8455 native source faces including surface-only connector geometry; zero volume and face area."
+    },
+    {
+      "id": "assembly_insertion",
+      "result": "PASS",
+      "record_sha256": "b4e11044bc1c84ec737eacd23dc604c3400f8d1a57e0430ea6288de35a187706",
+      "method": "Continuous vertical volume sweeps for SBC, clips with HAT absent, HAT and lid against relevant printed/source parts; supported by exact combined-SBC child checks."
+    },
+    {
+      "id": "hardware_reserves",
+      "result": "PASS",
+      "record_sha256": "6f9ce6810874bd9a73536e673c92396923d505f9a3a7f8a560c8ee0e1fb2d866",
+      "method": "Diameter8 corner reservations clear all four printed parts; reserves are not measured factory hardware."
+    },
+    {
+      "id": "microSD_allowance",
+      "result": "PASS",
+      "record_sha256": "3c266781b91fc63943dc4d7964c6e361d74f1f95c385673bdfc359c4c0e94cf7",
+      "method": "Nominal15x11x1mm card with2mm edge projection clears case by at least1.03553mm; expanded reservation clears by0.5mm. Actual card fit NOT RUN."
+    },
+    {
+      "id": "cable_and_vent_allowances",
+      "result": "PASS",
+      "record_sha256": "3ac8b78479f19c7bc3ccb4614beaffec9951db9dae5320c2085a4d7fc93e7cb3",
+      "method": "56 checks: two12x7 USB-C collar sweeps, one16x12 Ethernet boot sweep, installed card allowance and52 side-vent samples through both wall and skirt."
+    },
+    {
+      "id": "mesh_and_gcode",
+      "result": "PASS",
+      "record_sha256": "86cdcc3467808f4628a1cf9eb1632636cf8def808841e9f5a4a111a46144794c",
+      "method": "Four closed bodies, declared bridge spans, bed contact,173layers,supports disabled,exact mesh/job and thumbnail binding."
+    },
+    {
+      "id": "screw_seat_toolpaths",
+      "result": "PASS",
+      "record_sha256": "af6fa49e455f5fc2d3d5e6183e76d8d84f6929a697bc9f67b15971b2732924be",
+      "method": "Six screw-seat layer plots inspected against prior-layer extrusion; physical bridge strength NOT RUN."
+    },
+    {
+      "id": "sampled_assembly",
+      "result": "WARN",
+      "record_sha256": "4d6140b7b3711efb5b99524c4b8075eabbdcee406f4e063c69d643b31f670bde",
+      "method": "Zero collisions at0.5mm/2degree sampling; nonmanifold SBC reference requires native STEP supplement; nominal near contacts reported."
+    },
+    {
+      "id": "sampled_tools",
+      "result": "WARN",
+      "record_sha256": "bfac8ebcb4c025aa5f9f88c51452bc8105c57561fddfc097244b1f3c8092eb11",
+      "method": "Zero sampled collisions, native-source supplement and actual tool fit limits retained."
+    },
+    {
+      "id": "printable_guide",
+      "result": "PASS",
+      "record_sha256": "285e3dbf5abfa9dfe234a23846fd178fd72c841a5f3147523d2bd1d44df0e5d9",
+      "method": "Six monochrome Letter pages; layout, exact source binding and independent page inspection required before release."
+    }
+  ],
+  "limits": [
+    "Source18mm PCB gap conflicts with listed14.5mm pillars; exact delivered revision and hardware envelope remain unverified.",
+    "Retention uses only the lowerPCB; sourceHAT is not shifted to force an apparent fit.",
+    "No digital result establishes actual print tolerance, usable threads, cable/card fit, strength, durability or powered cooling.",
+    "Inspect unpowered complete hardware on arrival, ten service cycles, then open/closed thermal comparison."
+  ],
+  "independent_cold_review": {
+    "result": "PASS",
+    "scope": "PREPRINT_ASSEMBLY_REVIEW",
+    "reviewer": "r6_cold_design_independent",
+    "packet_sha256": "1fc32119b3d6d2725bbe2950e788360bc9de5e683cf83589819ea5a79a129c62",
+    "review_sha256": "ae920293f6bde90805dcfcc09b45a9cd046882fff4d3c4bd8d607351ee621677",
+    "finding_disposition": "Corrected structured reverse-service order before final PASS; CAD and guide already showed the required sequence.",
+    "physical_validation": "NOT RUN"
+  },
+  "verification": {
+    "yoke_make_verify": "PASS:1736 tests,10 optional firmware skips,60 documentation pages",
+    "lacuna_unittest": "PASS:1582 tests,39 skips; correct retained geometry runtime",
+    "lacuna_corpus_workflow_hunts": "PASS:corpus,workflow,meridian,canary"
+  }
+}

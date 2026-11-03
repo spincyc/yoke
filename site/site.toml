@@ -350,9 +350,20 @@ parent = "docs/index.html"
 [[pages]]
 source = "hardware/usb-housing/r5/README.md"
 output = "hardware/usb-housing-r5.html"
-title = "USB housing R5"
+title = "USB housing R5 — retired"
 section = "Hardware"
-summary = "Compact rectangular case with a vertical locating lip, four recessed M3 screws and ventilation."
+summary = "Historical bare-board case that omitted the required PoE HAT. Do not print."
+layout = "docs"
+nav = "docs"
+parent = "engineering/index.html"
+listed = false
+
+[[pages]]
+source = "hardware/usb-housing/r6/README.md"
+output = "hardware/usb-housing-r6.html"
+title = "USB PoE housing R6"
+section = "Hardware"
+summary = "Vented ZERO 3E and PoE HAT first article with a vertical nesting lid and removable PCB clips; physical fit and cooling remain untested."
 layout = "docs"
 nav = "docs"
 parent = "engineering/index.html"

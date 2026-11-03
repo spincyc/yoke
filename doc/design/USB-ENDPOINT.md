@@ -48,7 +48,8 @@ available without a proprietary management service.
 - The [enclosure](USB-HOUSING.md) must accommodate the complete board/HAT
   assembly, including its cooling parts: rectangular shell, freely nesting
   halves, recessed M3 screws, heat-set inserts and unobstructed ventilation.
-  R5 omitted the HAT and does not satisfy this requirement.
+  R6 is the computed PoE first article; physical fit and powered cooling
+  remain NOT RUN. R5 omitted the HAT and is retired.
 
 ## Firmware status
 

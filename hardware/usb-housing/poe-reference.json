@@ -2,8 +2,8 @@
   "schema": "yoke.poe-mechanical-reference/1",
   "inspected_on": "2026-11-03",
   "product": "Radxa ZERO 3E + RA023 PoE HAT",
-  "result": "BLOCKED",
-  "scope": "Reference sufficiency for complete housing; no replacement design or print released.",
+  "result": "NOMINAL_FIRST_ARTICLE_REFERENCE",
+  "scope": "R6 uses the complete published assembly with explicit enclosure allowances and lower-PCB edge retention. Delivered fit and thermal acceptance remain NOT RUN.",
   "sources": [
     {
       "url": "https://dl.radxa.com/zero3/docs/hw/3e/rs109_ra023.stp.zip",
@@ -95,13 +95,14 @@
     "Fan fasteners, wire route and fitted heatsinks omitted from CAD."
   ],
   "physical_validation": "NOT RUN",
-  "replacement_dispatch_attempted": false,
+  "replacement_dispatch_attempted": true,
   "cold_reference_review": {
     "result": "BLOCKED",
     "reviewer": "cold_reference_review",
     "review_sha256": "c7131e621f5ebf5423fcb42f8021c7dbbb73dcc58bccb19ef0e5389f876144db",
     "conclusion": "Independent STEP inspection reproduced the 18 mm PCB gap, missing hardware and 706.260 mm3 interference if the HAT is lowered to a 14.5 mm gap. Verified full-module and support/keepout envelopes remain necessary; lower-PCB edge retention could avoid requiring exact fastener head geometry.",
-    "complete_design_review": "NOT RUN"
+    "complete_design_review": "R6 PREPRINT_ASSEMBLY_REVIEW PASS; physical validation NOT RUN",
+    "scope": "Historical reference-only verdict, preserved. Superseded for nominal first-article scope by owner direction and R6 disposition; its source findings remain valid."
   },
   "owner_selected_product": {
     "url": "https://www.amazon.com/dp/B0D1KF1L7G",
@@ -121,5 +122,26 @@
       }
     ],
     "scope": "Product identity resolved; measured fit dimensions remain unresolved."
-  }
+  },
+  "owner_selected_board": {
+    "url": "https://www.amazon.com/dp/B0CZD1C54N",
+    "asin": "B0CZD1C54N",
+    "identity": "Radxa ZERO 3E 2GB WITH GPIO",
+    "basis": "Owner supplied purchased board listing on 2026-11-03; product title inspected."
+  },
+  "owner_direction": {
+    "date": "2026-11-03",
+    "electronics_status": "Neither ordered item has arrived; owner expects both Thursday.",
+    "request": "Compute the housing now, include ventilation, cold review, then send one complete design to the ready printer.",
+    "port_layout": "Ethernet at one end, one narrow lower-side opening for two USB-C; opposite end closed. HDMI covered; microSD internal service."
+  },
+  "r6_disposition": {
+    "date": "2026-11-03",
+    "concern": "The 18mm CAD spacing and 14.5mm listed pillars conflict, and CAD omits supplied mounting hardware. The earlier review blocked a claimed verified complete envelope.",
+    "decision": "Proceed with an explicitly nominal first article after the owner clarified parts are undelivered and requested computed housing. Retain the source assembly unchanged; do not lower its HAT or claim 18mm represents delivered hardware. Capture only the lower PCB so retention and shell mating do not depend on HAT height.",
+    "allowances": "At 8.8mm source-to-case Z shift, source components clear the roof by 3.5mm. Reserve diameter8 corner hardware volumes from sourceZ-5.6 to23.6. These are design allowances, not supplier dimensions or measured upper bounds. Optional accessories must fit the available space.",
+    "release_condition": "Satisfied: complete design, source/assembly/toolpath and independent cold review passed; one print dispatched2026-11-03T15:08:19Z and filename/PRINTING verified15:08:28Z.",
+    "physical_acceptance": "Unpowered fit with supplied hardware on arrival, cable fit, ten service cycles and sustained powered thermal comparison remain NOT RUN. Do not force any mismatch with screws."
+  },
+  "r6_print_record": "r6/print.json"
 }

@@ -1,164 +1,91 @@
 # Yoke implementation handoff
 
-Updated 2026-11-03. **The current R5 enclosure does not fit the PoE HAT.**
-It was designed and sent to print for a bare ZERO 3E, omitting the original PoE
-requirement. This is a design miss, not a newly requested feature. A PoE
-housing remains unfinished. Do not present or repeat R5 as the solution.
+Updated 2026-11-03. **R6 is the current PoE housing first article.** R5 omitted
+an original requirement and remains retired; never present or repeat it as the
+PoE solution. R6 passed independent cold review and was sent once to the
+printer; physical fit and powered thermal acceptance are **NOT RUN**.
 
-The latest request is to create the complete PoE housing with ventilation,
-cold-review it and send it to the ready printer once the design is complete.
-That print authorization remains unconsumed. Reference inspection found a
-material inconsistency in Radxa's published dimensions; a replacement has
-not been modeled, sliced or dispatched. No cancellation was sent.
+## Current hardware task
 
-## Current dimensional block
+The owner authorized a complete housing, sufficient ventilation, independent
+cold review and one print on the ready FlashForge Adventurer 5M. The ordered
+[ZERO 3E 2GB with GPIO](https://www.amazon.com/dp/B0CZD1C54N) and
+[Radxa PoE HAT](https://www.amazon.com/dp/B0D1KF1L7G) have not arrived; the
+owner expects both Thursday and explicitly requested computed dimensions now.
+The one-print authorization was consumed: `yoke-usb-housing-r6.gcode` was
+submitted at **2026-11-03 15:08:19 UTC** and verified **PRINTING** with the
+exact filename at 15:08:28 UTC. Estimated 46.9 g PLA and 3 h 58 m 51 s plus
+preparation; four parts, supports disabled, bed levelling enabled. See the
+[print record](hardware/usb-housing/r6/print.json),
+[validation record](hardware/usb-housing/r6/validation.json) and
+[assembly guide](hardware/usb-housing/r6/assembly.pdf). Do not resend.
 
-The owner identified the purchased kit as
-[Amazon ASIN B0D1KF1L7G](https://www.amazon.com/dp/B0D1KF1L7G), also linked by
-Radxa as a distributor listing for RA023. Its main catalog image is marked
-**X1.0** and its underside image shows no fan. This resolves product identity,
-but catalog images do not prove the delivered board revision. No assembled
-gap, complete height or hardware dimensions were found in the listing. Do not
-assume that the fan-equipped downloadable model represents this kit unchanged.
+[R6 source and instructions](hardware/usb-housing/r6/README.md) describe an
+89 × 45.5 × 46 mm rectangular enclosure. Ethernet opens at one end; two USB-C
+ports share a narrow lower-side opening. The opposite end is closed, HDMI
+covered and microSD serviced with the electronics removed. Both sides and
+the roof are vented, with low inlets that remain open on a desk.
 
-The [mechanical reference record](hardware/usb-housing/poe-reference.json)
-pins the official CAD and product sources inspected on 2026-11-03. The
-combined STEP places the facing PCBs 18 mm apart, while Radxa's product
-specification lists 14.5 mm insulated copper pillars. Current and older HAT
-STEP files are byte-identical. The model also omits the mounting screws,
-pillars, fan fasteners, fan leads and photographed heatsinks. Its approximately
-36.96 mm height is not a verified envelope for the complete physical module.
+Four lower-PCB edge pads and two removable clips retain the board without
+using its conductive mounting holes. Fit the lower Radxa screws and insulated
+pillars outside the case, seat the SBC, install the two clips, then fit the
+HAT and its upper screws. Four bottom-entering M3×16 screws and four lid
+inserts close the shell; two M3×8 screws and two base inserts secure the clips.
+All inserts use existing RX-M3×5.7 stock. Heat-set them in empty plastic first.
 
-The owner has been asked first for the actual facing-PCB gap, complete
-assembled height and presence of an underside fan. Earlier requested
-screw-head and pillar dimensions are necessary only if the chosen supports
-depend on them. The cold reference review considers lower-board edge retention a
-possible way to avoid head-specific supports, provided the module and hardware
-keepout envelopes are measured. It does not approve a complete housing or print.
-Do not resolve the spacing conflict by selecting one nominal value or treating
-the larger CAD stack as a proven physical upper bound.
+## Recorded source uncertainty and disposition
 
-The printer was reconciled read-only during this request: **READY, no current
-file**. This establishes that R5 is not active, not that it passed physical
-acceptance. The user says the printer is ready; recheck printer state before
-using the remaining authorization. R5 repeat jobs are now retired in Lacuna's
-`tools/print/retired-jobs.d/yoke-usb-housing-r5.json`.
+The [reference record](hardware/usb-housing/poe-reference.json) preserves the
+official STEP and listing evidence. The assembly model has an 18 mm facing-PCB
+gap; the product lists 14.5 mm pillars. Purchased-listing photos show fanless
+X1.0, while the published model includes an underside fan. Source CAD omits
+conductive hardware, leads and some photographed accessories.
 
-Pending-task references remain in `.scratch/poe-reference/`: original STEP
-archives, combined and component meshes, source inspection report and a Python
-environment with CadQuery/OCP and document tools. The independent reference
-review is in `.scratch/r6-cold-reference/`. These are disposable working files;
-the canonical JSON above retains source URLs, hashes and the unresolved facts.
+The earlier cold **reference-only** review blocked a claimed verified complete
+envelope. Its findings remain valid. The owner's later clarification changed
+the immediate scope to a computed first article before the parts arrive. R6
+keeps the published assembly unchanged, retains only the lower PCB, and
+reserves explicit space for unknown mounting hardware and inserted accessories.
+Neither shell closure nor retention depends on the uncertain HAT gap. At the
+source placement, modeled roof clearance is 3.5 mm; this is an allowance, not
+a measured physical bound. Complete independent design review passed for the
+frozen R6 packet; its structured reverse-service order was corrected before
+release. Do not demand unavailable measurements as a prerequisite to this
+authorized nominal first article, and do not invent physical passes.
 
-## Resume here
+Check unpowered fit, actual stock/cables, ten service cycles and sustained
+powered cooling on arrival. Preserve Radxa's electrically necessary screws,
+conductive pillars and insulation. Stop on interference, throttling, resets
+or softened plastic; never use case screws to force parts into place.
 
-The immediate hardware task is a compact **Radxa ZERO 3E plus PoE HAT**
-housing that slots together freely, screws together, has recessed heads,
-and has a flush rectangular exterior with usable airflow. The user rejected
-projecting fastener towers and repeated housings whose halves did not mate.
-Use the same enclosure screw and heat-set insert stock as Lacuna; the later
-heat-set requirement supersedes the earlier captive-nut choice.
+## Print recovery and retained tools
 
-[Radxa's PoE HAT assembly instructions](https://docs.radxa.com/en/zero/zero3/accessories/3e-poe-hat)
-state that the metal screws and copper pillars electrically connect the
-ZERO 3E and HAT, and must be installed and tightened for PoE to work. R5's
-plastic PCB locating pegs and supports must therefore be reconsidered with
-the complete assembly. **A taller lid alone is insufficient.** The exact
-HAT variant, mechanical model, assembled stack height and mounting hardware
-dimensions have not yet been verified. Do not substitute guessed values.
+R5 was submitted once at 2026-11-03 12:17 UTC. Before the R6 dispatch, the
+printer was reconciled as **READY, no current file**. No cancellation was sent, and
+no owner physical result has been recorded. Its authorization was consumed.
+R1/R3/R4/R5 jobs are retired in Lacuna's print guards.
 
-### Existing print and recovery
+R6 used Lacuna's exact-file assembly release, independent review,
+`tools.print approve` and prepared-job dispatch workflow. Its single start
+was acknowledged and the exact filename verified. The ready-printer statement
+and ephemeral plate-clear arm were consumed on that dispatch. Reconcile the
+existing job read-only; no further start is authorized.
 
-| Item | Recorded state |
-| --- | --- |
-| Printer | FlashForge Adventurer 5M, stock 0.4 mm nozzle |
-| Job | `yoke-usb-housing-r5-fullcase-first-article.gcode` |
-| Dispatch | One attempt; acknowledged 2026-11-03 at 12:17:16 UTC |
-| Last read-only observation | 2026-11-03 at 13:28:39 UTC: printing, layer 26 of 68, no reported error |
-| Estimate | 21.16 g PLA; 1 h 35 m 56 s plus preparation |
-| Physical acceptance | Not run; no owner fit or thermal result for R5 |
-
-The observation is a timestamped snapshot, not a promise of current state
-or completion. Reconcile the existing job before any printer action. Its
-single start authorization has been consumed; never replay the old start
-commands or automatically reauthorize a duplicate. No cancellation was sent
-after discovering the PoE omission.
-
-The [print record](hardware/usb-housing/r5/print.json) holds the exact STL,
-G-code, packet, review and manual hashes. The corresponding two dispatch
-rows are committed in Lacuna's `tools/print/dispatch-log.jsonl`.
-
-Retain these existing local resources while reconciling the job:
-
-- Yoke `.scratch/r5-print/packet/release.json` and its entire packet directory:
-  exact dispatched geometry, G-code, official bare-board reference and review
-  evidence. Other R5 design/review scratch directories have been removed.
-- Yoke `.scratch/r5-print/readiness.json`: historical dispatch evidence and
-  commands, **not permission to start again**. Its `latest-status.json`
-  sibling is an older snapshot than the table above.
-- Lacuna `.scratch/r4-print-runtime/`: retained printer and geometry tools;
-  its R4 directory name is historical, and it also served R5.
-
-From the Lacuna clone, the existing read-only status command is:
+Working evidence is retained in Yoke `.scratch/r6-print/`, native exports in
+`.scratch/r6-design/`, and original STEP/reference evidence in
+`.scratch/poe-reference/`. Historical R5 exact packet remains in
+`.scratch/r5-print/packet/`; its readiness commands must never be replayed.
+Lacuna `.scratch/r4-print-runtime/` supplies the retained slicer, geometry and
+printer tools despite its historical directory name. From the Lacuna clone:
 
 ```sh
 .scratch/r4-print-runtime/venv/bin/python -B tools/print/ad5m.py status
 ```
 
-Keep credentials and raw printer responses out of the repository. Do not
-run `make clean` or `wt tidy` while this retained packet/runtime is needed;
-both are disposable scratch and are not reconstructed by a Git checkout.
-
-### What R5 establishes and what it does not
-
-[R5 source and assembly instructions](hardware/usb-housing/r5/README.md)
-describe an 84 × 35.9 × 20 mm bare-board case. It uses a vertical nesting
-lid, a 1.2 mm skirt with 0.4 mm per-side clearance, four recessed M3 × 8
-socket-head screws and four RX-M3×5.7 inserts. Side inlets and top outlets
-are modeled. Enclosure screws do not pass through the PCB mounting holes.
-Keep these enclosure fasteners distinct from Radxa's electrically required
-board/HAT fasteners.
-
-[Digital validation](hardware/usb-housing/r5/validation.json) covers native
-exports, mesh and toolpath checks, sampled lid/screw/tool assembly paths,
-and the official bare-board model. It does **not** cover the HAT, actual
-print tolerances, usable threads, cable collars, physical fit, durability,
-or powered cooling. Review passed for the modeled bare-board article and
-missed the system requirement; it cannot establish PoE compatibility.
-
-R1 and R3 full-case prints failed owner acceptance. R4's joint samples also
-failed: the owner reported that the pieces did not line up or slot together;
-see [the recorded result](hardware/usb-housing/r4/owner-result.json). The
-physical cause is not established. R5 replaced R4's offset-and-slide joint
-with vertical nesting, but has no physical fit result yet. R1/R3/R4 are
-retired in Lacuna's print guards; R5 is now retired for omitting PoE.
-
-### Next engineering steps
-
-1. Reconcile the existing R5 print and record any owner observations without
-   confusing a bare-board fit result with PoE acceptance.
-2. Identify the exact PoE HAT and obtain its official drawing/model or
-   measured assembly. Include both PCBs, connectors, conductive standoffs,
-   screws, component heights and any cooling parts in one CAD assembly.
-3. Redesign the board supports and enclosure around that stack. Preserve
-   required electrical mounting connections and insulation, free lid
-   engagement, recessed enclosure screws, a rectangular exterior, cable
-   access, and clear inlet/outlet paths. Minimize size only after checking
-   these constraints.
-4. Update the canonical [USB design](doc/design/USB-ENDPOINT.md),
-   [housing page](doc/design/USB-HOUSING.md), revision records, drawings and
-   assembly instructions together when the replacement is complete. The
-   design pages now state the PoE requirement and dimensional block; R5
-   drawings remain explicitly historical and its repeat-print path is retired.
-5. Use Lacuna's current acceptance and print workflow on the **complete
-   board/HAT assembly**: actual-part assembly and tool access, fastener
-   engagement and tip clearance, print tolerances, mesh/support checks,
-   exact sliced toolpath, and independent review of the bound release
-   packet. A repeat of bare-board-only checks is insufficient.
-6. Before a replacement print, reconcile the printer and build plate, then
-   follow the current Lacuna release workflow and applicable user print
-   authorization. Record actual slot fit, screw/insert fit and powered
-   thermal results after printing; digital checks cannot mark those passed.
+Keep credentials and raw printer responses in scratch. Do not run `wt tidy`
+while these retained runtime and exact-job artifacts are needed. The owning
+revision's print record and Lacuna dispatch ledger must record actual dispatch
+and subsequent read-only observations; physical acceptance remains separate.
 
 ## Workspace and publication
 
@@ -265,8 +192,8 @@ implementation result. Keep its assumptions and ⚠ bench flags visible.
 - **Telemetry:** passive control observation, cached Prometheus/JSON export,
   host sampling and a terminal monitor. Thermite's optional scrape targets
   and dashboard do not become an endpoint management dependency.
-- **Housing:** R5 was submitted once and is a bare-board design. The PoE
-  requirement and physical acceptance remain unresolved as detailed above.
+- **Housing:** R6 is the computed PoE first article. Physical fit and powered
+  cooling remain NOT RUN; R5 was a bare-board design and is retired.
 
 The agent never receives media payload. Separate reference media tools may
 process unprotected synthetic content. The full HDCP boundary remains
