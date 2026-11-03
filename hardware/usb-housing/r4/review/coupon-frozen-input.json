@@ -1,0 +1,18 @@
+{
+  "housing.scad": "47ffebffd080dd99c93c8d66d2a2bc50e9a7cbeeea3950afd10bb539aeae15b1",
+  "coupon-fixture-check.json": "28ba14d81f57d4a3793016f0cc68bda7f8ac8b1d82741dcbef042dcce8024424",
+  "rear-base.stl": "d85d139e2ce039ac41aaf24959ed1729e4a43c1bc49868a2326d2e98c1cbfc6d",
+  "yoke-usb-housing-r4-coupons-layout.stl": "3d330a521ac532e8b8c81fe25d4785b85feed97176c4db22f79df1c3eab36d9e",
+  "yoke-usb-housing-r4-coupons-layout.mesh-preflight.json": "186f8066dd8dd81a900b90335d00748866682b72067c0d8990bc5fd36c3d1cee",
+  "rear-jig.stl": "5b53be7bda8ed858469fe1b95438c386ddd67eee47a4935f052928734c6d10d9",
+  "check.py": "36bdcf9a739297d5706fd3108c2002e0d54337e8ea0f0734f4ca68940312659c",
+  "yoke-usb-housing-r4-coupons-layout.contact.json": "104ba38e9cde8ace21f8be40bcd2750259966e9145b42be3e6b165f1289955dd",
+  "hardware.json": "ecc572ac962d846e8a35f73c2a97ec3e9278c95e35421b3d81ec92d392e12bfe",
+  "front-base.stl": "a831bc89d95411b9d90bd0eba41a41460e148100f374d66ba2c018d07514a3ac",
+  "front-lid.stl": "eff291c0f5c8adff9ea4241b16bde1410b9603981bace77504e9a506882a5bd2",
+  "rear-lid.stl": "0116ccf149fdad5a2eafc77373f3d078168014de659c210dc0287386f11b5ad4",
+  "build.py": "dcecb53cdc815d98ac3957ad35e8e9dff1b9f0b1a54a33cebf9e743d57ca5f77",
+  "coupon-sampled-geometry.json": "7574f577a0aeb6dabec4c5b10638d11a7c9eb8e61cfd430c00340ad6b68dca15",
+  "coupon-geometry-plan.json": "b69dc183f49e8fdee7473537e5a78f54532f8040f1bcd752d05d1bca05f28cae",
+  "document.py": "08ccd37c4c0850c5740dbd9671fb572b03c27b6dac84a41b57c6bd6a00927a19"
+}

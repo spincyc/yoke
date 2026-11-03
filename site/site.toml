@@ -267,14 +267,35 @@ nav = "docs"
 parent = "guides/index.html"
 
 [[pages]]
+source = "hardware/usb-housing/r4/README.md"
+output = "hardware/usb-housing-r4.html"
+title = "USB housing R4 candidate"
+section = "Hardware"
+summary = "Rectangular case with a sliding joint and recessed M3 screws. Physical fit is untested; printing is blocked."
+layout = "docs"
+nav = "docs"
+parent = "engineering/index.html"
+
+[[pages]]
 source = "hardware/usb-housing/r3/README.md"
 output = "hardware/usb-housing-r3.html"
 title = "Retired USB housing R3"
 section = "Hardware"
-summary = "Rejected R3 case, retained for history. Do not print; a rectangular case with M3 heat-set inserts is being redesigned."
+summary = "Rejected R3 case, retained for history. Do not print; R4 replaces its projecting lugs and captive nuts."
 layout = "docs"
 nav = "docs"
 parent = "guides/index.html"
+
+[[pages]]
+source = "hardware/usb-housing/r4/review/review.md"
+output = "hardware/usb-housing-r4-review.html"
+title = "R4 mechanical review"
+section = "Hardware"
+summary = "Independent nominal geometry review; actual hardware fit and physical tests remain unrun."
+layout = "docs"
+nav = "docs"
+parent = "hardware/usb-housing-r4.html"
+listed = false
 
 [[pages]]
 source = "doc/research/FEASIBILITY.md"

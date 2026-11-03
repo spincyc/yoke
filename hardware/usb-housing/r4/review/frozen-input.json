@@ -1,0 +1,22 @@
+{
+  "base.stl": "e129f9ab3b403f9cad1675e245d1474897bc53f06b21e905d604339b026231cd",
+  "board-surface-check.json": "6ea86806f8c2aed09448a184513612c66f205efb708be121a34badde3edcadcb",
+  "checks.json": "3098a79c61723bf6659f520e385acea0ffe720942c68a83fafb2f473ba183392",
+  "driver.stl": "fb5f5485a0f50e50698537e5a6fa4d958121aafb8efe801b67fde64d45ac9255",
+  "geometry-plan.json": "d3d39fcf4e40f8f70339e94ab7569158cd5f94a4d0f7ec218c73167a5ccc5615",
+  "heat-tool.stl": "abba4f9adfb06fb57a31806d768c8a2929d0f7053bfb76771c067d157947bc29",
+  "identity.json": "45d1ae170fa741bbb90572916847ce16c983c2ecf2f8c746c3bf84eb5b684e5f",
+  "insert.stl": "d732d50a62801341ddd2e46a1f51ab03f956a14a48e7b7c523e7c8e70368d050",
+  "lid.stl": "b8413af73b52e81a55ede832698aa1ac561b64e7b882f5e326cbc8afd23267e7",
+  "mesh-preflight.json": "2da389550ed201c25a585bda765ed7ac623f91a923aafde562fdc1c90b32d2a2",
+  "reference/board.stl": "1c1268c8af4b1a6c0b07fec07b3b28c6662e5d10c0c1b794c1f1083f31af8f27",
+  "sampled-geometry.json": "fe5da4ca6aff9ad74f0b407a6652b04bf4897732096193809ed2a2a85afa1a5d",
+  "screw.stl": "aac6d5ae6fe357eadc14fe14237aa1ebe9002b8ea12e8c2dc8bc7b7fe5681dd2",
+  "source/build.py": "3ac0f92bd722d25562a0a78e16deddbbdf70fad7ae1c86f8ab2744e6bfca9cb9",
+  "source/check.py": "e0602e82375c1a248e13efb220c6e75823d6b35e1e6ce19dd7f7e74286518892",
+  "source/document.py": "50dc6576f09c44d57fba65facf59fef7fc29d0ef8b1078cd2e8123c8512f3323",
+  "source/hardware.json": "ecc572ac962d846e8a35f73c2a97ec3e9278c95e35421b3d81ec92d392e12bfe",
+  "source/housing.scad": "715f4c31504b2752131f148a4700c501167f82ef1dd109b0288db755abbef5c5",
+  "source/render.py": "24f6791508b8b47f791bab9f45033c75a9e11941a257de4b1dad207b8e97cdc0",
+  "source/yoke-mark.svg": "9cd2e3d234d98c833720469ec785b33eab2dde6797da40ca634b75f833b08390"
+}

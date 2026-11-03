@@ -1,5 +1,9 @@
 # USB endpoint housing R1
 
+**RETIRED — owner rejected the printed assembly. Do not print R1 again.**
+The instructions below are historical. See the [R4 replacement](r4/README.md)
+and [current housing status](../../doc/design/USB-HOUSING.md).
+
 A snug, screw-closed two-piece prototype for the **Radxa ZERO 3E V1.2**.
 The four mounting-pad regions carry the clamp load; the housing does not
 press on IC packages, GPIO pins or connector shells. The case body is

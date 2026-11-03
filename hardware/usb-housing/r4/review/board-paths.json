@@ -1,0 +1,195 @@
+{
+  "scope": "PROVISIONAL_MECHANICAL_REVIEW",
+  "board_watertight": false,
+  "unique_edges": 310475,
+  "vertices": 103166,
+  "base_lower_board": [
+    {
+      "board_dz": 0,
+      "crossings": 0,
+      "first_crossings": [],
+      "vertices_in_plastic": 0,
+      "first_vertices_in_plastic": []
+    },
+    {
+      "board_dz": 0.1,
+      "crossings": 0,
+      "first_crossings": [],
+      "vertices_in_plastic": 0,
+      "first_vertices_in_plastic": []
+    },
+    {
+      "board_dz": 0.25,
+      "crossings": 0,
+      "first_crossings": [],
+      "vertices_in_plastic": 0,
+      "first_vertices_in_plastic": []
+    },
+    {
+      "board_dz": 0.5,
+      "crossings": 0,
+      "first_crossings": [],
+      "vertices_in_plastic": 0,
+      "first_vertices_in_plastic": []
+    },
+    {
+      "board_dz": 1,
+      "crossings": 0,
+      "first_crossings": [],
+      "vertices_in_plastic": 0,
+      "first_vertices_in_plastic": []
+    },
+    {
+      "board_dz": 2,
+      "crossings": 0,
+      "first_crossings": [],
+      "vertices_in_plastic": 0,
+      "first_vertices_in_plastic": []
+    },
+    {
+      "board_dz": 4,
+      "crossings": 0,
+      "first_crossings": [],
+      "vertices_in_plastic": 0,
+      "first_vertices_in_plastic": []
+    },
+    {
+      "board_dz": 8,
+      "crossings": 0,
+      "first_crossings": [],
+      "vertices_in_plastic": 0,
+      "first_vertices_in_plastic": []
+    },
+    {
+      "board_dz": 16,
+      "crossings": 0,
+      "first_crossings": [],
+      "vertices_in_plastic": 0,
+      "first_vertices_in_plastic": []
+    },
+    {
+      "board_dz": 20,
+      "crossings": 0,
+      "first_crossings": [],
+      "vertices_in_plastic": 0,
+      "first_vertices_in_plastic": []
+    }
+  ],
+  "lid_slide": [
+    {
+      "lid_dx": -1.2,
+      "crossings": 0,
+      "first_crossings": [],
+      "vertices_in_plastic": 0,
+      "first_vertices_in_plastic": []
+    },
+    {
+      "lid_dx": -1.0,
+      "crossings": 0,
+      "first_crossings": [],
+      "vertices_in_plastic": 0,
+      "first_vertices_in_plastic": []
+    },
+    {
+      "lid_dx": -0.8,
+      "crossings": 0,
+      "first_crossings": [],
+      "vertices_in_plastic": 0,
+      "first_vertices_in_plastic": []
+    },
+    {
+      "lid_dx": -0.6,
+      "crossings": 0,
+      "first_crossings": [],
+      "vertices_in_plastic": 0,
+      "first_vertices_in_plastic": []
+    },
+    {
+      "lid_dx": -0.4,
+      "crossings": 0,
+      "first_crossings": [],
+      "vertices_in_plastic": 0,
+      "first_vertices_in_plastic": []
+    },
+    {
+      "lid_dx": -0.20000000000000007,
+      "crossings": 0,
+      "first_crossings": [],
+      "vertices_in_plastic": 0,
+      "first_vertices_in_plastic": []
+    },
+    {
+      "lid_dx": 0.0,
+      "crossings": 0,
+      "first_crossings": [],
+      "vertices_in_plastic": 0,
+      "first_vertices_in_plastic": []
+    }
+  ],
+  "lid_lower": [
+    {
+      "lid_dz": 0,
+      "crossings": 0,
+      "first_crossings": [],
+      "vertices_in_plastic": 0,
+      "first_vertices_in_plastic": []
+    },
+    {
+      "lid_dz": 0.25,
+      "crossings": 0,
+      "first_crossings": [],
+      "vertices_in_plastic": 0,
+      "first_vertices_in_plastic": []
+    },
+    {
+      "lid_dz": 0.5,
+      "crossings": 0,
+      "first_crossings": [],
+      "vertices_in_plastic": 0,
+      "first_vertices_in_plastic": []
+    },
+    {
+      "lid_dz": 1,
+      "crossings": 0,
+      "first_crossings": [],
+      "vertices_in_plastic": 0,
+      "first_vertices_in_plastic": []
+    },
+    {
+      "lid_dz": 2,
+      "crossings": 0,
+      "first_crossings": [],
+      "vertices_in_plastic": 0,
+      "first_vertices_in_plastic": []
+    },
+    {
+      "lid_dz": 4,
+      "crossings": 0,
+      "first_crossings": [],
+      "vertices_in_plastic": 0,
+      "first_vertices_in_plastic": []
+    },
+    {
+      "lid_dz": 8,
+      "crossings": 0,
+      "first_crossings": [],
+      "vertices_in_plastic": 0,
+      "first_vertices_in_plastic": []
+    },
+    {
+      "lid_dz": 16,
+      "crossings": 0,
+      "first_crossings": [],
+      "vertices_in_plastic": 0,
+      "first_vertices_in_plastic": []
+    },
+    {
+      "lid_dz": 25,
+      "crossings": 0,
+      "first_crossings": [],
+      "vertices_in_plastic": 0,
+      "first_vertices_in_plastic": []
+    }
+  ],
+  "limits": "Finite poses; edge crossings plus vertex containment; nonmanifold board is not a valid volume and coplanar/face-only contacts can remain unresolved."
+}

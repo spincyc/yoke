@@ -1,0 +1,56 @@
+{
+  "scope": "PROVISIONAL_MECHANICAL_REVIEW",
+  "result": "BLOCKED",
+  "nominal_geometry_checks": "PASS",
+  "physical_validation": "NOT RUN",
+  "print_release": "BLOCKED",
+  "blocked_on": [
+    "Actual stock identity and hardware fit remain unconfirmed.",
+    "Physical coupon/fixture observations have not run.",
+    "No exact-job preprint approval or dispatch authorization is issued."
+  ],
+  "instruction_text_followups": [],
+  "meshes_sha256": {
+    "base.stl": "e129f9ab3b403f9cad1675e245d1474897bc53f06b21e905d604339b026231cd",
+    "lid.stl": "b8413af73b52e81a55ede832698aa1ac561b64e7b882f5e326cbc8afd23267e7",
+    "front-base.stl": "a831bc89d95411b9d90bd0eba41a41460e148100f374d66ba2c018d07514a3ac",
+    "front-lid.stl": "eff291c0f5c8adff9ea4241b16bde1410b9603981bace77504e9a506882a5bd2",
+    "rear-base.stl": "d85d139e2ce039ac41aaf24959ed1729e4a43c1bc49868a2326d2e98c1cbfc6d",
+    "rear-lid.stl": "0116ccf149fdad5a2eafc77373f3d078168014de659c210dc0287386f11b5ad4",
+    "rear-jig.stl": "5b53be7bda8ed858469fe1b95438c386ddd67eee47a4935f052928734c6d10d9"
+  },
+  "review_files": {
+    "mechanical-geometry.json": "aaae0b2d50fbadfc67d4f91fc7380fae30f987bf64aaaac7171fc8bd8fa5e78b",
+    "board-paths.json": "ade9ee5d3a5282382674ac0e6503ba3b0ac1a0ab57ca8893dab6f0024758d2b9",
+    "guide-sections.json": "6b8c413eae452769fc6279d49945a67e51ec815480051909d22e82d440afd371",
+    "coupon-mechanical-geometry.json": "6056155438f8479e5a50a1c6641262580cf8218c514ed28bb0130e7eb2edf330",
+    "review.md": "16e2482bcf54e2e50c24d6d3ab5a11b3ce87bfd4fdad0c3914d57091ec64ae55"
+  },
+  "not_run": [
+    "Slicing",
+    "Approval",
+    "Printer actions",
+    "Physical tool/stock fit",
+    "Physical load/thermal/cable trials"
+  ],
+  "changed_resources": [
+    ".scratch/r4-mechanical-review/**"
+  ],
+  "final_pdf_sha256": "3a91c27b9285c120ab8562c516784aacd6e0a3d34a97df8cc6c8af326294c47e",
+  "reviewed_pages": [
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "page_png_sha256": {
+    "1": "6415c435c2d80f30ff01f02bc3d46b1d14514e669374ca7cba16b60f488bbae1",
+    "2": "2c9815dc61a0b201302c3aa4923d2797457af69588c4332303c036e9ce76fe8b",
+    "3": "7eb584f4c69a87b99ec61bff1151ca703cbfcaba05e9087a814b1f21ef883611",
+    "4": "2cead504a822ae5651afbfabee9e1c733a494b1c278b88e99a048a5d075d345e",
+    "5": "58d0b32d4ea0d8081f64c7e2c44c2f5718724d5103d4fa7dd73e07e82ca5a540"
+  },
+  "final_native_source_sha256": "47ffebffd080dd99c93c8d66d2a2bc50e9a7cbeeea3950afd10bb539aeae15b1",
+  "final_hardware_profile_sha256": "ecc572ac962d846e8a35f73c2a97ec3e9278c95e35421b3d81ec92d392e12bfe"
+}

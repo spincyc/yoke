@@ -1,0 +1,30 @@
+{
+  "revision": "R4",
+  "status": "CATALOG_PROFILE_STOCK_UNCONFIRMED",
+  "insert": {
+    "stock_id": "threaded-inserts-rx-m3x5p7",
+    "owner_label": "RX M3 x 5.7",
+    "outside_diameter_mm": 4.6,
+    "length_mm": 5.7,
+    "pilot_diameter_mm": 4.0,
+    "authority": "Ruthex RX-M3x5.7 manufacturer catalogue profile; actual stock identity and measurements remain unconfirmed",
+    "lead_in_diameter_mm": 3.9,
+    "manufacturer_minimum_wall_mm": 1.6,
+    "product_code": "GE-M3x57-001",
+    "ean": "4260528721146",
+    "source": "https://www.ruthex.de/products/ruthex-gewindeeinsatz-m3-100-stuck-rx-m3x5-7-messing-gewindebuchsen",
+    "datasheet": "https://www.igo3d.com/mediafiles/Sonstiges/Ruthex/ruthex_Datenblatt_RX-Serie.pdf",
+    "blind_pilot_depth_mm": 6.7,
+    "depth_basis": "Design allowance: insert nominal length plus 1.0 mm, not a quoted manufacturer requirement"
+  },
+  "screw": {
+    "stock_set": "FGRUH 750-piece M3 socket-head alloy-steel assortment",
+    "quantity": 2,
+    "under_head_length_mm": 8,
+    "head_diameter_envelope_mm": 6,
+    "head_height_envelope_mm": 3,
+    "authority": "M3 x 8 selection confirmed present in Lacuna kit; one sample head height 2.9 mm. OD and length tolerances unverified; nominal envelopes only. No Lacuna stock allocation is claimed."
+  },
+  "physical_validation": "NOT RUN",
+  "print_release": "BLOCKED"
+}

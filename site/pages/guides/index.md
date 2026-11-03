@@ -21,7 +21,6 @@ For software development without boards, [run the tests](../start.md).
 | Update software running inside a box | [Linux updates](../../../doc/design/UPDATES.md) |
 | Provision or update the ESP32 reference firmware | [ESP32 updater](../../../doc/design/ESP32-UPDATES.md) |
 | Check the case redesign | [Housing status](../../../doc/design/USB-HOUSING.md) |
-| Understand the enclosure design and revisions | [USB housing design](../../../doc/design/USB-HOUSING.md) |
 
 Update and enclosure guides document development references; see
 [project status](../docs/project-status.md) before planning a hardware

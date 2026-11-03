@@ -1,5 +1,10 @@
 # USB endpoint housing R2 — branded model
 
+**SUPERSEDED — do not use this as the current case.** R2 retains the R1
+mechanics; the owner rejected the R1 print. R2 itself was not printed.
+See the [R4 replacement](../r4/README.md) and
+[current housing status](../../../doc/design/USB-HOUSING.md).
+
 R2 applies the [canonical Yoke mark](../../../site/assets/yoke-mark.svg) to the
 screw-closed Radxa ZERO 3E V1.2 housing. **R2 has not been sliced, released or
 printed.** The R1 print and its released files are separate and unchanged.

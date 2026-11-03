@@ -30,6 +30,7 @@ also cover software, tests, and earlier hardware research.
 | [USB hardware design](../../../doc/design/USB-ENDPOINT.md) | Two ZERO 3E boxes, physical USB at each end, and remaining firmware work |
 | [Earlier HDMI/USB3 study](../../../doc/design/EDGE-DEVICES.md) | Earlier alternatives and video research; superseded for the USB prototype |
 | [USB housing design](../../../doc/design/USB-HOUSING.md) | Enclosure requirements and revision history |
+| [R4 case candidate](../../../hardware/usb-housing/r4/README.md) | Sliding joint, recessed M3 screws and heat-set inserts; physical fit untested |
 | [Retired R3 assembly](../../../hardware/usb-housing/r3/README.md) | Historical failed revision; do not print |
 | [Linux updates](../../../doc/design/UPDATES.md) | Operator-controlled releases, readiness, rollback, and recovery |
 | [ESP32 updater](../../../doc/design/ESP32-UPDATES.md) | Ethernet firmware-update reference for future IR endpoints |

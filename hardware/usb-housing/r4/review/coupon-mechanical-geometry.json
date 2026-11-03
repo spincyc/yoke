@@ -1,0 +1,564 @@
+{
+  "scope": "PROVISIONAL_MECHANICAL_REVIEW",
+  "result": "BLOCKED",
+  "physical_validation": "NOT RUN",
+  "print_release": "BLOCKED",
+  "native_crops": [
+    {
+      "part": "front-base",
+      "symmetric_difference_mm3": 0.0
+    },
+    {
+      "part": "front-lid",
+      "symmetric_difference_mm3": 0.0
+    },
+    {
+      "part": "rear-base",
+      "symmetric_difference_mm3": 0.0
+    },
+    {
+      "part": "rear-lid",
+      "symmetric_difference_mm3": 0.0
+    }
+  ],
+  "closure": [
+    {
+      "part": "front",
+      "action": "slide",
+      "dx": -1.2,
+      "overlap_mm3": -1.6928461670645545e-15,
+      "gap_mm": 0.0
+    },
+    {
+      "part": "front",
+      "action": "slide",
+      "dx": -1.0999999999999999,
+      "overlap_mm3": -3.472523375618042e-15,
+      "gap_mm": 0.0
+    },
+    {
+      "part": "front",
+      "action": "slide",
+      "dx": -1.0,
+      "overlap_mm3": 1.2216790079566664e-15,
+      "gap_mm": 0.0
+    },
+    {
+      "part": "front",
+      "action": "slide",
+      "dx": -0.8999999999999999,
+      "overlap_mm3": -6.962746351701909e-16,
+      "gap_mm": 0.0
+    },
+    {
+      "part": "front",
+      "action": "slide",
+      "dx": -0.8,
+      "overlap_mm3": -3.0719784355204283e-15,
+      "gap_mm": 0.0
+    },
+    {
+      "part": "front",
+      "action": "slide",
+      "dx": -0.7,
+      "overlap_mm3": -5.455705331947058e-16,
+      "gap_mm": 0.0
+    },
+    {
+      "part": "front",
+      "action": "slide",
+      "dx": -0.6,
+      "overlap_mm3": -2.2321554327131565e-15,
+      "gap_mm": 0.0
+    },
+    {
+      "part": "front",
+      "action": "slide",
+      "dx": -0.5,
+      "overlap_mm3": -1.5987645235471248e-15,
+      "gap_mm": 0.0
+    },
+    {
+      "part": "front",
+      "action": "slide",
+      "dx": -0.4,
+      "overlap_mm3": 2.6162882624247707e-15,
+      "gap_mm": 0.0
+    },
+    {
+      "part": "front",
+      "action": "slide",
+      "dx": -0.30000000000000004,
+      "overlap_mm3": 3.471398515864088e-15,
+      "gap_mm": 0.0
+    },
+    {
+      "part": "front",
+      "action": "slide",
+      "dx": -0.20000000000000007,
+      "overlap_mm3": -3.731932297912355e-15,
+      "gap_mm": 0.0
+    },
+    {
+      "part": "front",
+      "action": "slide",
+      "dx": -0.10000000000000009,
+      "overlap_mm3": -6.678685382510707e-17,
+      "gap_mm": 0.0
+    },
+    {
+      "part": "front",
+      "action": "slide",
+      "dx": 0.0,
+      "overlap_mm3": -9.908832027277385e-16,
+      "gap_mm": 0.0
+    },
+    {
+      "part": "front",
+      "action": "lower",
+      "dz": 0,
+      "overlap_mm3": -1.6928461670645545e-15,
+      "gap_mm": 0.0
+    },
+    {
+      "part": "front",
+      "action": "lower",
+      "dz": 0.1,
+      "overlap_mm3": 0.0,
+      "gap_mm": 0.09999999999999964
+    },
+    {
+      "part": "front",
+      "action": "lower",
+      "dz": 0.25,
+      "overlap_mm3": 0.0,
+      "gap_mm": 0.24999964237213135
+    },
+    {
+      "part": "front",
+      "action": "lower",
+      "dz": 0.5,
+      "overlap_mm3": 0.0,
+      "gap_mm": 0.24999964237213135
+    },
+    {
+      "part": "front",
+      "action": "lower",
+      "dz": 1,
+      "overlap_mm3": 0.0,
+      "gap_mm": 0.3460575805861943
+    },
+    {
+      "part": "front",
+      "action": "lower",
+      "dz": 2,
+      "overlap_mm3": 0.0,
+      "gap_mm": 1.0735451923305583
+    },
+    {
+      "part": "front",
+      "action": "lower",
+      "dz": 4,
+      "overlap_mm3": 0.0,
+      "gap_mm": 1.1234122733070135
+    },
+    {
+      "part": "front",
+      "action": "lower",
+      "dz": 8,
+      "overlap_mm3": 0.0,
+      "gap_mm": 3.3914678113043832
+    },
+    {
+      "part": "front",
+      "action": "lower",
+      "dz": 16,
+      "overlap_mm3": 0.0,
+      "gap_mm": 5.0
+    },
+    {
+      "part": "front",
+      "action": "lower",
+      "dz": 25,
+      "overlap_mm3": 0.0,
+      "gap_mm": 5.0
+    },
+    {
+      "part": "rear",
+      "action": "slide",
+      "dx": -1.2,
+      "overlap_mm3": 0.0,
+      "gap_mm": 0.14999961853027344
+    },
+    {
+      "part": "rear",
+      "action": "slide",
+      "dx": -1.0999999999999999,
+      "overlap_mm3": 0.0,
+      "gap_mm": 0.14999961853027344
+    },
+    {
+      "part": "rear",
+      "action": "slide",
+      "dx": -1.0,
+      "overlap_mm3": 0.0,
+      "gap_mm": 0.14999961853027344
+    },
+    {
+      "part": "rear",
+      "action": "slide",
+      "dx": -0.8999999999999999,
+      "overlap_mm3": 0.0,
+      "gap_mm": 0.14999961853027344
+    },
+    {
+      "part": "rear",
+      "action": "slide",
+      "dx": -0.8,
+      "overlap_mm3": 0.0,
+      "gap_mm": 0.14999961853027344
+    },
+    {
+      "part": "rear",
+      "action": "slide",
+      "dx": -0.7,
+      "overlap_mm3": 0.0,
+      "gap_mm": 0.14999961853027344
+    },
+    {
+      "part": "rear",
+      "action": "slide",
+      "dx": -0.6,
+      "overlap_mm3": 0.0,
+      "gap_mm": 0.14999961853027344
+    },
+    {
+      "part": "rear",
+      "action": "slide",
+      "dx": -0.5,
+      "overlap_mm3": 0.0,
+      "gap_mm": 0.14999961853027344
+    },
+    {
+      "part": "rear",
+      "action": "slide",
+      "dx": -0.4,
+      "overlap_mm3": 0.0,
+      "gap_mm": 0.14999961853027344
+    },
+    {
+      "part": "rear",
+      "action": "slide",
+      "dx": -0.30000000000000004,
+      "overlap_mm3": 0.0,
+      "gap_mm": 0.14999961853027344
+    },
+    {
+      "part": "rear",
+      "action": "slide",
+      "dx": -0.20000000000000007,
+      "overlap_mm3": 0.0,
+      "gap_mm": 0.14999961853027344
+    },
+    {
+      "part": "rear",
+      "action": "slide",
+      "dx": -0.10000000000000009,
+      "overlap_mm3": 0.0,
+      "gap_mm": 0.14999961853027344
+    },
+    {
+      "part": "rear",
+      "action": "slide",
+      "dx": 0.0,
+      "overlap_mm3": 0.0,
+      "gap_mm": 0.14999961853027344
+    },
+    {
+      "part": "rear",
+      "action": "lower",
+      "dz": 0,
+      "overlap_mm3": 0.0,
+      "gap_mm": 0.14999961853027344
+    },
+    {
+      "part": "rear",
+      "action": "lower",
+      "dz": 0.1,
+      "overlap_mm3": 0.0,
+      "gap_mm": 0.24999961853027308
+    },
+    {
+      "part": "rear",
+      "action": "lower",
+      "dz": 0.25,
+      "overlap_mm3": 0.0,
+      "gap_mm": 0.25
+    },
+    {
+      "part": "rear",
+      "action": "lower",
+      "dz": 0.5,
+      "overlap_mm3": 0.0,
+      "gap_mm": 0.25
+    },
+    {
+      "part": "rear",
+      "action": "lower",
+      "dz": 1,
+      "overlap_mm3": 0.0,
+      "gap_mm": 0.25
+    },
+    {
+      "part": "rear",
+      "action": "lower",
+      "dz": 2,
+      "overlap_mm3": 0.0,
+      "gap_mm": 0.25
+    },
+    {
+      "part": "rear",
+      "action": "lower",
+      "dz": 4,
+      "overlap_mm3": 0.0,
+      "gap_mm": 1.1768598568307844
+    },
+    {
+      "part": "rear",
+      "action": "lower",
+      "dz": 8,
+      "overlap_mm3": 0.0,
+      "gap_mm": 2.9069614262590457
+    },
+    {
+      "part": "rear",
+      "action": "lower",
+      "dz": 16,
+      "overlap_mm3": 0.0,
+      "gap_mm": 5.0
+    },
+    {
+      "part": "rear",
+      "action": "lower",
+      "dz": 25,
+      "overlap_mm3": 0.0,
+      "gap_mm": 5.0
+    }
+  ],
+  "jig": [
+    {
+      "action": "place-closed-pair",
+      "dz": 0,
+      "base": {
+        "overlap_mm3": 0.0,
+        "gap_mm": 0.0
+      },
+      "lid": {
+        "overlap_mm3": 0.0,
+        "gap_mm": 0.09999847412109375
+      }
+    },
+    {
+      "action": "place-closed-pair",
+      "dz": 0.1,
+      "base": {
+        "overlap_mm3": 0.0,
+        "gap_mm": 0.09999847412109375
+      },
+      "lid": {
+        "overlap_mm3": 0.0,
+        "gap_mm": 0.09999847412109375
+      }
+    },
+    {
+      "action": "place-closed-pair",
+      "dz": 0.25,
+      "base": {
+        "overlap_mm3": 0.0,
+        "gap_mm": 0.09999847412109375
+      },
+      "lid": {
+        "overlap_mm3": 0.0,
+        "gap_mm": 0.09999847412109375
+      }
+    },
+    {
+      "action": "place-closed-pair",
+      "dz": 0.5,
+      "base": {
+        "overlap_mm3": 0.0,
+        "gap_mm": 0.09999847412109375
+      },
+      "lid": {
+        "overlap_mm3": 0.0,
+        "gap_mm": 0.09999847412109375
+      }
+    },
+    {
+      "action": "place-closed-pair",
+      "dz": 1,
+      "base": {
+        "overlap_mm3": 0.0,
+        "gap_mm": 0.09999847412109375
+      },
+      "lid": {
+        "overlap_mm3": 0.0,
+        "gap_mm": 0.09999847412109375
+      }
+    },
+    {
+      "action": "place-closed-pair",
+      "dz": 2,
+      "base": {
+        "overlap_mm3": 0.0,
+        "gap_mm": 0.09999847412109375
+      },
+      "lid": {
+        "overlap_mm3": 0.0,
+        "gap_mm": 0.09999847412109375
+      }
+    },
+    {
+      "action": "place-closed-pair",
+      "dz": 4,
+      "base": {
+        "overlap_mm3": 0.0,
+        "gap_mm": 0.09999847412109375
+      },
+      "lid": {
+        "overlap_mm3": 0.0,
+        "gap_mm": 0.09999847412109375
+      }
+    },
+    {
+      "action": "place-closed-pair",
+      "dz": 8,
+      "base": {
+        "overlap_mm3": 0.0,
+        "gap_mm": 0.09999847412109375
+      },
+      "lid": {
+        "overlap_mm3": 0.0,
+        "gap_mm": 0.8062257748313215
+      }
+    },
+    {
+      "action": "place-closed-pair",
+      "dz": 16,
+      "base": {
+        "overlap_mm3": 0.0,
+        "gap_mm": 0.09999847412109375
+      },
+      "lid": {
+        "overlap_mm3": 0.0,
+        "gap_mm": 5.0
+      }
+    },
+    {
+      "action": "place-closed-pair",
+      "dz": 25,
+      "base": {
+        "overlap_mm3": 0.0,
+        "gap_mm": 3.0016661531267177
+      },
+      "lid": {
+        "overlap_mm3": 0.0,
+        "gap_mm": 5.0
+      }
+    },
+    {
+      "action": "lid-only-lift",
+      "dz": 0,
+      "jig_lid": {
+        "overlap_mm3": 0.0,
+        "gap_mm": 0.09999847412109375
+      },
+      "base_lid": {
+        "overlap_mm3": 0.0,
+        "gap_mm": 0.14999961853027344
+      }
+    },
+    {
+      "action": "lid-only-lift",
+      "dz": 0.1,
+      "jig_lid": {
+        "overlap_mm3": 0.0,
+        "gap_mm": 0.09999847412109375
+      },
+      "base_lid": {
+        "overlap_mm3": 0.0,
+        "gap_mm": 0.1536442423072057
+      }
+    },
+    {
+      "action": "lid-only-lift",
+      "dz": 0.3,
+      "jig_lid": {
+        "overlap_mm3": 0.0,
+        "gap_mm": 0.09999847412109375
+      },
+      "base_lid": {
+        "overlap_mm3": 0.0,
+        "gap_mm": 1.4652642370985906e-07
+      }
+    },
+    {
+      "action": "lid-only-lift",
+      "dz": 0.4,
+      "jig_lid": {
+        "overlap_mm3": 0.0,
+        "gap_mm": 0.09999847412109375
+      },
+      "base_lid": {
+        "overlap_mm3": 0.29249955654122123,
+        "gap_mm": null
+      }
+    },
+    {
+      "action": "lid-only-lift",
+      "dz": 0.5,
+      "jig_lid": {
+        "overlap_mm3": 0.0,
+        "gap_mm": 0.09999847412109375
+      },
+      "base_lid": {
+        "overlap_mm3": 0.5849996709821399,
+        "gap_mm": null
+      }
+    },
+    {
+      "action": "lid-only-lift",
+      "dz": 1,
+      "jig_lid": {
+        "overlap_mm3": 0.0,
+        "gap_mm": 0.09999847412109375
+      },
+      "base_lid": {
+        "overlap_mm3": 1.9539006231301916,
+        "gap_mm": null
+      }
+    }
+  ],
+  "stops": {
+    "base_positive_x": {
+      "overlap_mm3": 3.360051355363353,
+      "gap_mm": null
+    },
+    "lid_negative_x": {
+      "overlap_mm3": 2.3040355491698445,
+      "gap_mm": null
+    },
+    "worst_relative_slide_and_lift": {
+      "overlap_mm3": 0.007962749006818747,
+      "gap_mm": null
+    }
+  },
+  "grip_opening": {
+    "point": [
+      60,
+      9.1,
+      19
+    ],
+    "note": "Exposed crop at Y9.1 gives access below the roof at Z18..20, with +Z pull direction. Fixture rails stop atZ5 and do not obstruct it; actual gauge hook geometry remains unmodeled."
+  }
+}

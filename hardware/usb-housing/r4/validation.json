@@ -1,0 +1,107 @@
+{
+  "revision": "R4",
+  "state": "CATALOGUE_LAYOUT_STOCK_UNCONFIRMED",
+  "scope": "Nominal design review only; no print release",
+  "result": "PASS",
+  "hardware_profile": "hardware.json",
+  "required_nominal_checks": {
+    "topology": true,
+    "full_mesh_preflight": true,
+    "coupon_mesh_preflight": true,
+    "sampled_paths": true,
+    "coupon_paths": true,
+    "guides": true,
+    "board_surface_crossings": true,
+    "base_lid_clearance": true,
+    "rear_retention": true,
+    "coupon_hard_stops": true
+  },
+  "sampled_geometry": {
+    "result": "WARN",
+    "poses": 824,
+    "collision_count": 0,
+    "unreadable_instances": [
+      "board"
+    ],
+    "limits": "sampled: a collision thinner than the step between samples can be missed; springs are not checked"
+  },
+  "coupon_sampled_geometry": {
+    "result": "WARN",
+    "poses": 276,
+    "collision_count": 0
+  },
+  "actual_board_surface_check": {
+    "unique_edges": 310475,
+    "crossings": 0,
+    "sha256": "118d406e37372f4ea6be0b992498a956553b354adba62ed5646f3e01bff4ba18",
+    "limits": "Surface-edge rays detect transverse crossings, not complete containment or face-only intersections. Samples do not prove continuous motion. Lower-pad contact at z6.88 is excluded within0.0002mm. Actual-board bounds lie inside the cavity and front bosses are outside PCB/RJ45 bounds."
+  },
+  "physical_validation": "NOT RUN",
+  "slice_release_dispatch": "NOT RUN",
+  "independent_review": {
+    "record": "review/result.json",
+    "summary": "review/review.md",
+    "scope": "PROVISIONAL_MECHANICAL_REVIEW",
+    "nominal_geometry_checks": "PASS",
+    "print_release": "BLOCKED",
+    "physical_validation": "NOT RUN",
+    "open_instruction_findings": []
+  },
+  "sha256": {
+    "housing.scad": "47ffebffd080dd99c93c8d66d2a2bc50e9a7cbeeea3950afd10bb539aeae15b1",
+    "hardware.json": "ecc572ac962d846e8a35f73c2a97ec3e9278c95e35421b3d81ec92d392e12bfe",
+    "build.py": "a45c56c67f0929980c7c77482e6f9584dd23bdd0f8ce7d589a2e02512d66f351",
+    "check.py": "36bdcf9a739297d5706fd3108c2002e0d54337e8ea0f0734f4ca68940312659c",
+    "render.py": "93c7f47d46be5876a3e4fb507872961059db86111f97f0e37d230937bf948c8f",
+    "document.py": "60ccac7f6e2cba41580f6512255fec04544b86521106c2ee007aead97903e9ed",
+    "README.md": "762d7456f38de3d490bed6de48b8ca6df6b0c20e0c0a915f1d40fa63f7352e9c",
+    "preview.png": "a557f323852cc7609f675dcb2394d4296545fc949285b3fee9518208ec86a304",
+    "exploded.png": "3cba76ba7e7d5c9c812e7f4b3a1716f1316b1b2b0571b9087f8df47d22aa8758",
+    "section.png": "dd717fcdc5df3749a1ca599ee91e5fda4cf2ce6176439894797e7db49ef9a57d",
+    "assembly.pdf": "3a91c27b9285c120ab8562c516784aacd6e0a3d34a97df8cc6c8af326294c47e",
+    "reference.py": "9fc8ff66daebba00ec44508f4bac0910751fc043a662707ec728b5d3d7688185",
+    "review/review.md": "16e2482bcf54e2e50c24d6d3ab5a11b3ce87bfd4fdad0c3914d57091ec64ae55",
+    "review/result.json": "4f4fb22149572006be08b083003dd44f7245105cefe844256af6a7b626a51d05",
+    "review/coupon-frozen-input.json": "a9108f37d6bd1e5d3855c8fff91144d3d4a84c02783a59f19028729a5086a355",
+    "review/mechanical-geometry.json": "aaae0b2d50fbadfc67d4f91fc7380fae30f987bf64aaaac7171fc8bd8fa5e78b",
+    "review/frozen-input.json": "57d1d0052e54fe36a130b554da8f475f700005dac3e0d97ee1d379068b8330f3",
+    "review/board-paths.json": "ade9ee5d3a5282382674ac0e6503ba3b0ac1a0ab57ca8893dab6f0024758d2b9",
+    "review/coupon-mechanical-geometry.json": "6056155438f8479e5a50a1c6641262580cf8218c514ed28bb0130e7eb2edf330",
+    "review/guide-sections.json": "6b8c413eae452769fc6279d49945a67e51ec815480051909d22e82d440afd371"
+  },
+  "candidate_mesh_sha256": {
+    "base.stl": "e129f9ab3b403f9cad1675e245d1474897bc53f06b21e905d604339b026231cd",
+    "driver.stl": "fb5f5485a0f50e50698537e5a6fa4d958121aafb8efe801b67fde64d45ac9255",
+    "front-base.stl": "a831bc89d95411b9d90bd0eba41a41460e148100f374d66ba2c018d07514a3ac",
+    "front-lid.stl": "eff291c0f5c8adff9ea4241b16bde1410b9603981bace77504e9a506882a5bd2",
+    "heat-tool.stl": "abba4f9adfb06fb57a31806d768c8a2929d0f7053bfb76771c067d157947bc29",
+    "insert.stl": "d732d50a62801341ddd2e46a1f51ab03f956a14a48e7b7c523e7c8e70368d050",
+    "lid.stl": "b8413af73b52e81a55ede832698aa1ac561b64e7b882f5e326cbc8afd23267e7",
+    "rear-base.stl": "d85d139e2ce039ac41aaf24959ed1729e4a43c1bc49868a2326d2e98c1cbfc6d",
+    "rear-jig.stl": "5b53be7bda8ed858469fe1b95438c386ddd67eee47a4935f052928734c6d10d9",
+    "rear-lid.stl": "0116ccf149fdad5a2eafc77373f3d078168014de659c210dc0287386f11b5ad4",
+    "screw.stl": "aac6d5ae6fe357eadc14fe14237aa1ebe9002b8ea12e8c2dc8bc7b7fe5681dd2",
+    "yoke-usb-housing-r4-coupons-layout.stl": "3d330a521ac532e8b8c81fe25d4785b85feed97176c4db22f79df1c3eab36d9e",
+    "yoke-usb-housing-r4-layout.stl": "99871d59bbd17d0403b5712a9f22140ce943a0cb6ef9d5622e8208569af1fb28"
+  },
+  "generated_evidence_sha256": {
+    "checks.json": "ca8e163d40d063ed573c38948e13370fddbfeebdba628e55bb960b558876ebc3",
+    "sampled-geometry.json": "fe5da4ca6aff9ad74f0b407a6652b04bf4897732096193809ed2a2a85afa1a5d",
+    "coupon-sampled-geometry.json": "7574f577a0aeb6dabec4c5b10638d11a7c9eb8e61cfd430c00340ad6b68dca15",
+    "guide-survival.json": "73d8c2033386645472a15a8ef704df9772b9751182f5036aa4634d438ac8e77d",
+    "coupon-fixture-check.json": "28ba14d81f57d4a3793016f0cc68bda7f8ac8b1d82741dcbef042dcce8024424",
+    "yoke-usb-housing-r4-layout.mesh-preflight.json": "646ab9d5e12979117a952b33be4c9082cd4bfe10772ad6abd760e3f0ed6d3648",
+    "yoke-usb-housing-r4-coupons-layout.mesh-preflight.json": "186f8066dd8dd81a900b90335d00748866682b72067c0d8990bc5fd36c3d1cee"
+  },
+  "limits": [
+    "Samples can miss inter-sample or face-only collisions. Vendor board is nonmanifold.",
+    "Smooth hardware envelopes establish axial overlap, not measured usable thread engagement.",
+    "Mesh bridge allowance is nominal engineering judgement, not tested process capacity."
+  ],
+  "reference_reproduction": {
+    "source_step_sha256": "97b0a1100cb7cb1e0fbd5aed50f8d6b0422b8885580f937163bdd119ceaab4ca",
+    "mesh_sha256": "1c1268c8af4b1a6c0b07fec07b3b28c6662e5d10c0c1b794c1f1083f31af8f27",
+    "result": "PASS",
+    "generator": "reference.py"
+  }
+}
