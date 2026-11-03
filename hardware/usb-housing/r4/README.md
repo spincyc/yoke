@@ -1,7 +1,7 @@
 # R4 compact housing — design review
 
-R4 is a **provisional catalogue design**, following the owner's reports of two
-failed physical housing prints. It keeps the loaded ZERO 3E inside one flat
+R4 replaces the two rejected housing prints. It keeps the loaded ZERO 3E
+inside one flat
 **76.8 × 35.9 × 20.0 mm rectangle**, with no external ears or towers. It uses
 **two M3 × 8 socket-head screws and two RX-M3×5.7 heat-set inserts**. The lid
 **slots together and screws together**: lower it 1.2 mm left of its final
@@ -10,9 +10,10 @@ then install the recessed screws.
 
 **Do not print the full case yet.** The catalogue dimensions are known, but
 matching the owner's actual insert stock, measured screw dimensions, coupon
-fit and physical assembly remain unverified. No R4 part has been sliced,
-released or printed. The next physical question belongs to the small joint
-coupons, after stock confirmation and a fresh exact-job review.
+fit and physical assembly remain unverified. Start with a small set of joint
+samples to test the nominal design. Match the actual inserts to the
+listed part before heat setting. The coupon job needs its own exact-job
+review; it does not release the full case.
 
 ![R4 neutral-gray catalogue layout](preview.png)
 
@@ -79,7 +80,11 @@ usable thread engagement**, torque capacity or insert pullout strength.
 
 ## Build and service instructions
 
-The [five-page assembly and test packet](assembly.pdf) covers the declared
+For the small joint-test print, use the separate
+[coupon assembly and test instructions](coupon-assembly.pdf). They list only
+the five printed samples, one screw and one insert.
+
+The [four-page full-case assembly and test packet](assembly.pdf) covers the
 inventory, insert/tool access, exact joint sections, board insertion,
 lower-and-slide closure, screw installation, reverse service, and the first
 physical tests. All physical observations remain **NOT RUN**.
@@ -102,25 +107,30 @@ Do not try to lift the engaged rear hooks straight upward.
 
 The native CAD crops the actual front screw/guide and rear retaining joint;
 it does not substitute a generic insert block. The five-part set is
-**4.80 cm³ of model material**, approximately 5.9 g at an assumed 1.24 g/cm³,
-before any slicer additions:
+about **6.47 cm³ of model material**, before any slicer additions:
 
 - `front-base` + `front-lid`: actual insert boss, head shelves, driver access,
-  guide, stop height and screw reach. Use one of the same M3 × 8 / RX inserts.
+  guide, stop height and screw reach. The base crop extends beyond the lid
+  to expose a floor ledge for the clamp. Use one M3 × 8 screw and one RX insert.
 - `rear-base` + `rear-lid`: actual hook and roof/pocket section.
 - `rear-jig`: a separate bench fixture whose hard X faces substitute for the
   full case's front-screw restraint during the rear-joint load trial.
 
 Close the rear pair **outside the jig**, then lower the closed pair onto its
 2 mm floor. Hard faces at X 55.5 / 67.7 permit at most 0.2 mm relative reverse
-travel. Its tall stop wall is 3.0 mm thick. Clamp the jig floor; require loaded stop
-deflection ≤0.1 mm and relative X travel ≤0.3 mm, or invalidate the fixture
-result. Confirm that the closed pair moves vertically
-with less than 0.5 N drag, then apply the declared upward +Z test load through
-a padded grip under the exposed lid roof edge at Y 9.1. The packet specifies
+travel. Its tall stop wall is 5.0 mm thick. A simple cantilever estimate for
+the earlier 3 mm wall exceeded the 0.1 mm deflection limit; the thicker wall
+reduces that risk but still needs measurement. First check that the closed
+pair moves vertically with less than 0.5 N drag while holding the jig floor.
+Then clamp the lower sample and jig floors together to a supporting bench
+through the rear window, leaving the lid free. Holding only the jig would
+let both samples lift together and would not test retention. Require loaded
+stop deflection ≤0.1 mm and relative X travel ≤0.3 mm, or invalidate the fixture
+result. Apply the declared upward +Z test load under the exposed lid roof
+edge at Y 9.1, clear of its internal pad. The packet specifies
 5 N for 10 s, three times, and ten assembly/service cycles. Record actual
 screw turns, dimensions, forces, gaps and damage. Coupon results do not prove
-full-board/cable/thermal fit. No coupon print is currently authorized here.
+full-board/cable/thermal fit.
 
 ## Rebuild and check
 
@@ -131,17 +141,25 @@ and coupon layout plates. Normal export refuses the unconfirmed stock profile;
 Only selected review images/PDF are committed; **no R4 print STL or G-code is
 published**.
 
+`--coupon-trial` prepares the nominal joint-test plate while keeping actual
+stock fit unconfirmed. It marks only the coupon plate for that test; the
+full-case plate remains a layout artifact. The exact coupon job still needs
+Lacuna's assembly release and owner authorization before dispatch.
+
 With Manifold-enabled OpenSCAD (used here: 2026.09.19):
 
 ```sh
 python3 hardware/usb-housing/r4/build.py --provisional \
   --output .scratch/usb-housing-r4
+
+python3 hardware/usb-housing/r4/build.py --coupon-trial \
+  --output .scratch/usb-housing-r4-joints
 ```
 
 For [check.py](check.py), [render.py](render.py) and [document.py](document.py),
-use Python with numpy, trimesh, manifold3d, Pillow and reportlab; `pdftoppm`
-is also required for the PDF page images. The Lacuna checkout supplies the
-normal mesh and sampled-geometry tools. Reproduce with explicit inputs:
+use Python with numpy, trimesh, scipy, networkx, manifold3d, Pillow and reportlab.
+`pdftoppm` is also required for the PDF page images. The Lacuna checkout supplies
+the normal mesh and sampled-geometry tools. Reproduce with explicit inputs:
 
 ```sh
 python hardware/usb-housing/r4/check.py \
@@ -184,10 +202,12 @@ Neither generator nor checker depends on a hidden R3-cache path.
 ## Evidence and limits
 
 [validation.json](validation.json) records concise exact-input identities and
-nominal results. The [independent mechanical review](review/review.md) and
-[review result](review/result.json) record the examined geometry and remaining
-physical questions. Both layout plates pass the normal Lacuna mesh preflight with
-supports disabled; no zero-area facets remain. Actual base/lid/tool/hardware
+nominal results. The [earlier independent mechanical review](review/review.md)
+and [review result](review/result.json) cover the case and original joint
+samples. The current coupon job separately reviews the larger front clamp
+ledge, thicker jig and lower-sample hold-down. Both layout plates pass the normal
+Lacuna mesh preflight with supports disabled; no zero-area facets remain.
+Actual base/lid/tool/hardware
 paths have no sampled collisions. Each promised guide survives export with
 both 0.85 mm walls. The official board is nonmanifold, so its separate actual
 surface-edge check supplements the sampled solid checker; those samples show

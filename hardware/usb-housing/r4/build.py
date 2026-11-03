@@ -48,7 +48,13 @@ def translated(path, delta):
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--output", type=Path, default=REPO / ".scratch/usb-housing-r4")
-    p.add_argument("--provisional", action="store_true")
+    mode = p.add_mutually_exclusive_group()
+    mode.add_argument("--provisional", action="store_true")
+    mode.add_argument(
+        "--coupon-trial",
+        action="store_true",
+        help="Prepare nominal joint samples to test actual fit; no full-case release",
+    )
     p.add_argument("--documents", action="store_true")
     p.add_argument("--openscad", default=shutil.which("openscad"))
     a = p.parse_args()
@@ -61,10 +67,11 @@ def main():
     confirmed = h["status"] == "CONFIRMED" and isinstance(
         i["pilot_diameter_mm"], (int, float)
     )
-    if not confirmed and not a.provisional:
+    if not confirmed and not (a.provisional or a.coupon_trial):
         p.error(
             "Catalogue profile is known; actual stock identity/fit remains "
-            "unconfirmed. --provisional is for layout review only."
+            "unconfirmed. Use --provisional for layout or --coupon-trial "
+            "for joint samples."
         )
     if not confirmed and not a.output.resolve().is_relative_to(
         (REPO / ".scratch").resolve()
@@ -117,14 +124,18 @@ def main():
         for n, d in [
             ("front-base", (15, 8, 0)),
             ("front-lid", (15, -2, 0)),
-            ("rear-base", (-24, 8, 0)),
-            ("rear-lid", (-24, 4, 0)),
-            ("rear-jig", (3, 13, 0)),
+            ("rear-base", (-10, 8, 0)),
+            ("rear-lid", (-10, 4, 0)),
+            ("rear-jig", (15, 22, 0)),
         ]
     ]
     coupon_records = [record for group in coupon_groups for record in group]
     (a.output / "yoke-usb-housing-r4-coupons-layout.stl").write_bytes(
-        b"R4 PROVISIONAL COUPONS - NOT FOR PRINT".ljust(80, b"\0")
+        (
+            b"R4 JOINT FIT TRIAL - NOMINAL RX PROFILE"
+            if a.coupon_trial
+            else b"R4 PROVISIONAL COUPONS - NOT FOR PRINT"
+        ).ljust(80, b"\0")
         + struct.pack("<I", len(coupon_records))
         + b"".join(coupon_records)
     )
@@ -132,9 +143,20 @@ def main():
         json.dumps(
             {
                 "revision": "R4",
-                "state": "PROVISIONAL_NOT_FOR_PRINT"
-                if not confirmed
-                else "DESIGN_REVIEW_ONLY",
+                "state": (
+                    "COUPON_FIT_TRIAL_STOCK_UNCONFIRMED"
+                    if a.coupon_trial
+                    else "PROVISIONAL_NOT_FOR_PRINT"
+                    if not confirmed
+                    else "DESIGN_REVIEW_ONLY"
+                ),
+                "print_scope": (
+                    "Joint samples only; exact-job review and authorization required. "
+                    "Match actual inserts before heat setting. "
+                    "Full case remains blocked."
+                    if a.coupon_trial
+                    else "No print release"
+                ),
                 "hardware": h,
                 "source_sha256": {
                     n: sha(HERE / n)

@@ -99,15 +99,23 @@ module lid_assembled(){difference(){union(){
 module lid(){translate([0,28.5,20])rotate([180,0,0])lid_assembled();}
 module coupon(which){
  // Intersect native parts; critical lands, passages, guides and hook are unchanged.
- bounds=which=="front"?[-9.2,8,-3.7,6.3]:[55.6,67.6,-2.1,9.1];
+ // The lower front sample includes a real floor ledge for its clamp.
+ bounds=which=="front-base"?[-9.2,20,-3.7,9.1]:
+        which=="front"?[-9.2,8,-3.7,6.3]:[55.6,67.6,-2.1,9.1];
  intersection(){children();slab(bounds,-.1,20.2);}
 }
 module rear_jig(){
  // Fixture, not housing: mechanically restrains X while allowing rear lid Z lift.
- slab([52.5,70.6,-4.5,11.5],0,2);
- translate([52.5,-3.1,2])cube([3.0,13.2,22]);
+ // A 5 mm stop reduces expected flex under the 5 N trial; measure it in use.
+ difference(){union(){
+ slab([50.5,70.6,-18.5,11.5],0,2);
+ translate([50.5,-3.1,2])cube([5.0,13.2,22]);
  translate([67.7,-3.1,2])cube([1.4,13.2,3]);
  for(y=[-3.1,9.4])translate([55.5,y,2])cube([12.2,.7,3]);
+ }
+ // A low rear opening admits the RB floor hold-down without touching RL.
+ translate([55.5,9.3,2])cube([8.8,.9,4]);
+ }
 }
 module screw(){union(){cylinder(d=3,h=8);translate([0,0,-3])cylinder(d=6,h=3);}}
 module insert(){difference(){cylinder(d=insert_od,h=insert_l);translate([0,0,-.01])cylinder(d=3,h=insert_l+.02);}}
@@ -116,7 +124,7 @@ module heat_tool(){cylinder(d=2.4,h=1);translate([0,0,1])cylinder(d=4.2,h=2);tra
 if(part=="base")base();
 else if(part=="lid")lid();
 else if(part=="lid-assembled")lid_assembled();
-else if(part=="front-base")coupon("front")base();
+else if(part=="front-base")coupon("front-base")base();
 else if(part=="front-lid")translate([0,28.5,20])rotate([180,0,0])coupon("front")lid_assembled();
 else if(part=="rear-base")coupon("rear")base();
 else if(part=="rear-lid")translate([0,28.5,20])rotate([180,0,0])coupon("rear")lid_assembled();

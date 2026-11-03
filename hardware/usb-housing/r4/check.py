@@ -23,9 +23,9 @@ GUIDES = [(16, 30.6, 12), (47, 30.6, 12), (1.5, -2.1, 4)]
 COUPON_PLACEMENTS = [
     ("front-base", (15, 8, 0)),
     ("front-lid", (15, -2, 0)),
-    ("rear-base", (-24, 8, 0)),
-    ("rear-lid", (-24, 4, 0)),
-    ("rear-jig", (3, 13, 0)),
+    ("rear-base", (-10, 8, 0)),
+    ("rear-lid", (-10, 4, 0)),
+    ("rear-jig", (15, 22, 0)),
 ]
 
 

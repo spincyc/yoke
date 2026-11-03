@@ -44,7 +44,7 @@ def main():
             y -= gap
 
     def title(n, s):
-        text(34, 755, f"YOKE ZERO 3E / R4 / {n} OF 5", 11)
+        text(34, 755, f"YOKE ZERO 3E / R4 / {n} OF 4", 11)
         text(34, 729, s, 19)
 
     def footer():
@@ -157,8 +157,8 @@ def main():
     lines(
         [
             (
-                "1. Confirm actual RX stock identity, then review the small "
-                "coupon job first."
+                "1. Qualify the small joints using coupon-assembly.pdf "
+                "before a full case."
             ),
             (
                 "2. Heat-set inserts in the EMPTY base before any board or lid is"
@@ -540,121 +540,6 @@ def main():
     )
     footer()
     c.showPage()
-    title(5, "Small coupon trials before a full housing")
-    lines(
-        [
-            (
-                "Print preparation remains BLOCKED until stock identity and job "
-                "review are complete."
-            ),
-            (
-                "Five native parts: front-base + front-lid; rear-base + rear-lid; "
-                "rear-jig fixture."
-            ),
-            (
-                "They crop the actual housing, preserving its screw lands, guide and "
-                "hook profiles."
-            ),
-            (
-                "Use ONE M3 x 8 and ONE confirmed RX insert for the front trial, not "
-                "new stock claims."
-            ),
-            "The rear jig is a test fixture, not part of the final enclosure.",
-        ],
-        698,
-    )
-    text(34, 596, "Front coupon: heat-set, slot, screw, service", 13)
-    lines(
-        [
-            (
-                "1. Verify actual insert matches RX-M3x5.7 catalogue; measure "
-                "OD/length and screw."
-            ),
-            (
-                "2. Heat-set in front-base only: use maker pilot 4.0, length 5.7 and "
-                "min wall 1.6."
-            ),
-            "   Boss wall 1.9; pilot depth 6.7 is our length+1.0 design allowance.",
-            (
-                "3. With no screw, lower front-lid at -1.2 X; slide +1.2 X to aligned"
-                " outside edges."
-            ),
-            (
-                "   Require easy hand seating and real guide restraint, no whitening "
-                "or forced flex."
-            ),
-            "4. Measure stack: nominal grip 3.0 / axial overlap 5.0 mm;",
-            "   Tip reserves: insert 0.70 / plastic 1.70; head recess 0.50 mm.",
-            (
-                "   Smooth meshes do not establish usable threads: count and record "
-                "actual turns."
-            ),
-            "5. Seat M3 x 8 by hand; reject bottoming or a turning insert.",
-            (
-                "   Confirm driver reaches the head, head remains recessed, and the "
-                "screw blocks"
-            ),
-            "   reverse X slide. KEEP SCREW FITTED for the load trial below.",
-            "   Hold base floor; separate halves to 5 N for 10 s, three times.",
-            "   Require no release, insert motion, crack or residual gap >0.2 mm.",
-            "   Remove screw, reverse slide, lift. Cycle 10 times; reinspect.",
-        ],
-        570,
-        gap=14,
-    )
-    text(34, 362, "Rear coupon: hard X stops before opening load", 13)
-    lines(
-        [
-            (
-                "6. Close rear-base + rear-lid with the same lower/slide sequence "
-                "OUTSIDE the jig."
-            ),
-            (
-                "7. Lower the closed pair into rear-jig; base rests on its 2 mm "
-                "floor. Hard faces"
-            ),
-            (
-                "   at X 55.5 / 67.7 leave 0.1 mm at each coupon end, limiting reverse "
-                "travel to 0.2."
-            ),
-            (
-                "   Clamp the JIG FLOOR to a bench. Use padded jaws/gauge on the lid "
-                "roof edge."
-            ),
-            ("8. Require free vertical pair motion <0.5 N. Grip lid edge at Y 9.1."),
-            "   Pull +Z to 5 N for 10 s, three times; hard X stops carry the reaction.",
-            "   Require stop deflection <=0.1 mm and relative X travel <=0.3 mm.",
-            "   Greater travel invalidates fixture: stop and repair before retrying.",
-            "   Require no joint release, crack, whitening or permanent distortion.",
-            (
-                "   Record loaded gap and residual gap; require residual gap <=0.2 mm"
-                " after load."
-            ),
-            (
-                "9. Remove pair vertically from jig before reversing slide. Cycle 10 "
-                "times and inspect."
-            ),
-            (
-                "The matched sloping faces carry rear opening load; front screws "
-                "restrain X in the"
-            ),
-            (
-                "full case. Rear-coupon PASS cannot prove full-board, cable, strength"
-                " or thermal fit."
-            ),
-            (
-                "STOP on any failed limit. Revise the failing interface before a "
-                "full-case trial."
-            ),
-            (
-                "All actual coupon observations, insertion force, screw turns and "
-                "loads: NOT RUN."
-            ),
-        ],
-        350,
-        gap=16,
-    )
-    footer()
     c.save()
     subprocess.run(
         [

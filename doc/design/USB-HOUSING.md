@@ -37,6 +37,12 @@ insert setting and screw fit need physical checks.
 
 ## Before another full case print
 
+The first R4 [joint-test print](../../hardware/usb-housing/r4/print.json)
+was submitted and verified printing. It contains five small test pieces,
+uses an estimated 6.53 g of PLA and takes about 40 minutes. Use the separate
+[joint assembly and test instructions](../../hardware/usb-housing/r4/coupon-assembly.pdf)
+after cooling. A started print does not establish that the joints fit.
+
 Use the same Lacuna mesh, print-support and assembly-clearance tools,
 with the actual R4 geometry. Those checks can find unsupported features
 and modeled collisions. They cannot establish the fit of printed plastic,

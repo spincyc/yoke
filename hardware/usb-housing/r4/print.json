@@ -1,0 +1,81 @@
+{
+  "schema": "yoke.usb-housing-print/1",
+  "revision": "R4",
+  "kind": "JOINT_COUPON_TRIAL",
+  "state": "SUBMITTED_AND_PRINTING_VERIFIED",
+  "printer_model": "FlashForge Adventurer 5M",
+  "printer_firmware": "5.1.8",
+  "job_filename": "yoke-usb-housing-r4-coupon-trial.gcode",
+  "stl_sha256": "a77f3bc4149f3fe67d1707211cb6ea1acda4776ab59a852d2351156204d072ec",
+  "gcode_sha256": "935334bbf07036937beb981878ddeaaca75239c717816a0fef511e4c99514546",
+  "toolpath_sha256": "57ad881050ccfd6e7040074c39be60842e316876298c682d5d3ec8391b00dcb6",
+  "estimated_filament_g": 6.53,
+  "estimated_time_seconds": 2428,
+  "material_profile": "Flashforge Generic PLA",
+  "nozzle_c": 220,
+  "bed_first_layer_c": 55,
+  "bed_following_layers_c": 60,
+  "layers": 120,
+  "wall_loops": 2,
+  "infill_percent": 15,
+  "supports": "DISABLED",
+  "printed_parts": [
+    "front-base",
+    "front-lid",
+    "rear-base",
+    "rear-lid",
+    "rear-jig"
+  ],
+  "trial_hardware": "One M3x8 socket-head screw and one matching RX-M3x5.7 heat-set insert",
+  "instructions": "coupon-assembly.pdf",
+  "assembly_pdf_sha256": "bccc0fd7dc376bdb1b33d6bf0c02be64bb7ee8469a8ab0e827673f3198850484",
+  "design_source_sha256": {
+    "housing.scad": "7165a2f803345bc28fb94466548794c373ede35c2873160874b054270dd2ae34",
+    "hardware.json": "ecc572ac962d846e8a35f73c2a97ec3e9278c95e35421b3d81ec92d392e12bfe",
+    "build.py": "85106a0d55a03cbbb803274f55b405478282e9deccf5adff2890fc8abb6a6eeb",
+    "check.py": "cba44a071dfd6596bcd769382a3d012067db63766ab05fa68dd8c09fb2ad23fc",
+    "render.py": "93c7f47d46be5876a3e4fb507872961059db86111f97f0e37d230937bf948c8f",
+    "coupon_document.py": "8e5252ab90e7165d57344958ea3516f6e69d24c56e8477ab9bb9dce1f1873c29"
+  },
+  "assembly_packet_sha256": "e78fc2dae091396d28dbf4ae2f5b3178bfb0df21479f00b66e70f1d397a04a92",
+  "assembly_review_sha256": "9cc189d30533667811ae2726e667f3aa908e016b1ad7a212b816361046302a9f",
+  "approval_result": "PASS",
+  "approval_sha256": "b5ce9f2ac2ddbf7b33ba9795fe18be637336c1e06d6b6e1dde0a6a3739214ed9",
+  "independent_reviewer": "independent-r4-coupon-mechanical-review",
+  "geometry": {
+    "assembly_poses": 366,
+    "tool_poses": 205,
+    "collisions": 0,
+    "result": "WARN",
+    "limitation": "Finite rigid samples and declared tool envelopes. Explained nominal flush contact and 0.1mm running clearance remain physical fit questions."
+  },
+  "digital_verification": {
+    "native_rebuild": "BYTE_IDENTICAL",
+    "mesh_preflight": "PASS",
+    "gcode_preflight": "PASS",
+    "preprint_review": "PASS",
+    "assembly_approval": "PASS"
+  },
+  "dispatch_attempted": true,
+  "dispatch_attempt_count": 1,
+  "dispatch_outcome": "STARTED_AND_FILENAME_VERIFIED",
+  "submitted_at": "2026-11-03T05:23:27Z",
+  "acknowledged_at": "2026-11-03T05:23:33Z",
+  "printer_status_observed": {
+    "at": "2026-11-03T05:23:33Z",
+    "state": "PRINTING",
+    "current_file": "yoke-usb-housing-r4-coupon-trial.gcode"
+  },
+  "physical_validation": "NOT RUN",
+  "actual_stock_and_tool_fit": "Match actual insert before heat-setting and actual tools before loading",
+  "full_case_print_release": "BLOCKED_PENDING_PHYSICAL_COUPON_RESULTS",
+  "filament_identification": "Printer firmware reports no material type; configured PLA profile used.",
+  "dispatch_ledger": {
+    "repository": "spincyc/lacuna",
+    "path": "tools/print/dispatch-log.jsonl",
+    "matching_rows_sha256": "500c9cee881bdcc9d5d6f349844c2a226d7674140a252d22ed9c2cbabf9c75a1",
+    "matching_rows_sha256_method": "SHA-256 of exact matching UTF-8 JSONL bytes in ledger order, including terminating LF.",
+    "matching_row_count": 2,
+    "source_commit": "e2e40f56fb8c14b8a148f61291c251a6299be1c4"
+  }
+}
