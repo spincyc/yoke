@@ -38,13 +38,17 @@ available without a proprietary management service.
 
 ## Prototype scope
 
-- Two Radxa ZERO 3E boards, with one physical USB connection at each end.
+- Two Radxa ZERO 3E boards, each with its PoE HAT and one physical USB
+  connection at each end.
 - USB 2 first. Earlier USB 3 and 10GbE research does not set requirements
   for this prototype.
-- Ethernet between the boxes. The bare board does not supply a completed
-  PoE product; power wiring and any PoE adapter need separate validation.
-- The [enclosure](USB-HOUSING.md) is being redesigned after two failed
-  prints: rectangular shell, slot joint, recessed M3 screws and heat-set inserts.
+- Ethernet and PoE power between the boxes and a compatible switch. Preserve
+  Radxa's conductive mounting screws, insulated copper pillars and GPIO
+  connection; powered operation still needs physical validation.
+- The [enclosure](USB-HOUSING.md) must accommodate the complete board/HAT
+  assembly, including its cooling parts: rectangular shell, freely nesting
+  halves, recessed M3 screws, heat-set inserts and unobstructed ventilation.
+  R5 omitted the HAT and does not satisfy this requirement.
 
 ## Firmware status
 

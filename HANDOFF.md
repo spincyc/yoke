@@ -5,9 +5,41 @@ It was designed and sent to print for a bare ZERO 3E, omitting the original PoE
 requirement. This is a design miss, not a newly requested feature. A PoE
 housing remains unfinished. Do not present or repeat R5 as the solution.
 
-The latest request is to persist this handoff. No CAD redesign, replacement
-print, or cancellation was performed as part of that request. The existing
-print was checked read-only; its snapshot is below.
+The latest request is to create the complete PoE housing with ventilation,
+cold-review it and send it to the ready printer once the design is complete.
+That print authorization remains unconsumed. Reference inspection found a
+material inconsistency in Radxa's published dimensions; a replacement has
+not been modeled, sliced or dispatched. No cancellation was sent.
+
+## Current dimensional block
+
+The [mechanical reference record](hardware/usb-housing/poe-reference.json)
+pins the official CAD and product sources inspected on 2026-11-03. The
+combined STEP places the facing PCBs 18 mm apart, while Radxa's product
+specification lists 14.5 mm insulated copper pillars. Current and older HAT
+STEP files are byte-identical. The model also omits the mounting screws,
+pillars, fan fasteners, fan leads and photographed heatsinks. Its approximately
+36.96 mm height is not a verified envelope for the complete physical module.
+
+The owner has been asked for the HAT revision, actual facing-PCB gap, complete
+assembled height, screw-head and insulated-pillar dimensions, and fitted
+heatsinks. The cold reference review considers lower-board edge retention a
+possible way to avoid head-specific supports, provided the module and hardware
+keepout envelopes are measured. It does not approve a complete housing or print.
+Do not resolve the spacing conflict by selecting one nominal value or treating
+the larger CAD stack as a proven physical upper bound.
+
+The printer was reconciled read-only during this request: **READY, no current
+file**. This establishes that R5 is not active, not that it passed physical
+acceptance. The user says the printer is ready; recheck printer state before
+using the remaining authorization. R5 repeat jobs are now retired in Lacuna's
+`tools/print/retired-jobs.d/yoke-usb-housing-r5.json`.
+
+Pending-task references remain in `.scratch/poe-reference/`: original STEP
+archives, combined and component meshes, source inspection report and a Python
+environment with CadQuery/OCP and document tools. The independent reference
+review is in `.scratch/r6-cold-reference/`. These are disposable working files;
+the canonical JSON above retains source URLs, hashes and the unresolved facts.
 
 ## Resume here
 
@@ -90,7 +122,7 @@ failed: the owner reported that the pieces did not line up or slot together;
 see [the recorded result](hardware/usb-housing/r4/owner-result.json). The
 physical cause is not established. R5 replaced R4's offset-and-slide joint
 with vertical nesting, but has no physical fit result yet. R1/R3/R4 are
-retired in Lacuna's print guards; R5 is not yet retired there.
+retired in Lacuna's print guards; R5 is now retired for omitting PoE.
 
 ### Next engineering steps
 
@@ -106,9 +138,9 @@ retired in Lacuna's print guards; R5 is not yet retired there.
    these constraints.
 4. Update the canonical [USB design](doc/design/USB-ENDPOINT.md),
    [housing page](doc/design/USB-HOUSING.md), revision records, drawings and
-   assembly instructions together. They currently describe the bare-board
-   R5 scope and do not yet incorporate this PoE correction. Retire the
-   inappropriate repeat-print path when replacing R5.
+   assembly instructions together when the replacement is complete. The
+   design pages now state the PoE requirement and dimensional block; R5
+   drawings remain explicitly historical and its repeat-print path is retired.
 5. Use Lacuna's current acceptance and print workflow on the **complete
    board/HAT assembly**: actual-part assembly and tool access, fastener
    engagement and tip clearance, print tolerances, mesh/support checks,

@@ -1,5 +1,9 @@
 # R5 straight-nesting ZERO 3E housing
 
+**Retired for the PoE endpoint: R5 omits the required HAT. Do not repeat this
+print.** Its historical digital checks concern the bare board only. See the
+[current housing requirements](../../../doc/design/USB-HOUSING.md).
+
 R5 is a full two-part first article after the failed R4 joint samples. The
 lid lowers vertically into an open rim and fastens with **four M3 × 8
 socket-head screws and four RX-M3×5.7 heat-set inserts** from the same owner

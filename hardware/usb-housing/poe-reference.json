@@ -1,0 +1,106 @@
+{
+  "schema": "yoke.poe-mechanical-reference/1",
+  "inspected_on": "2026-11-03",
+  "product": "Radxa ZERO 3E + RA023 PoE HAT",
+  "result": "BLOCKED",
+  "scope": "Reference sufficiency for complete housing; no replacement design or print released.",
+  "sources": [
+    {
+      "url": "https://dl.radxa.com/zero3/docs/hw/3e/rs109_ra023.stp.zip",
+      "archive_sha256": "0e1c6bf8a1582c5e24700c18d1e114381899191a8c30a110b4b2ed566c22e4ef",
+      "step": "rs109_ra023.stp",
+      "step_sha256": "fb4da946e8d318cb6ea82ee740b31e2839801beabd7a10893cb0eea59585e72c"
+    },
+    {
+      "url": "https://dl.radxa.com/accessories/3e-poe-hat/radxa_zero3e_poe_hat_3d_stp_v1.2.zip",
+      "archive_sha256": "f1370cf9450682adfe34572e5280262fbc6692a1842c22732cdd183ea7ef49ff",
+      "step": "ra023_pcba.stp",
+      "step_sha256": "0998c081b28c773bc01eac18b7b965dcac6c4c22ab62557b3d300e1fc9e31bbe",
+      "note": "Byte-identical to the 2024 HAT download at https://dl.radxa.com/zero3/docs/hw/3e/ra023_pcba.stp.zip"
+    },
+    {
+      "url": "https://radxa.com/products/accessories/zero-3e-poe-hat/",
+      "product_code": "ra023",
+      "product_data_url": "https://radxa.com/assets/js/main.fe131fa1.js",
+      "product_data_sha256": "1cd644c72c769f3610f31aee927da12494d5902edc209f6079ae2a1e1847b7a3"
+    },
+    {
+      "url": "https://docs.radxa.com/en/zero/zero3/accessories/3e-poe-hat",
+      "requirement": "Keep metal screws and copper pillars installed and tightened; they carry the PoE electrical connection."
+    }
+  ],
+  "source_cad_mm": {
+    "sbc_pcb_z": [
+      -1.6,
+      0
+    ],
+    "hat_pcb_z": [
+      18,
+      19.6
+    ],
+    "facing_pcb_gap": 18,
+    "supplied_mesh_bounds": [
+      [
+        -6.4,
+        -1.5,
+        -5.26
+      ],
+      [
+        65.06097,
+        30.00553,
+        31.7
+      ]
+    ],
+    "supplied_mesh_height": 36.96,
+    "fan_size": [
+      20,
+      20,
+      6.5
+    ],
+    "hat_header_depth_below_pcb": 15.5,
+    "sbc_hole_centres_xy": [
+      [
+        3.5499,
+        3.59994
+      ],
+      [
+        61.39993,
+        3.59994
+      ],
+      [
+        3.59994,
+        26.45004
+      ],
+      [
+        61.39993,
+        26.50007
+      ]
+    ],
+    "limits": "Source geometry, not measured owner hardware or a manufacturing tolerance. Some source leaves are surface compounds. The supplied CAD omits mounting hardware and cooling accessories."
+  },
+  "official_package": {
+    "pillars": {
+      "quantity": 4,
+      "description": "M2.5 x 14.5 copper pillars with insulating heat-shrink tubing"
+    },
+    "screws": {
+      "quantity": 8,
+      "description": "CM2.5 x 4; assembly narrative also says CM2.5 x 4 x 4 without defining head dimensions"
+    }
+  },
+  "unresolved": [
+    "Actual HAT revision, fan and heatsink configuration.",
+    "Actual mated PCB gap: CAD says 18 mm; package lists 14.5 mm pillars. Neither source establishes which spacing applies to owner hardware.",
+    "Screw-head diameter and protruding height, insulated pillar diameter, and complete assembly outer height.",
+    "Fan fasteners, wire route and fitted heatsinks omitted from CAD."
+  ],
+  "physical_validation": "NOT RUN",
+  "replacement_dispatch_attempted": false,
+  "cold_reference_review": {
+    "result": "BLOCKED",
+    "reviewer": "cold_reference_review",
+    "review_sha256": "c7131e621f5ebf5423fcb42f8021c7dbbb73dcc58bccb19ef0e5389f876144db",
+    "conclusion": "Independent STEP inspection reproduced the 18 mm PCB gap, missing hardware and 706.260 mm3 interference if the HAT is lowered to a 14.5 mm gap. Verified full-module and support/keepout envelopes remain necessary; lower-PCB edge retention could avoid requiring exact fastener head geometry.",
+    "complete_design_review": "NOT RUN"
+  }
+}
