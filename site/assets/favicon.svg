@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
   <title>Yoke</title>
-  <rect width="32" height="32" rx="5" fill="#eef2ed"/>
+  <rect width="32" height="32" rx="5" fill="#f8f7f4"/>
   <!-- Mark geometry derives from yoke-mark.svg. -->
-  <path fill="#275f50" d="M4 3H10V12A6 6 0 0 0 22 12V3H28V12A12 12 0 0 1 19 23.6189500386V29H13V23.6189500386A12 12 0 0 1 4 12Z"/>
+  <path fill="#315fcd" d="M4 3H10V12A6 6 0 0 0 22 12V3H28V12A12 12 0 0 1 19 23.6189500386V29H13V23.6189500386A12 12 0 0 1 4 12Z"/>
 </svg>

@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 800" width="680" height="800" role="img" aria-labelledby="usb-title usb-description">
+  <title id="usb-title">The current USB reference exports a peripheral into a Linux host</title>
+  <desc id="usb-description">A USB game controller plugs into a Linux exporting endpoint. USB requests and responses travel in both directions over an Ethernet switch to a Linux host, which imports the device into its own USB stack. A physical USB output to a separate computer is not implemented. This reference path has not been tested with real endpoint hardware.</desc>
+  <defs>
+    <marker id="usb-arrow" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="m2 2 4 3-4 3" fill="none" stroke="#315fcd" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></marker>
+    <style>
+      text {font-family:Arial,Helvetica,sans-serif;fill:#17202a}
+      .label {font-size:26px;font-weight:600;letter-spacing:-.4px}
+      .detail {font-size:22px;fill:#52606c}
+      .eyebrow {font-size:15px;letter-spacing:1.8px;font-weight:700}
+      .device {fill:#f8f7f4;stroke:#17202a;stroke-width:2.2;stroke-linejoin:round}
+      .wire {fill:none;stroke:#315fcd;stroke-width:4;stroke-linecap:round;marker-start:url(#usb-arrow);marker-end:url(#usb-arrow)}
+
+      @media (prefers-color-scheme:dark) {
+        [fill="#f8f7f4"] {fill:#15191f}
+        [fill="#fff"], [fill="#efede8"] {fill:#303943}
+        [fill="#dfe2e3"], [fill="#e0e2e2"], [fill="#d9dce0"] {fill:#242d36}
+        [fill="#17202a"] {fill:#11161d}
+        [fill="#315fcd"] {fill:#82a7ff}
+        [fill="#52606c"] {fill:#aeb8c7}
+        [stroke="#17202a"] {stroke:#b9c4d3}
+        [stroke="#d9dce0"], [stroke="#b4bbc0"] {stroke:#465260}
+        [stroke="#315fcd"] {stroke:#82a7ff}
+        [stroke="#52606c"] {stroke:#aeb8c7}
+        stop[stop-color="#fff"] {stop-color:#38434f}
+        stop[stop-color="#efede8"] {stop-color:#242d36}
+        .box, .device {fill:#303943;stroke:#b9c4d3}
+        .outline {stroke:#b9c4d3}
+        .port {fill:#11161d;stroke:#b9c4d3}
+        .payload, .cable, .wire {stroke:#82a7ff}
+        .control {stroke:#aeb8c7}
+        text {fill:#f3f4f6}
+        .detail {fill:#aeb8c7}
+      }
+    </style>
+  </defs>
+  <rect width="680" height="800" fill="#f8f7f4"/>
+  <text x="30" y="35" class="eyebrow">USB / CURRENT SOFTWARE REFERENCE</text>
+  <path d="M30 55H650" stroke="#d9dce0"/>
+
+  <!-- A recognizable physical USB peripheral. -->
+  <path d="M82 110c-14 0-22 9-27 28l-12 42c-4 16 12 25 23 13l19-21h67l19 21c11 12 27 3 23-13l-12-42c-5-19-13-28-27-28Z" class="device"/>
+  <path d="M75 140h25M87 128v25" stroke="#17202a" stroke-width="6" stroke-linecap="round"/>
+  <circle cx="157" cy="135" r="5" fill="#315fcd"/><circle cx="173" cy="151" r="5" fill="#315fcd"/>
+  <path d="M113 133h12" stroke="#17202a" stroke-width="3" stroke-linecap="round"/>
+  <text x="250" y="135" class="label">USB controller</text>
+  <text x="250" y="168" class="detail">Or another USB peripheral</text>
+  <path d="M119 184v73" class="wire"/>
+  <text x="148" y="229" class="detail">USB cable</text>
+
+  <!-- Export at the source: no claim of a USB gadget at the other end. -->
+  <rect x="49" y="270" width="140" height="88" rx="7" class="device"/>
+  <path d="M65 288h47" stroke="#b4bbc0" stroke-width="3"/>
+  <rect x="65" y="321" width="29" height="15" rx="1" fill="#17202a"/>
+  <rect x="146" y="317" width="27" height="22" rx="1" fill="#17202a"/>
+  <path d="M151 322h17v13h-17Z" fill="#315fcd"/>
+  <circle cx="170" cy="289" r="3" fill="#315fcd"/>
+  <text x="250" y="296" class="label">Linux endpoint</text>
+  <text x="250" y="329" class="detail">Exports the attached device</text>
+  <path d="M119 374v67" class="wire"/>
+  <text x="148" y="416" class="detail">Ethernet</text>
+
+  <!-- Ordinary switch, not a resident controller. -->
+  <rect x="41" y="454" width="156" height="71" rx="4" class="device"/>
+  <path d="M58 472h71" stroke="#b4bbc0" stroke-width="3"/>
+  <g fill="#17202a"><rect x="58" y="491" width="22" height="19" rx="1"/><rect x="91" y="491" width="22" height="19" rx="1"/><rect x="124" y="491" width="22" height="19" rx="1"/><rect x="157" y="491" width="22" height="19" rx="1"/></g>
+  <path d="M62 495h14v11H62ZM95 495h14v11H95Z" fill="#315fcd"/>
+  <text x="250" y="480" class="label">Ethernet switch</text>
+  <text x="250" y="513" class="detail">Carries requests and responses</text>
+  <path d="M119 540v67" class="wire"/>
+  <text x="148" y="582" class="detail">Ethernet</text>
+
+  <!-- The Linux host itself is the reference consumer. -->
+  <rect x="43" y="620" width="151" height="91" rx="4" class="device"/>
+  <path d="M51 628h135v72H51Z" fill="#17202a"/>
+  <path d="m72 650 10 9-10 9M92 668h19" fill="none" stroke="#b0c5f4" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M106 711v11H81M131 711v11h25" stroke="#17202a" stroke-width="4" stroke-linecap="round"/>
+  <text x="250" y="652" class="label">Linux host</text>
+  <text x="250" y="685" class="detail">Imports into its local USB stack</text>
+
+  <path d="M30 751H650" stroke="#d9dce0"/>
+  <text x="30" y="783" font-size="20">Bidirectional USB/IP. Physical USB output is not implemented.</text>
+</svg>

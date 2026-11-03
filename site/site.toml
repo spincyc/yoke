@@ -1,28 +1,190 @@
 name = "Yoke"
 repository = "https://github.com/spincyc/yoke"
 branch = "feature/ir"
-description = "Controllerless endpoint pairing. Observable by design. Testable offline."
+description = "Open connections for HDMI, USB and future IR over Ethernet."
+
+[[primary_navigation]]
+title = "Product"
+key = "product"
+output = "index.html"
+
+[[primary_navigation]]
+title = "How it works"
+key = "how-it-works"
+output = "how-it-works.html"
+
+[[primary_navigation]]
+title = "Documentation"
+key = "docs"
+output = "docs/index.html"
+
+[[navigation]]
+title = "Start here"
+pages = ["docs/index.html", "start.html", "docs/project-status.html"]
+
+[[navigation]]
+title = "Guides"
+pages = ["guides/index.html", "guides/pairing.html", "guides/monitoring.html"]
+
+[[navigation]]
+title = "Reference"
+pages = ["reference/index.html", "reference/backends.html"]
+
+[[navigation]]
+title = "Engineering"
+pages = ["engineering/index.html", "verification.html", "engineering/decisions.html", "engineering/research.html"]
+
+[[navigation]]
+title = "Project"
+pages = ["contributing.html", "security.html"]
 
 [[pages]]
 source = "site/pages/index.md"
 output = "index.html"
-title = "Connect endpoints. Keep control at the edge."
-section = "Overview"
-summary = "A controllerless control plane for HDMI and USB endpoints over switched Ethernet."
+title = "Put your devices where you need them."
+section = "Product"
+summary = "Open hardware and software for HDMI, USB and future IR connections over Ethernet."
+layout = "product"
+nav = "product"
+
+[[pages]]
+source = "site/pages/product.md"
+output = "product.html"
+title = "Connections"
+section = "Product"
+summary = "Concrete HDMI, Linux USB/IP, and planned IR connections."
+layout = "product"
+nav = "product"
+parent = "index.html"
+
+[[pages]]
+source = "site/pages/how-it-works.md"
+output = "how-it-works.html"
+title = "How it works"
+section = "Product"
+summary = "Choose a source, save a pairing, and let the endpoints keep the connection."
+layout = "product"
+nav = "how-it-works"
+parent = "index.html"
+
+[[pages]]
+source = "site/pages/docs/index.md"
+output = "docs/index.html"
+title = "Documentation"
+section = "Documentation"
+summary = "Find a starting point, task guide, reference, or engineering document."
+layout = "docs"
+nav = "docs"
 
 [[pages]]
 source = "site/pages/start.md"
 output = "start.html"
-title = "Start with the software"
-section = "Overview"
-summary = "Install Yoke, run its offline models, and understand the limits of the reference pipeline."
+title = "Get started"
+section = "Start"
+summary = "Install Yoke and run pairing simulations, a monitor preview, and synthetic media checks."
+layout = "docs"
+nav = "docs"
+parent = "docs/index.html"
+
+[[pages]]
+source = "site/pages/docs/project-status.md"
+output = "docs/project-status.html"
+title = "Project status"
+section = "Start"
+summary = "Available software, endpoint integration boundaries, and planned hardware."
+layout = "docs"
+nav = "docs"
+parent = "docs/index.html"
+
+[[pages]]
+source = "site/pages/guides/index.md"
+output = "guides/index.html"
+title = "Guides"
+section = "Guides"
+summary = "Task guides for pairing, monitoring, deployment, and endpoint maintenance."
+layout = "docs"
+nav = "docs"
+parent = "docs/index.html"
+
+[[pages]]
+source = "site/pages/guides/pairing.md"
+output = "guides/pairing.html"
+title = "Pair endpoints"
+section = "Guides"
+summary = "Select a source for a configured consumer and inspect the connection."
+layout = "docs"
+nav = "docs"
+parent = "guides/index.html"
+
+[[pages]]
+source = "site/pages/guides/monitoring.md"
+output = "guides/monitoring.html"
+title = "Monitor and integrate"
+section = "Guides"
+summary = "Use passive observers, the terminal dashboard, Prometheus, or a manager."
+layout = "docs"
+nav = "docs"
+parent = "guides/index.html"
+
+[[pages]]
+source = "site/pages/reference/index.md"
+output = "reference/index.html"
+title = "Reference"
+section = "Reference"
+summary = "Commands, configuration, backend contracts, and normative protocol links."
+layout = "docs"
+nav = "docs"
+parent = "docs/index.html"
+
+[[pages]]
+source = "site/pages/reference/backends.md"
+output = "reference/backends.html"
+title = "Endpoint backends"
+section = "Reference"
+summary = "Implemented drivers, their requirements, and what backend activation establishes."
+layout = "docs"
+nav = "docs"
+parent = "reference/index.html"
+
+[[pages]]
+source = "site/pages/engineering/index.md"
+output = "engineering/index.html"
+title = "Engineering"
+section = "Engineering"
+summary = "Architecture, reproducible evidence, hardware development, and decision records."
+layout = "docs"
+nav = "docs"
+parent = "docs/index.html"
 
 [[pages]]
 source = "site/pages/verification.md"
 output = "verification.html"
-title = "Evidence before endpoints"
-section = "Overview"
-summary = "Reproduce correctness checks, fault simulations, performance measurements, and documentation builds."
+title = "Verification"
+section = "Engineering"
+summary = "Reproduce correctness checks, fault simulations, software measurements, and documentation builds."
+layout = "docs"
+nav = "docs"
+parent = "engineering/index.html"
+
+[[pages]]
+source = "site/pages/engineering/decisions.md"
+output = "engineering/decisions.html"
+title = "Architecture decisions"
+section = "Engineering"
+summary = "An index of every architecture decision, from control-plane boundaries to optional monitoring."
+layout = "docs"
+nav = "docs"
+parent = "engineering/index.html"
+
+[[pages]]
+source = "site/pages/engineering/research.md"
+output = "engineering/research.html"
+title = "Research archive"
+section = "Engineering"
+summary = "Dated feasibility, hardware, and compression research behind the endpoint proposals."
+layout = "docs"
+nav = "docs"
+parent = "engineering/index.html"
 
 [[pages]]
 source = "doc/design/ARCHITECTURE.md"
@@ -30,6 +192,9 @@ output = "design/architecture.html"
 title = "Architecture"
 section = "Design"
 summary = "Endpoint state, multicast intents, drivers, and the sans-I/O boundary."
+layout = "docs"
+nav = "docs"
+parent = "engineering/index.html"
 
 [[pages]]
 source = "doc/design/PROTOCOL.md"
@@ -37,6 +202,9 @@ output = "design/protocol.html"
 title = "Wire protocol"
 section = "Design"
 summary = "The normative YWP/1 frame, authentication, persistence, and convergence contract."
+layout = "docs"
+nav = "docs"
+parent = "reference/index.html"
 
 [[pages]]
 source = "doc/design/MEDIA.md"
@@ -44,6 +212,9 @@ output = "design/media.html"
 title = "Media reference"
 section = "Design"
 summary = "Synthetic source, codec models, packetization, FEC, jitter, and passive observation."
+layout = "docs"
+nav = "docs"
+parent = "engineering/index.html"
 
 [[pages]]
 source = "doc/design/MEDIA-TESTING.md"
@@ -51,6 +222,9 @@ output = "design/media-testing.html"
 title = "Media testing"
 section = "Design"
 summary = "The path from deterministic simulation to real sockets and hardware measurements."
+layout = "docs"
+nav = "docs"
+parent = "engineering/index.html"
 
 [[pages]]
 source = "doc/design/EDGE-DEVICES.md"
@@ -58,6 +232,9 @@ output = "design/edge-devices.html"
 title = "Endpoint roadmap"
 section = "Design"
 summary = "Proposed video and USB endpoints, session state, open questions, and milestones."
+layout = "docs"
+nav = "docs"
+parent = "engineering/index.html"
 
 [[pages]]
 source = "doc/design/PERFORMANCE.md"
@@ -65,6 +242,9 @@ output = "design/performance.html"
 title = "Software performance"
 section = "Design"
 summary = "Reproducible software measurements, workloads, and the limits of model timing."
+layout = "docs"
+nav = "docs"
+parent = "engineering/index.html"
 
 [[pages]]
 source = "doc/design/DEPLOYMENT.md"
@@ -72,6 +252,9 @@ output = "design/deployment.html"
 title = "Deployment"
 section = "Design"
 summary = "Agent placement, site keys, multicast networks, and operational diagnosis."
+layout = "docs"
+nav = "docs"
+parent = "guides/index.html"
 
 [[pages]]
 source = "hardware/usb-housing/r3/README.md"
@@ -79,6 +262,9 @@ output = "hardware/usb-housing-r3.html"
 title = "USB housing R3 assembly"
 section = "Hardware"
 summary = "Locating joints, recessed screw heads, captive metal nuts, assembly and first-article checks."
+layout = "docs"
+nav = "docs"
+parent = "guides/index.html"
 
 [[pages]]
 source = "doc/research/FEASIBILITY.md"
@@ -86,6 +272,9 @@ output = "research/feasibility.html"
 title = "Feasibility study"
 section = "Research"
 summary = "The dated 10GbE bandwidth analysis, proposed 4K120 paths, and unresolved hardware assumptions."
+layout = "docs"
+nav = "docs"
+parent = "engineering/research.html"
 
 [[pages]]
 source = "doc/research/HARDWARE.md"
@@ -93,6 +282,9 @@ output = "research/hardware.html"
 title = "Hardware survey"
 section = "Research"
 summary = "A dated survey of commercial endpoints, USB bridges, silicon, and bench questions."
+layout = "docs"
+nav = "docs"
+parent = "engineering/research.html"
 
 [[pages]]
 source = "doc/research/COMPRESSION.md"
@@ -100,6 +292,9 @@ output = "research/compression.html"
 title = "Compression study"
 section = "Research"
 summary = "Codec trade-offs and proposed operating points; distinct from the implemented codec models."
+layout = "docs"
+nav = "docs"
+parent = "engineering/research.html"
 
 [[pages]]
 source = "CONTRIBUTING.md"
@@ -107,6 +302,9 @@ output = "contributing.html"
 title = "Contributing"
 section = "Project"
 summary = "Contributor setup, verification, design changes, and reproducible fault reports."
+layout = "docs"
+nav = "docs"
+parent = "docs/index.html"
 
 [[pages]]
 source = "SECURITY.md"
@@ -114,3 +312,6 @@ output = "security.html"
 title = "Security"
 section = "Project"
 summary = "The site-key trust boundary, metadata visibility, and vulnerability reporting."
+layout = "docs"
+nav = "docs"
+parent = "docs/index.html"

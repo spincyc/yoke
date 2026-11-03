@@ -83,7 +83,7 @@ make docs-serve
 ```
 
 The output is `.scratch/site`. Open `http://127.0.0.1:8000` while the
-server runs. The site uses local CSS, local JavaScript, and system fonts;
+server runs. The site uses local CSS, local JavaScript, and self-hosted fonts;
 no CDN, analytics, or runtime service is required. Content and navigation
 remain available with JavaScript disabled.
 
@@ -94,12 +94,31 @@ The test suite also checks deterministic output and Pages subpath support.
 Research pages carry an explicit status banner so historical feasibility
 claims are not presented as verified products.
 
+## Check the browser experience
+
+```sh
+make browser-install verify-browser
+```
+
+The explicit install step provisions the Chromium revision pinned by the
+development Playwright version. Subsequent `make verify-browser` runs
+reuse it; verification never downloads a browser. CI adds
+`BROWSER_INSTALL_OPTIONS=--with-deps` to the installation step for its
+Linux runners. Reports and browser evidence live under
+`.scratch/browser-report`.
+
+The browser gate checks the generated site as a visitor would use it,
+including narrow screens, navigation, local search, JavaScript fallback,
+and the pairing demonstration. It runs separately from the ordinary
+software gate so browser provisioning stays explicit.
+
 ## CI and publication
 
-Pull requests and pushes run `make verify` on Python 3.12 and 3.14.
-The publication workflow builds the same static output after a successful
-gate on `feature/ir`, or through a manual dispatch on that branch. GitHub
-Pages serves the uploaded artifact. No build tool runs in visitors'
+Pull requests and pushes run the software and browser gates on Python
+3.12 and 3.14, plus the separate ESP32 firmware gate. Publication requires
+all of them to pass. The workflow uploads the exact browser-verified
+static artifact from `feature/ir`, or through a manual dispatch on that
+branch. GitHub Pages serves that artifact. No build tool runs in visitors'
 browsers.
 
 Repository maintainers enable **Settings → Pages → Source → GitHub

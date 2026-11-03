@@ -37,6 +37,9 @@ from yoke.core.types import (
 )
 from yoke.net.mcast import validate_multicast
 
+DEFAULT_PSK_PATH = Path("/etc/yoke/psk")
+OPEN_MODE_WARNING = "warning: no PSK; open mode is UNAUTHENTICATED (labs only)"
+
 
 class ConfigError(ValueError):
     pass
@@ -79,6 +82,22 @@ def read_psk(path: Path) -> bytes:
     if not psk:
         raise ValueError("PSK is empty")
     return psk
+
+
+def resolve_psk(
+    explicit: str | None, default_path: Path = DEFAULT_PSK_PATH
+) -> tuple[bytes, str | None]:
+    """The PSK plus an optional stderr warning. OSError propagates for an
+    explicitly named file; the default path is simply skipped if absent."""
+    if explicit is not None:
+        psk = read_psk(Path(explicit))
+    else:
+        try:
+            psk = read_psk(default_path)
+        except FileNotFoundError:
+            psk = b""
+    warning = None if psk else OPEN_MODE_WARNING
+    return psk, warning
 
 
 def _require_str(data: Body, key: str, path: Path) -> str:

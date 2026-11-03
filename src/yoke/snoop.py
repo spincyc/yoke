@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import json
 import math
-import unicodedata
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -43,6 +42,7 @@ from yoke.core.types import (
     Version,
     version_key,
 )
+from yoke.terminal import escape_terminal as escape_terminal
 
 Verdict = Literal["ok", "bad-sig", "stale", "dup", "malformed", "version", "oversize"]
 
@@ -252,26 +252,6 @@ def summarize(frame: Frame) -> str:
             return f"{event} {_compact(detail)}"
         return event
     return "bye"
-
-
-def escape_terminal(value: str) -> str:
-    """Make untrusted text inert on a terminal while preserving readable text."""
-    escapes = {"\n": "\\n", "\r": "\\r", "\t": "\\t", "\b": "\\b", "\f": "\\f"}
-    rendered: list[str] = []
-    for character in value:
-        if unicodedata.category(character) not in ("Cc", "Cf", "Cs", "Zl", "Zp"):
-            rendered.append(character)
-            continue
-        code = ord(character)
-        if character in escapes:
-            rendered.append(escapes[character])
-        elif code < 0x100:
-            rendered.append(f"\\x{code:02x}")
-        elif code < 0x10000:
-            rendered.append(f"\\u{code:04x}")
-        else:
-            rendered.append(f"\\U{code:08x}")
-    return "".join(rendered)
 
 
 def render_text(record: SnoopRecord) -> str:

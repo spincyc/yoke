@@ -1,0 +1,129 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 680" width="1000" height="680" role="img" aria-labelledby="scene-title scene-description">
+  <title id="scene-title">A computer reaches a display through paired Ethernet endpoints</title>
+  <desc id="scene-description">Product design concept, not tested hardware. HDMI runs from a computer into an input endpoint. Ethernet cables connect that endpoint and an output endpoint through a network switch. HDMI runs from the output endpoint to a display. Video travels toward the display; Yoke changes which input the output follows.</desc>
+  <defs>
+    <linearGradient id="metal" x2="0" y2="1"><stop stop-color="#fff"/><stop offset="1" stop-color="#efede8"/></linearGradient>
+    <linearGradient id="screen" x2="1" y2="1"><stop stop-color="#203b66"/><stop offset="1" stop-color="#17202a"/></linearGradient>
+    <marker id="arrow" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="m2 2 4 3-4 3" fill="none" stroke="#315fcd" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></marker>
+    <style>
+      text {font-family:Arial,Helvetica,sans-serif;fill:#17202a}
+      .label {font-size:28px;font-weight:600;letter-spacing:-.5px}
+      .detail {font-size:20px;fill:#52606c}
+      .tiny {font-size:13px;letter-spacing:1.6px;font-weight:700}
+      .outline {stroke:#17202a;stroke-width:2;stroke-linejoin:round}
+      .cable {fill:none;stroke:#315fcd;stroke-width:7;stroke-linecap:round;stroke-linejoin:round}
+      .port {fill:#17202a;stroke:#17202a;stroke-linejoin:round}
+
+      @media (prefers-color-scheme:dark) {
+        [fill="#f8f7f4"] {fill:#15191f}
+        [fill="#fff"], [fill="#efede8"] {fill:#303943}
+        [fill="#dfe2e3"], [fill="#e0e2e2"], [fill="#d9dce0"] {fill:#242d36}
+        [fill="#17202a"] {fill:#11161d}
+        [fill="#315fcd"] {fill:#82a7ff}
+        [fill="#52606c"] {fill:#aeb8c7}
+        [stroke="#17202a"] {stroke:#b9c4d3}
+        [stroke="#d9dce0"], [stroke="#b4bbc0"] {stroke:#465260}
+        [stroke="#315fcd"] {stroke:#82a7ff}
+        [stroke="#52606c"] {stroke:#aeb8c7}
+        stop[stop-color="#fff"] {stop-color:#38434f}
+        stop[stop-color="#efede8"] {stop-color:#242d36}
+        .box, .device {fill:#303943;stroke:#b9c4d3}
+        .outline {stroke:#b9c4d3}
+        .port {fill:#11161d;stroke:#b9c4d3}
+        .payload, .cable, .wire {stroke:#82a7ff}
+        .control {stroke:#aeb8c7}
+        text {fill:#f3f4f6}
+        .detail {fill:#aeb8c7}
+      }
+    </style>
+  </defs>
+  <rect width="1000" height="680" fill="#f8f7f4"/>
+
+  <text x="44" y="48" class="tiny" fill="#315fcd">HDMI / ENDPOINT DESIGN CONCEPT</text>
+  <path d="M44 66H956" fill="none" stroke="#d9dce0"/>
+
+  <!-- A real signal path: copper cables terminate at visible device ports. -->
+  <path class="cable" d="M177 352H223Q237 352 237 366V404Q237 418 251 418H290"/>
+  <path class="cable" d="M426 421H470Q484 421 484 407V306"/>
+  <path class="cable" d="M563 306V344Q563 358 577 358H636Q650 358 650 372V418H690"/>
+  <path class="cable" d="M829 421H905Q919 421 919 407V271"/>
+  <path d="M195 352H218M484 371V343M596 358H621M919 359V330" fill="none" stroke="#315fcd" stroke-width="3" marker-end="url(#arrow)"/>
+  <rect x="198" y="378" width="71" height="28" rx="14" fill="#f8f7f4"/>
+  <text x="233" y="397" text-anchor="middle" class="detail">HDMI</text>
+  <rect x="878" y="345" width="77" height="28" rx="14" fill="#f8f7f4"/>
+  <text x="916" y="364" text-anchor="middle" class="detail">HDMI</text>
+
+  <!-- Source computer, with rear HDMI connector. -->
+  <ellipse cx="117" cy="451" rx="79" ry="12" fill="#17202a" opacity=".06"/>
+  <path d="m57 222 86-17 34 24-86 17Z" fill="#efede8" class="outline"/>
+  <path d="m143 205 34 24v201l-34 16Z" fill="#e0e2e2" class="outline"/>
+  <path d="M57 222h86v224H57Z" fill="url(#metal)" class="outline"/>
+  <path d="M72 255h56M72 264h56" stroke="#b4bbc0" stroke-width="2"/>
+  <circle cx="73" cy="415" r="4" fill="#315fcd"/>
+  <path d="M87 414h22" stroke="#17202a" stroke-width="2"/>
+  <path d="m160 342 17-4v18l-17 5Z" class="port"/>
+  <path d="m169 343 8-2v14l-8 2Z" fill="#315fcd"/>
+  <text x="57" y="492" class="label">Your computer</text>
+  <text x="57" y="520" class="detail">HDMI source</text>
+
+  <!-- Standard switched Ethernet infrastructure. -->
+  <ellipse cx="513" cy="319" rx="107" ry="11" fill="#17202a" opacity=".06"/>
+  <path d="m418 236 157-18 36 25-157 19Z" fill="#fff" class="outline"/>
+  <path d="m575 218 36 25v56l-36 17Z" fill="#dfe2e3" class="outline"/>
+  <path d="M418 236h157v80H418Z" fill="url(#metal)" class="outline"/>
+  <text x="434" y="258" class="tiny">ETHERNET</text>
+  <g fill="#17202a">
+    <rect x="435" y="278" width="25" height="20" rx="2"/>
+    <rect x="470" y="278" width="25" height="20" rx="2"/>
+    <rect x="505" y="278" width="25" height="20" rx="2"/>
+    <rect x="540" y="278" width="25" height="20" rx="2"/>
+  </g>
+  <path d="M474 283h17v13h-17ZM544 283h17v13h-17Z" fill="#315fcd"/>
+  <path d="M439 283h17M509 283h17" stroke="#b4bbc0" stroke-width="2"/>
+  <text x="512" y="164" text-anchor="middle" class="label">Your network</text>
+  <text x="512" y="193" text-anchor="middle" class="detail">Switched Ethernet</text>
+
+  <!-- Input endpoint enclosure. -->
+  <ellipse cx="356" cy="462" rx="91" ry="11" fill="#17202a" opacity=".06"/>
+  <path d="m280 380 116-17 40 25-116 17Z" fill="#fff" class="outline"/>
+  <path d="m396 363 40 25v62l-40 15Z" fill="#dfe2e3" class="outline"/>
+  <path d="M280 380h116v85H280Z" fill="url(#metal)" class="outline"/>
+  <text x="295" y="406" class="tiny">YOKE / IN</text>
+  <path d="m286 414 27-1 5 5-5 9h-27l-4-8Z" class="port"/>
+  <path d="M289 419h20" stroke="#315fcd" stroke-width="3"/>
+  <path d="m413 409 17-7v26l-17 6Z" class="port"/>
+  <path d="m417 413 9-4v17l-9 3Z" fill="#315fcd"/>
+  <circle cx="372" cy="444" r="3" fill="#315fcd"/>
+  <text x="280" y="509" class="label">Input endpoint</text>
+  <text x="280" y="537" class="detail">Turns HDMI into a network stream</text>
+
+  <!-- Output endpoint enclosure. -->
+  <ellipse cx="755" cy="462" rx="91" ry="11" fill="#17202a" opacity=".06"/>
+  <path d="m680 380 116-17 40 25-116 17Z" fill="#fff" class="outline"/>
+  <path d="m796 363 40 25v62l-40 15Z" fill="#dfe2e3" class="outline"/>
+  <path d="M680 380h116v85H680Z" fill="url(#metal)" class="outline"/>
+  <text x="695" y="406" class="tiny">YOKE / OUT</text>
+  <rect x="686" y="413" width="24" height="21" rx="2" class="port"/>
+  <path d="M690 417h16v13h-16Z" fill="#315fcd"/>
+  <path d="m815 411 17-7v22l-17 7-3-8Z" class="port"/>
+  <path d="m817 415 12-4v12l-12 5Z" fill="#315fcd"/>
+  <circle cx="772" cy="444" r="3" fill="#315fcd"/>
+  <text x="680" y="509" class="label">Output endpoint</text>
+  <text x="680" y="537" class="detail">Follows the input you choose</text>
+
+  <!-- Destination display: the source picture continues here. -->
+  <ellipse cx="823" cy="283" rx="108" ry="10" fill="#17202a" opacity=".04"/>
+  <path d="M702 104h243v150H702Z" rx="4" fill="#17202a" class="outline"/>
+  <path d="M711 113h225v130H711Z" fill="url(#screen)"/>
+  <path d="M730 216 789 154l43 38 39-28 48 52Z" fill="#315fcd" opacity=".85"/>
+  <path d="M730 216h189" stroke="#8ca7e8" stroke-width="2"/>
+  <circle cx="894" cy="140" r="12" fill="#b0c5f4"/>
+  <path d="M817 254v21h-44M829 254v21h44" stroke="#17202a" stroke-width="5" stroke-linecap="round"/>
+  <path d="M907 254v17h19v-17" fill="#315fcd" stroke="#17202a" stroke-width="2"/>
+  <text x="702" y="83" class="label">Your display</text>
+
+  <path d="M44 578H956" fill="none" stroke="#d9dce0"/>
+  <path d="M45 614h56" stroke="#315fcd" stroke-width="5" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <text x="121" y="621" font-size="21">Video takes the endpoint-to-endpoint path.</text>
+  <text x="44" y="653" class="detail">Yoke selects the pairing. Endpoint hardware carries the picture.</text>
+</svg>

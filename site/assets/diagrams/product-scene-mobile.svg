@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 686" width="360" height="686" role="img" aria-labelledby="mobile-scene-title mobile-scene-description">
+  <title id="mobile-scene-title">An HDMI connection through your Ethernet network</title>
+  <desc id="mobile-scene-description">Endpoint design concept: a computer connects by HDMI to an input endpoint, which connects through an Ethernet switch to an output endpoint. HDMI then connects to the display. Video travels downward through this path. Hardware has not been bench-tested.</desc>
+  <defs>
+    <marker id="mobile-arrow" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="m2 2 4 3-4 3" fill="none" stroke="#315fcd" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></marker>
+    <style>
+      text {font-family:Arial,Helvetica,sans-serif;fill:#17202a}
+      .label {font-size:21px;font-weight:600;letter-spacing:-.3px}
+      .detail {font-size:16px;fill:#52606c}
+      .device {fill:#efede8;stroke:#17202a;stroke-width:1.8;stroke-linejoin:round}
+      .wire {fill:none;stroke:#315fcd;stroke-width:3;stroke-linecap:round;marker-end:url(#mobile-arrow)}
+
+      @media (prefers-color-scheme:dark) {
+        [fill="#f8f7f4"] {fill:#15191f}
+        [fill="#fff"], [fill="#efede8"] {fill:#303943}
+        [fill="#dfe2e3"], [fill="#e0e2e2"], [fill="#d9dce0"] {fill:#242d36}
+        [fill="#17202a"] {fill:#11161d}
+        [fill="#315fcd"] {fill:#82a7ff}
+        [fill="#52606c"] {fill:#aeb8c7}
+        [stroke="#17202a"] {stroke:#b9c4d3}
+        [stroke="#d9dce0"], [stroke="#b4bbc0"] {stroke:#465260}
+        [stroke="#315fcd"] {stroke:#82a7ff}
+        [stroke="#52606c"] {stroke:#aeb8c7}
+        stop[stop-color="#fff"] {stop-color:#38434f}
+        stop[stop-color="#efede8"] {stop-color:#242d36}
+        .box, .device {fill:#303943;stroke:#b9c4d3}
+        .outline {stroke:#b9c4d3}
+        .port {fill:#11161d;stroke:#b9c4d3}
+        .payload, .cable, .wire {stroke:#82a7ff}
+        .control {stroke:#aeb8c7}
+        text {fill:#f3f4f6}
+        .detail {fill:#aeb8c7}
+      }
+    </style>
+  </defs>
+  <rect width="360" height="686" fill="#f8f7f4"/>
+  <text x="18" y="31" font-size="14" font-weight="700" letter-spacing="1">HDMI / DESIGN CONCEPT</text>
+  <path d="M18 47H342" stroke="#d9dce0"/>
+  <rect x="42" y="70" width="51" height="77" rx="3" class="device"/>
+  <path d="M51 84h32M51 90h32" stroke="#b4bbc0" stroke-width="2"/>
+  <circle cx="54" cy="133" r="2.5" fill="#315fcd"/>
+  <text x="125" y="101" class="label">Your computer</text>
+  <text x="125" y="126" class="detail">HDMI source</text>
+  <path d="M68 153v43" class="wire"/>
+  <text x="94" y="180" class="detail">HDMI</text>
+  <path d="m24 215 77-8 14 10-77 8Z" fill="#fff" class="device"/>
+  <path d="M24 215h77v48H24Z" class="device"/>
+  <path d="m101 207 14 10v38l-14 8Z" fill="#d9dce0" class="device"/>
+  <rect x="34" y="242" width="20" height="9" rx="1" fill="#17202a"/>
+  <rect x="78" y="239" width="14" height="14" rx="1" fill="#315fcd"/>
+  <text x="34" y="231" font-size="9" letter-spacing="1">YOKE / IN</text>
+  <text x="125" y="230" class="label">Input endpoint</text>
+  <text x="125" y="255" class="detail">Sends the picture</text>
+  <path d="M68 272v37" class="wire"/>
+  <text x="94" y="296" class="detail">Ethernet</text>
+  <rect x="24" y="325" width="91" height="45" rx="3" class="device"/>
+  <path d="M35 337h33" stroke="#b4bbc0" stroke-width="2"/>
+  <g fill="#17202a"><rect x="34" y="347" width="13" height="11"/><rect x="52" y="347" width="13" height="11"/><rect x="70" y="347" width="13" height="11"/><rect x="88" y="347" width="13" height="11"/></g>
+  <path d="M36 349h9v7h-9ZM54 349h9v7h-9Z" fill="#315fcd"/>
+  <text x="125" y="342" class="label">Your network</text>
+  <text x="125" y="367" class="detail">Ethernet switch</text>
+  <path d="M68 381v37" class="wire"/>
+  <text x="94" y="405" class="detail">Ethernet</text>
+  <path d="m24 439 77-8 14 10-77 8Z" fill="#fff" class="device"/>
+  <path d="M24 439h77v48H24Z" class="device"/>
+  <path d="m101 431 14 10v38l-14 8Z" fill="#d9dce0" class="device"/>
+  <rect x="34" y="463" width="14" height="14" rx="1" fill="#315fcd"/>
+  <rect x="70" y="466" width="20" height="9" rx="1" fill="#17202a"/>
+  <text x="34" y="455" font-size="9" letter-spacing="1">YOKE / OUT</text>
+  <text x="125" y="454" class="label">Output endpoint</text>
+  <text x="125" y="479" class="detail">Follows your pairing</text>
+  <path d="M68 497v37" class="wire"/>
+  <text x="94" y="521" class="detail">HDMI</text>
+  <rect x="21" y="550" width="96" height="61" rx="2" class="device"/>
+  <rect x="26" y="555" width="86" height="51" fill="#17202a"/>
+  <path d="m33 596 21-25 18 15 14-9 18 19Z" fill="#315fcd"/>
+  <path d="M63 612v8H48M73 612v8h15" stroke="#17202a" stroke-width="3"/>
+  <text x="125" y="575" class="label">Your display</text>
+  <text x="125" y="600" class="detail">HDMI destination</text>
+  <path d="M18 640H342" stroke="#d9dce0"/>
+  <text x="18" y="668" class="detail">Hardware has not been bench-tested.</text>
+</svg>

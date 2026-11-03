@@ -9,8 +9,9 @@ export MYPY_CACHE_DIR := $(abspath .scratch/cache/mypy)
 export RUFF_CACHE_DIR := $(abspath .scratch/cache/ruff)
 export PYTHONPYCACHEPREFIX := $(abspath .scratch/cache/pycache)
 export TMPDIR := $(abspath .scratch/tmp)
+export PLAYWRIGHT_BROWSERS_PATH := $(abspath .scratch/cache/playwright)
 
-.PHONY: venv lint type test verify docs docs-serve simulate \
+.PHONY: venv lint type test verify docs docs-serve browser-install verify-browser simulate \
 	benchmark-control benchmark-media benchmark-telemetry verify-firmware verify-net \
 	media-send media-recv clean
 
@@ -59,6 +60,15 @@ docs: venv
 
 docs-serve: docs
 	$(BIN)/python -m http.server 8000 --bind 127.0.0.1 --directory .scratch/site
+
+# Browser installation is explicit; make verify needs no installed browser.
+# CI adds --with-deps when provisioning its disposable Ubuntu runner.
+BROWSER_INSTALL_OPTIONS ?=
+browser-install: venv
+	$(BIN)/python -m playwright install --only-shell $(BROWSER_INSTALL_OPTIONS) chromium
+
+verify-browser: docs
+	$(BIN)/python -m scripts.verify_browser --site .scratch/site
 
 verify: lint type test docs
 

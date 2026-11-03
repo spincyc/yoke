@@ -23,6 +23,9 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from yoke import config
+from yoke.config import DEFAULT_PSK_PATH as DEFAULT_PSK_PATH
+from yoke.config import OPEN_MODE_WARNING as OPEN_MODE_WARNING
+from yoke.config import resolve_psk as resolve_psk
 from yoke.core import frames
 from yoke.core.types import (
     CLI_DEADLINE,
@@ -43,15 +46,13 @@ from yoke.snoop import (
     NodeView,
     Snooper,
     SnoopRecord,
-    escape_terminal,
     render_json,
     render_text,
 )
+from yoke.terminal import escape_terminal
 
 COLLECT_WINDOW = 2.5
 RETRY_SPACING_BASE = 0.5
-DEFAULT_PSK_PATH = Path("/etc/yoke/psk")
-OPEN_MODE_WARNING = "warning: no PSK; open mode is UNAUTHENTICATED (labs only)"
 
 # recv(deadline) -> (raw datagram, receive time) or None once the absolute
 # deadline (in the injected clock's domain) has passed with nothing received.
@@ -448,28 +449,6 @@ def default_origin(hostname: str) -> str:
     )
     candidate = ("cli-" + sanitized)[:32]
     return candidate if NODE_ID_RE.fullmatch(candidate) else "cli-unknown"
-
-
-def resolve_psk(
-    explicit: str | None, default_path: Path = DEFAULT_PSK_PATH
-) -> tuple[bytes, str | None]:
-    """The PSK plus an optional stderr warning. OSError propagates for an
-    explicitly named file; the default path is simply skipped if absent."""
-    if explicit is not None:
-        psk = _read_psk(Path(explicit))
-    else:
-        try:
-            psk = _read_psk(default_path)
-        except FileNotFoundError:
-            psk = b""
-    warning = None if psk else OPEN_MODE_WARNING
-    return psk, warning
-
-
-def _read_psk(path: Path) -> bytes:
-    """Read a PSK the same way the agent does: strip only one trailing
-    newline (preserve raw key bytes)."""
-    return config.read_psk(path)
 
 
 # -- wiring ------------------------------------------------------------------

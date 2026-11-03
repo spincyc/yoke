@@ -5,35 +5,45 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="$description">
   <meta name="color-scheme" content="light dark">
-  <meta name="theme-color" content="#203b32">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; object-src 'none'; form-action 'none'">
+  <meta name="theme-color" content="#f8f7f4" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#15191f" media="(prefers-color-scheme: dark)">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'none'; object-src 'none'; form-action 'none'">
   <title>$title · Yoke</title>
   <link rel="icon" href="$base/assets/favicon.svg" type="image/svg+xml">
+  <link rel="preload" href="$base/assets/fonts/instrument-sans.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="$base/assets/site.css">
   <script defer src="$base/assets/site.js"></script>
+  <script defer src="$base/assets/product-demo.js"></script>
 </head>
 <body class="$body_class">
   <a class="skip-link" href="#content">Skip to content</a>
   <header class="site-header">
-    <a class="brand" href="$base/index.html" aria-label="Yoke home"><img src="$base/assets/yoke-lockup.svg" width="132" height="32" alt=""><span class="brand-tag">Endpoint control</span></a>
-    <nav class="header-links" aria-label="Quick links"><a href="$base/start.html">Get started <span aria-hidden="true">→</span></a><a href="$repository">GitHub <span aria-hidden="true">↗</span></a></nav>
+    <a class="brand" href="$base/index.html" aria-label="Yoke home"><img src="$base/assets/yoke-lockup.svg" width="119" height="32" alt=""></a>
+    <nav class="primary-navigation" aria-label="Main navigation">$primary_navigation</nav>
+    <nav class="header-links" aria-label="Quick links"><a class="github-link" href="$repository">GitHub <span aria-hidden="true">↗</span></a><a class="header-cta" href="$base/start.html">Get started <span aria-hidden="true">→</span></a></nav>
   </header>
-  <div class="layout">
+  <div class="layout layout-$layout">
     <aside class="sidebar">
       <details class="navigation" open>
-        <summary>Explore the docs</summary>
+        <summary>Documentation <span aria-hidden="true">⌄</span></summary>
+        <div class="sidebar-search"><a href="$base/docs/index.html#search">Search documentation <span aria-hidden="true">⌕</span></a></div>
         <nav aria-label="Documentation">$navigation</nav>
       </details>
-      <div class="sidebar-note"><span class="status-dot" aria-hidden="true"></span>Software reference · v0.1<br><span>Hardware bench validation pending.</span></div>
+      <div class="sidebar-note">Open source. Endpoint owned.<br><a href="$base/docs/project-status.html">Project status <span aria-hidden="true">↗</span></a></div>
     </aside>
     <main id="content" tabindex="-1">
-      <div class="page-kicker">$section <span aria-hidden="true">/</span> Yoke documentation</div>
+      <div class="document-heading">$breadcrumbs<p class="page-kicker">$section</p></div>
       $notice
       <article class="prose">$body</article>
-      <footer class="page-footer"><span>Built from the repository. No tracking. No external runtime assets.</span><a href="$source_url">View page source <span aria-hidden="true">↗</span></a></footer>
+      $pagination
+      <footer class="page-footer"><span>Something to improve? Yoke is an open project.</span><a href="$source_url">Edit this page <span aria-hidden="true">↗</span></a></footer>
     </main>
     <aside class="on-this-page" aria-label="On this page">$toc</aside>
   </div>
-  <footer class="site-footer"><a class="footer-brand" href="$base/index.html" aria-label="Yoke home"><img src="$base/assets/yoke-lockup.svg" width="115" height="28" alt=""><span>Control at the edge.</span></a><span>MIT licensed · Python 3.12+ · stdlib runtime</span></footer>
+  <footer class="site-footer">
+    <div class="footer-identity"><a class="footer-brand" href="$base/index.html" aria-label="Yoke home"><img src="$base/assets/yoke-lockup.svg" width="104" height="28" alt=""></a><p>Control at the edge.</p></div>
+    <nav aria-label="Footer"><a href="$base/docs/index.html">Documentation</a><a href="$base/docs/project-status.html">Project status</a><a href="$repository">GitHub <span aria-hidden="true">↗</span></a></nav>
+    <p class="footer-license">Open source under MIT.<br>Built to be understood.</p>
+  </footer>
 </body>
 </html>

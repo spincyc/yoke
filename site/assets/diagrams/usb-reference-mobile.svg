@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 742" width="360" height="742" role="img" aria-labelledby="usb-mobile-title usb-mobile-description">
+  <title id="usb-mobile-title">USB requests and responses between a peripheral and a Linux host</title>
+  <desc id="usb-mobile-description">Current software reference: a USB controller connects to an exporting Linux endpoint, which connects through an Ethernet switch to a Linux importing host. Arrows point both ways because USB carries requests and responses. Physical USB output to a separate computer is not implemented. Real endpoint hardware has not been tested.</desc>
+  <defs>
+    <marker id="usb-mobile-arrow" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="m2 2 4 3-4 3" fill="none" stroke="#315fcd" stroke-width="1.8" stroke-linecap="round"/></marker>
+    <style>
+      text {font-family:Arial,Helvetica,sans-serif;fill:#17202a}
+      .label {font-size:21px;font-weight:600;letter-spacing:-.3px}
+      .detail {font-size:16px;fill:#52606c}
+      .device {fill:#efede8;stroke:#17202a;stroke-width:1.8;stroke-linejoin:round}
+      .wire {fill:none;stroke:#315fcd;stroke-width:3;stroke-linecap:round;marker-start:url(#usb-mobile-arrow);marker-end:url(#usb-mobile-arrow)}
+
+      @media (prefers-color-scheme:dark) {
+        [fill="#f8f7f4"] {fill:#15191f}
+        [fill="#fff"], [fill="#efede8"] {fill:#303943}
+        [fill="#dfe2e3"], [fill="#e0e2e2"], [fill="#d9dce0"] {fill:#242d36}
+        [fill="#17202a"] {fill:#11161d}
+        [fill="#315fcd"] {fill:#82a7ff}
+        [fill="#52606c"] {fill:#aeb8c7}
+        [stroke="#17202a"] {stroke:#b9c4d3}
+        [stroke="#d9dce0"], [stroke="#b4bbc0"] {stroke:#465260}
+        [stroke="#315fcd"] {stroke:#82a7ff}
+        [stroke="#52606c"] {stroke:#aeb8c7}
+        stop[stop-color="#fff"] {stop-color:#38434f}
+        stop[stop-color="#efede8"] {stop-color:#242d36}
+        .box, .device {fill:#303943;stroke:#b9c4d3}
+        .outline {stroke:#b9c4d3}
+        .port {fill:#11161d;stroke:#b9c4d3}
+        .payload, .cable, .wire {stroke:#82a7ff}
+        .control {stroke:#aeb8c7}
+        text {fill:#f3f4f6}
+        .detail {fill:#aeb8c7}
+      }
+    </style>
+  </defs>
+  <rect width="360" height="742" fill="#f8f7f4"/>
+  <text x="18" y="31" font-size="13" font-weight="700" letter-spacing="1">USB / SOFTWARE REFERENCE</text>
+  <path d="M18 47H342" stroke="#d9dce0"/>
+  <path d="M46 89c-9 0-13 5-16 15l-8 27c-2 11 8 16 15 9l12-14h39l12 14c7 7 17 2 15-9l-8-27c-3-10-7-15-16-15Z" class="device"/>
+  <path d="M40 108h15M47 101v14" stroke="#17202a" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="92" cy="105" r="3" fill="#315fcd"/><circle cx="102" cy="116" r="3" fill="#315fcd"/>
+  <text x="133" y="105" class="label">USB controller</text>
+  <text x="133" y="130" class="detail">Physical peripheral</text>
+  <path d="M68 154v69" class="wire"/>
+  <text x="94" y="195" class="detail">USB cable</text>
+  <rect x="24" y="239" width="91" height="60" rx="4" class="device"/>
+  <path d="M35 253h35" stroke="#b4bbc0" stroke-width="2"/>
+  <rect x="34" y="274" width="19" height="10" rx="1" fill="#17202a"/>
+  <rect x="86" y="270" width="17" height="17" rx="1" fill="#315fcd"/>
+  <text x="133" y="260" class="label">Linux endpoint</text>
+  <text x="133" y="285" class="detail">Exports the device</text>
+  <path d="M68 315v69" class="wire"/>
+  <text x="94" y="357" class="detail">Ethernet</text>
+  <rect x="24" y="400" width="91" height="45" rx="3" class="device"/>
+  <path d="M35 412h33" stroke="#b4bbc0" stroke-width="2"/>
+  <g fill="#17202a"><rect x="34" y="422" width="13" height="11"/><rect x="52" y="422" width="13" height="11"/><rect x="70" y="422" width="13" height="11"/><rect x="88" y="422" width="13" height="11"/></g>
+  <path d="M36 424h9v7h-9ZM54 424h9v7h-9Z" fill="#315fcd"/>
+  <text x="133" y="416" class="label">Network switch</text>
+  <text x="133" y="441" class="detail">Requests + responses</text>
+  <path d="M68 461v69" class="wire"/>
+  <text x="94" y="503" class="detail">Ethernet</text>
+  <rect x="21" y="546" width="96" height="61" rx="2" class="device"/>
+  <rect x="26" y="551" width="86" height="51" fill="#17202a"/>
+  <path d="m40 567 8 7-8 7M58 581h14" fill="none" stroke="#b0c5f4" stroke-width="2" stroke-linecap="round"/>
+  <path d="M63 608v8H48M73 608v8h15" stroke="#17202a" stroke-width="3"/>
+  <text x="133" y="571" class="label">Linux host</text>
+  <text x="133" y="596" class="detail">Imports the device</text>
+  <path d="M18 644H342" stroke="#d9dce0"/>
+  <text x="18" y="675" class="detail">The Linux host is the USB consumer.</text>
+  <text x="18" y="701" class="detail">A physical USB output to another</text>
+  <text x="18" y="725" class="detail">computer is not implemented.</text>
+</svg>

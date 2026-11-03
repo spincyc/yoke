@@ -1,7 +1,8 @@
 # Yoke architecture
 
-Status: current software architecture, 2026-11-02. YWP/1 remains the
-multicast wire protocol; ADRs 0012–0017 record the correctness changes.
+Status: current software architecture, 2026-11-02. YWP/1 is the multicast
+wire protocol. The [decision index](../../site/pages/engineering/decisions.md)
+records the protocol and operational decisions.
 
 ## Problem
 
@@ -105,34 +106,99 @@ two placements, chosen per device in its config:
 
 ## Software structure
 
+The installed package separates decisions, adapters, and operator commands.
+Start with the module that owns the behavior you are changing:
+
 ```
 src/yoke/
-  core/          sans-I/O protocol core — stdlib only, no sockets, no clock
+  core/          sans-I/O control protocol; no sockets, clock reads, or filesystem
     frames.py    wire format: canonical encode/decode, HMAC, validation
     node.py      agent state machine (producer & consumer behaviors)
-    types.py     shared dataclasses, enums, and constants
+    types.py     control dataclasses, effects, enums, and constants
   net/
     mcast.py     UDP multicast socket helper (interface-selectable)
-    runner.py    wires core.node to the socket + a driver + persisted state
+    runner.py    executes core effects with sockets, a driver, and durable state
     executor.py  serialized driver work with actual cancellation/drain barriers
+    notify.py    optional systemd startup readiness
   drivers/
     base.py      Driver protocol: attach(producer, media), detach(), poll(), describe()
-    sim.py       in-memory driver with scriptable fault injection (tests)
+    factory.py   validates backend configuration and constructs a Driver
+    sim.py       in-memory driver with scriptable fault injection
     igmp.py      decoder-side multicast join/leave (reference software path)
     usbip.py     usbip attach/detach + producer bind/unbind
     jap.py       Just Add Power decoder API driver (channel switching)
     stream.py    starts/stops an out-of-process media pipeline (RTP)
     shellcmd.py  command-runner abstraction (mockable; never shell=True)
-  media/         software media pipeline + yoke-media CLI (MEDIA.md)
-  telemetry/     optional passive metrics, collector-host sampling and terminal UI
-  config.py      per-agent TOML config with fail-fast validation
+  media/         separate synthetic reference media plane (MEDIA.md)
+    types.py     media units, stage events, feedback, and resource budgets
+    pipeline.py  sans-I/O stage composition and finalization
+    stages/      source, codec models, packetization, FEC, jitter, rate control, sink
+    assembly.py  validated configuration and canonical sender/receiver construction
+    simulation.py seeded virtual link, faults, and delayed feedback
+    experiment.py deterministic synthetic media experiments and source-known results
+    wire.py      reference packet framing and validation
+    metrics.py   bounded aggregation of stage observations
+    snoop.py     passive wire and stage-event observation
+    sockets.py   UDP socket setup and transport validation
+    runner.py    live sender, receiver, and passive observer shells
+    cli.py       yoke-media argument parsing, offline reports, and command dispatch
+  telemetry/     optional passive control observations and collector-host samples
+    model.py     versioned, bounded snapshot data and validation
+    collector.py sans-I/O collection of control observations
+    host.py      collector-host sampling, separate from endpoint observations
+    prometheus.py snapshot-to-metrics rendering
+    http.py      immutable representation cache and bounded HTTP server
+    client.py    bounded remote snapshot reads
+    runtime.py   optional receiver/sampler worker
+    tui.py       terminal view state, rendering, and interactive shell
+    demo.py      synthetic offline samples
+    cli.py       metrics/top command adapters
+  config.py      per-agent TOML validation and shared PSK loading/resolution
   statefile.py   exclusive local lease and atomic durable state replacement
   simulation.py installed deterministic software fault campaign
-  cli.py         yoke pair|unpair|status|snoop|agent|simulate
+  cli.py         yoke operator commands and injected intent/status/snoop helpers
   snoop.py       passive decoder/renderer for the control group
-benchmarks/      repeatable control and media software measurements
-site/            local static documentation shell and navigation
+  terminal.py    shared escaping of untrusted terminal text
+  update.py      standalone offline Linux release updater and recovery artifact
+firmware/esp32/  independent ESP-IDF Ethernet updater; IR routing is not implemented
+tests/           offline behavior, fault, driver transcript, and loopback tests
+benchmarks/      reproducible control, media, and telemetry software measurements
+scripts/
+  build_docs.py  documentation builder CLI and compatibility facade
+  docsite/       publication config, link validation, navigation, and rendering
+site/            documentation template, navigation, and static assets
 ```
+
+| Entry point | Implementation | Boundary |
+|---|---|---|
+| `yoke pair`, `unpair`, `status`, `snoop` | `yoke.cli` | Short-lived control client or passive observer |
+| `yoke agent` | `yoke.net.runner` + `yoke.drivers.factory` | One endpoint's control runtime and backend |
+| `yoke simulate` | `yoke.simulation` | Installed deterministic control fault campaign |
+| `yoke metrics`, `top` | `yoke.telemetry.cli` | Optional read-only observation and host sampling |
+| `yoke-media` | `yoke.media.cli` | Separate synthetic reference media tools |
+| `python -m yoke.update` | `yoke.update` | Explicit offline Linux release operations |
+| `python firmware/esp32/verify.py` | `firmware/esp32/verify.py` | Software verification of the separate firmware project |
+| `python scripts/build_docs.py` | `scripts.docsite` | Developer-only static documentation build |
+
+The control core imports only its own types and wire codec. Drivers consume
+control metadata and report backend evidence; they do not import the reference
+media pipeline or inspect media payload. `drivers.factory.build_driver` owns
+backend selection and configuration errors; the runner owns effect ordering,
+resource lifetimes, and worker drain. `net.runner.build_driver` remains an
+import alias for existing integrations.
+
+Shared PSK resolution belongs to `config`, so telemetry commands do not depend
+on the main command shell. Terminal escaping belongs to `terminal`, so media
+observation does not need to import the control snooper for text rendering.
+The original CLI and snooper helper names remain import aliases.
+
+Tests mirror the package with `test_media_*` and `test_telemetry_*` groups and
+dedicated driver suites. `tests/simnet.py` and `tests/media_simnet.py` are
+independent test harnesses; the installed simulators never import the test tree.
+Keep benchmark timings separate from their deterministic workload results.
+The Linux updater deliberately remains one stdlib-only file: recovery uses a
+fixed copy outside the candidate release, so splitting it across package
+modules would make recovery depend on the release it must recover.
 
 ### Sans-I/O core
 

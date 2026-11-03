@@ -47,7 +47,35 @@ jobs:
           .scratch/wheel-smoke/bin/python -m pip check
           .scratch/wheel-smoke/bin/yoke --help
           .scratch/wheel-smoke/bin/yoke-media probe --frames 3
-      - name: Upload the verified site
+
+  browser:
+    name: Browser / Python ${{ matrix.python }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.12', '3.14']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install the pinned browser and its runner dependencies
+        run: make browser-install BROWSER_INSTALL_OPTIONS=--with-deps
+      - name: Verify the exact Pages artifact in Chromium
+        run: make verify-browser
+      - name: Upload browser verification evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: browser-python-${{ matrix.python }}
+          path: .scratch/browser-report
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Upload the browser-verified site
         if: matrix.python == '3.12' && github.ref == 'refs/heads/feature/ir' && github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
@@ -63,7 +91,7 @@ jobs:
   deploy:
     name: Publish documentation
     if: github.ref == 'refs/heads/feature/ir' && github.event_name != 'pull_request'
-    needs: [verify, firmware]
+    needs: [verify, browser, firmware]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:

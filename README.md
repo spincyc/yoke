@@ -1,161 +1,110 @@
 # <img src="site/assets/yoke-lockup.svg" width="264" height="64" alt="Yoke">
 
-**Controllerless pairing for HDMI and USB endpoints over switched Ethernet.**
+**Put your devices where you need them.**
 
-Yoke puts pairing state at the endpoints. A producer can be paired with a
-consumer, then re-paired at runtime. The CLI sends a signed multicast intent,
-waits for the consumer's acknowledgment, and exits. Each endpoint persists
-its own state; peers exchange observations and reconcile versions without a
-resident central controller.
+Yoke is an open hardware and software project for connecting HDMI sources,
+USB peripherals, and future IR endpoints over Ethernet. Choose a source,
+pair a destination, and let the endpoints remember the connection.
+No central controller or management service needs to keep running.
 
-[Documentation](https://spincyc.github.io/yoke/) ·
-[Start with the software](site/pages/start.md) ·
-[Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
+[Explore Yoke](https://spincyc.github.io/yoke/) ·
+[Get started](site/pages/start.md) ·
+[Documentation](site/pages/docs/index.md) ·
+[Contributing](CONTRIBUTING.md)
+
+## The connection belongs to the endpoints
+
+Each endpoint has its own agent and saved state. A command selects a source
+for a destination:
 
 ```sh
 yoke pair cam-garage tv-den
-yoke unpair tv-den
 yoke status
-yoke snoop
-yoke top
+yoke unpair tv-den
 ```
 
-## Project status
+The consumer saves its pairing before acknowledging it, then asks its
+driver to connect. Restarting an agent restores the saved route. A missing
+source leaves the pairing in place while the consumer waits for its return.
+The agent configures the connection and never receives or inspects its
+media payload.
 
-Yoke is an early software reference and endpoint engineering project. The
-repository implements the control plane, driver adapters, deterministic
-simulators, and a synthetic media reference pipeline. **No real endpoint
-hardware has been bench-tested.** The 4K120-over-10GbE designs and physical
-latency goals remain proposed engineering paths, not demonstrated results.
+Use the CLI on its own, or add the optional terminal dashboard,
+Prometheus exporter, Thermite, or another manager. Closing a monitor does
+not change the pairing.
 
-| Available in this repository | Requires integration or bench validation |
-|---|---|
-| Sans-I/O pairing state machines and authenticated YWP/1 frames | Actual endpoint device APIs and hardware behavior |
-| Durable state transitions, driver orchestration, and passive observers | HDMI capture/display, real USB peripherals, and fabric behavior under load |
-| Seeded fault simulations and real-socket loopback tests | Production JPEG XS, VC-2, DSC, or other real codecs |
-| Synthetic packetization, FEC, jitter, and integrity tools | Physical latency, protected-content relay timing, and hardware throughput |
+## Run the software today
 
-The dated [feasibility study](doc/research/FEASIBILITY.md),
-[hardware survey](doc/research/HARDWARE.md), and
-[endpoint roadmap](doc/design/EDGE-DEVICES.md) preserve assumptions and open
-questions. Product availability and performance estimates in that research
-have not been revalidated for publication.
+Yoke is in development. The repository includes working control software,
+endpoint driver adapters, deterministic fault simulation, passive monitors,
+and a synthetic media pipeline. Complete endpoint hardware has not been
+bench-tested.
 
-## Design principles
+The [project status](site/pages/docs/project-status.md) maps current
+capabilities and remaining work. In particular, USB/IP currently imports
+devices into a Linux consumer's USB stack; a physical USB gadget/proxy
+output and IR routing remain unimplemented.
 
-- **State at the edge.** Endpoint agents own durable pairings. Conflicting
-  intents have a total version order, and peers reissue newer state after a
-  partition or missed intent.
-- **Separate control and payload.** The agent never receives or inspects
-  media. Drivers configure endpoint hardware or external processes. Media
-  reference tools run separately and use unprotected synthetic content.
-- **Observe independently.** `yoke snoop` passively verifies control traffic.
-  The media observer independently joins the reference multicast stream and
-  sends no application datagrams or feedback.
-- **Reproduce failures offline.** Pure state machines receive explicit time
-  inputs. Tests exercise loss, duplication, reordering, partitions, replay,
-  persistence errors, and driver failure.
-
-YWP/1 uses a site-wide PSK. Any key holder can author control traffic; this
-is a shared trust domain, not per-device authorization. Control metadata is
-visible. See [SECURITY.md](SECURITY.md) for that boundary. Generic driver
-`active` status means backend-confirmed readiness, not independently
-measured media flow or a working physical display.
-
-## Try the software
-
-Python 3.12 or later is required. The runtime has zero third-party
-dependencies.
+Use Python 3.12 or later. From a checkout:
 
 ```sh
 python3 -m venv .scratch/run
 .scratch/run/bin/python -m pip install .
+.scratch/run/bin/yoke simulate --json
+.scratch/run/bin/yoke top --demo --once
 .scratch/run/bin/yoke-media probe --frames 120
-.scratch/run/bin/yoke-media simulate --frames 120 --drop 0.05 --fec xor --seed 7
 ```
 
-`raw` verifies synthetic model bytes exactly. `jpegxs` and `vc2` are
-**ratio models**: they preserve the test payload and model compression in
-metadata. They do not implement those codecs or establish visually lossless
-quality. Simulation timing is model time; Python loopback and benchmark
-timing measure software costs on the host, not hardware glass-to-glass
-latency. The [performance report](doc/design/PERFORMANCE.md) records measured
-software workloads and reproduction commands.
+These examples need no hardware, sockets, or management service. The
+runtime uses the Python standard library only. The simulator uses the
+real pairing state machines with virtual time and simulated drivers.
+Media checks use synthetic frames; `jpegxs` and `vc2` are ratio models,
+not codec implementations.
 
-Run the installed control-plane fault campaign with `yoke simulate --json`.
-It needs no network, hardware, or management service. See the
-[simulation guide](doc/design/SIMULATION.md) for its scenarios and limits.
+For real devices, choose a [backend](site/pages/reference/backends.md),
+follow [deployment](doc/design/DEPLOYMENT.md), then use the
+[pairing guide](site/pages/guides/pairing.md). A saved pairing and
+backend-reported `active` state are distinct from measured physical output.
 
-A live receiver and independent observer can join the same multicast group:
+## Find your path
 
-```sh
-# Separate terminals; prove the local gate below before a two-host run.
-make media-recv INTERFACE=127.0.0.1
-make media-send INTERFACE=127.0.0.1 FRAMES=600
-.scratch/venv/bin/yoke-media snoop --live --interface 127.0.0.1
-```
-
-Multicast sends to `GROUP`, not `PEER`. For unicast, set `UNICAST=1` on
-both Make targets and `PEER=<receiver-ip>` on the sender. See the
-[media transport contract](doc/design/MEDIA.md) and
-[testing guide](doc/design/MEDIA-TESTING.md).
+| Read | For |
+|---|---|
+| [Connections](site/pages/product.md) | HDMI, Linux USB/IP, and the planned IR direction |
+| [How it works](site/pages/how-it-works.md) | Source, destination, durable pairing, and independent management |
+| [Get started](site/pages/start.md) | Install and try the software on one computer |
+| [Guides](site/pages/guides/index.md) | Pairing, monitoring, deployment, and maintenance |
+| [Reference](site/pages/reference/index.md) | Commands, backends, configuration, and protocol contracts |
+| [Engineering](site/pages/engineering/index.md) | Architecture, evidence, endpoint designs, decisions, and research |
+| [Security](SECURITY.md) | Site-key trust, metadata visibility, and reporting |
 
 ## Develop and verify
 
 ```sh
-make verify                # format, lint, strict types, tests, strict docs build
-make simulate              # seeded control-plane fault campaign
-make benchmark-control     # repeated control-plane software measurements
-make benchmark-media       # repeated synthetic media measurements
-make docs-serve            # docs at http://127.0.0.1:8000
+make verify                       # formatting, lint, strict types, tests, docs
+make browser-install verify-browser  # explicit browser install, then UI checks
+make simulate                     # repeatable control-plane fault campaign
+make docs-serve                   # documentation at http://127.0.0.1:8000
 ```
 
-Tools, caches, test temporaries, and generated docs live under `.scratch`.
-Use `PYTHON=python3.12` to select an interpreter or `VENV=.scratch/dev` to
-reuse a developer environment. The pinned `dev` extra includes the Markdown
-renderer; it adds no runtime dependency. CI verifies Python 3.12 and 3.14,
-smoke-tests an isolated wheel install, and publishes the verified static
-site from `feature/ir` after both Python jobs and the separate ESP32
-firmware build/test gate pass.
-
-## Monitoring
-
-`yoke top --demo` previews the optional terminal dashboard without devices.
-`yoke metrics` exposes cached Prometheus and JSON snapshots for Thermite or
-other tools. Both reuse passive control observations and keep collector-host
-resource usage separate from endpoint health. See the
-[telemetry design and research](doc/design/TELEMETRY.md).
-
-## Endpoint prototypes
-
-The [USB housing guide](doc/design/USB-HOUSING.md) contains the screw-closed
-Radxa ZERO 3E enclosure, assembly instructions, and a separate branded R2
-CAD revision. Physical fit and thermal testing remain outstanding.
-
-[Linux endpoint updates](doc/design/UPDATES.md) use operator-controlled
-SSH/SFTP delivery, immutable releases, readiness checks, and rollback.
-The [ESP32 Ethernet updater](doc/design/ESP32-UPDATES.md) provides a
-separate ESP32-S3/W5500 reference after initial USB provisioning; IR routing
-is not implemented. Both update paths require device bench validation.
-The [identity guide](doc/design/BRANDING.md) defines the shared screen and
-enclosure mark, colors, and typography.
+Development tools and generated files belong under `.scratch`.
+See [Contributing](CONTRIBUTING.md) for setup, browser provisioning,
+software measurements, and the CI gates.
 
 ## Repository map
 
-| Path | Contents |
+| Path | Responsibility |
 |---|---|
-| [doc/design/ARCHITECTURE.md](doc/design/ARCHITECTURE.md) | State ownership, control plane, and driver boundary |
-| [doc/design/PROTOCOL.md](doc/design/PROTOCOL.md) | Normative Yoke Wire Protocol v1 |
-| [doc/design/MEDIA.md](doc/design/MEDIA.md) | Synthetic media reference and transport |
-| [doc/decisions/](doc/decisions/) | Architecture decision records |
-| [doc/research/](doc/research/) | Dated hardware, compression, and feasibility research |
-| `src/yoke/core/` | Sans-I/O control state machines |
-| `src/yoke/net/`, `src/yoke/drivers/` | Network shell and endpoint adapters |
-| `src/yoke/media/` | Reference media stages, observers, runners, and CLI |
-| `tests/`, `benchmarks/` | Reproductions, seeded faults, socket checks, and measurements |
-| `site/`, `scripts/build_docs.py` | Static documentation source, shell, and strict builder |
+| `src/yoke/core/` | Pure control state machines; no sockets, clock reads, or filesystem |
+| `src/yoke/net/`, `src/yoke/drivers/` | Agent I/O, serialized driver work, and endpoint adapters |
+| `src/yoke/media/` | Separate synthetic media stages, runners, and CLI |
+| `src/yoke/telemetry/` | Optional passive monitoring, terminal UI, and metrics |
+| `doc/design/` | Canonical architecture, protocol, and subsystem documents |
+| `doc/decisions/`, `doc/research/` | Decision history and dated engineering evidence |
+| `site/pages/` | Product explanation, task guides, and documentation hubs |
+| `scripts/docsite/`, `site/assets/` | Static-site builder and presentation |
+| `tests/`, `benchmarks/` | Reproductions, simulations, socket checks, and measurements |
+| `firmware/`, `hardware/` | Endpoint firmware references and mechanical designs |
 
-MIT licensed. The agent never decrypts protected content, holds HDCP
-secrets, alters HDCP messages or capabilities, or instructs endpoints to
-weaken protection. The full media boundary is recorded in
+MIT licensed. Protected-content boundaries are recorded in
 [ADR 0011](doc/decisions/0011-media-and-hdcp-scope-for-yoke-endpoints.md).

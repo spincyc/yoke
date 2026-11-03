@@ -28,6 +28,7 @@ make benchmark-control
 make benchmark-media
 make docs
 make docs-serve
+make browser-install verify-browser
 ```
 
 `make verify` includes the static documentation build. The site generator
@@ -36,6 +37,25 @@ checks all generated local links and anchors. Edit site content in
 `site/pages/`, canonical design documents in `doc/`, navigation in
 `site/site.toml`, and presentation in `site/assets/` or `site/template.html`.
 ADRs in `doc/decisions/` are published automatically.
+
+Keep the reader paths distinct: `site/pages/` explains the product and
+organizes get-started, guides, reference, and engineering content;
+`doc/design/` holds the canonical detailed designs. Link a design from a
+hub rather than copying it. `site/site.toml` lists published pages and
+curated navigation separately. A new ADR belongs in the
+[decision index](site/pages/engineering/decisions.md); publication alone
+does not make it a primary navigation item. Preserve published page URLs
+and add compatibility anchors when changing a heading that has inbound
+links.
+
+For browser checks, run `make browser-install verify-browser` once to
+provision the Chromium revision pinned by the development Playwright
+version and check the generated site. After provisioning,
+`make verify-browser` reuses that browser; verification never downloads
+one. Linux CI also sets `BROWSER_INSTALL_OPTIONS=--with-deps` during its
+explicit installation step. Browser evidence is written under
+`.scratch/browser-report`.
+
 
 ## Design boundaries
 
@@ -63,13 +83,16 @@ parameters, and repeated measurements. Keep software model performance
 separate from physical video/USB timing and real codec throughput. Avoid
 machine-specific timing thresholds in CI.
 
-Before submitting, run `make verify` and describe the user-visible change,
+Before submitting, run `make verify`; for site changes also run
+`make verify-browser` after browser provisioning. Describe the user-visible change,
 the reproduction, and the checks that actually ran. Report skipped socket
 tests explicitly. Do not include site keys, endpoint credentials, real
 site inventories, or private captures in a report.
 
 ## Publication
 
-CI checks Python 3.12 and 3.14. The Pages workflow deploys the verified
-static artifact from `feature/ir`. Maintainers can also dispatch it manually
+CI runs the software and browser gates on Python 3.12 and 3.14, plus
+the separate ESP32 firmware gate. Pages publication requires all three
+job families to pass and deploys the exact browser-verified static
+artifact from `feature/ir`. Maintainers can also dispatch it manually
 on that branch. Generated HTML is a build artifact and is not committed.

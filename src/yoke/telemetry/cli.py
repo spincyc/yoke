@@ -8,7 +8,7 @@ import math
 import sys
 import threading
 
-from yoke.snoop import escape_terminal
+from yoke.terminal import escape_terminal
 
 
 def configure_parsers(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -52,7 +52,7 @@ def configure_parsers(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
 
 
 def run_command(args: argparse.Namespace) -> int:
-    from yoke.cli import resolve_psk
+    from yoke.config import resolve_psk
     from yoke.telemetry.client import SnapshotClient
     from yoke.telemetry.http import MetricsServer
     from yoke.telemetry.model import Snapshot

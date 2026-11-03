@@ -46,7 +46,7 @@ from yoke.media.metrics import (
     StageRoles,
 )
 from yoke.media.types import Body, EventKind, MediaUnit, StageEvent, UnitKind
-from yoke.snoop import escape_terminal
+from yoke.terminal import escape_terminal
 
 Verdict = Literal[
     "ok",

@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 744" width="360" height="744" role="img" aria-labelledby="control-mobile-title control-mobile-description">
+  <title id="control-mobile-title">Separate paths for control and picture</title>
+  <desc id="control-mobile-description">The payload flows downward from a computer through input hardware, an Ethernet switch, and output hardware to a display. Local agents sit beside the hardware, outside that path. A temporary control client sends a signed intent over the LAN to the output agent, which saves the pairing and configures the hardware through a driver. The client can then exit. Hardware is not bench-tested.</desc>
+  <defs>
+    <marker id="cm-payload" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="m2 2 4 3-4 3" fill="none" stroke="#315fcd" stroke-width="1.7" stroke-linecap="round"/></marker>
+    <marker id="cm-control" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="m2 2 4 3-4 3" fill="none" stroke="#52606c" stroke-width="1.7" stroke-linecap="round"/></marker>
+    <style>
+      text {font-family:Arial,Helvetica,sans-serif;fill:#17202a}
+      .label {font-size:19px;font-weight:600;letter-spacing:-.3px}
+      .detail {font-size:15px;fill:#52606c}
+      .box {fill:#f8f7f4;stroke:#17202a;stroke-width:1.6}
+      .payload {fill:none;stroke:#315fcd;stroke-width:3.5;marker-end:url(#cm-payload)}
+      .control {fill:none;stroke:#52606c;stroke-width:1.8;stroke-dasharray:4 4;marker-end:url(#cm-control)}
+
+      @media (prefers-color-scheme:dark) {
+        [fill="#f8f7f4"] {fill:#15191f}
+        [fill="#fff"], [fill="#efede8"] {fill:#303943}
+        [fill="#dfe2e3"], [fill="#e0e2e2"], [fill="#d9dce0"] {fill:#242d36}
+        [fill="#17202a"] {fill:#11161d}
+        [fill="#315fcd"] {fill:#82a7ff}
+        [fill="#52606c"] {fill:#aeb8c7}
+        [stroke="#17202a"] {stroke:#b9c4d3}
+        [stroke="#d9dce0"], [stroke="#b4bbc0"] {stroke:#465260}
+        [stroke="#315fcd"] {stroke:#82a7ff}
+        [stroke="#52606c"] {stroke:#aeb8c7}
+        stop[stop-color="#fff"] {stop-color:#38434f}
+        stop[stop-color="#efede8"] {stop-color:#242d36}
+        .box, .device {fill:#303943;stroke:#b9c4d3}
+        .outline {stroke:#b9c4d3}
+        .port {fill:#11161d;stroke:#b9c4d3}
+        .payload, .cable, .wire {stroke:#82a7ff}
+        .control {stroke:#aeb8c7}
+        text {fill:#f3f4f6}
+        .detail {fill:#aeb8c7}
+      }
+    </style>
+  </defs>
+  <rect width="360" height="744" fill="#f8f7f4"/>
+  <text x="18" y="29" font-size="14" font-weight="700" letter-spacing="1">CONTROL / PAYLOAD</text>
+  <path d="M18 46H342" stroke="#d9dce0"/>
+  <rect x="20" y="65" width="320" height="81" rx="3" class="box"/>
+  <text x="37" y="96" class="label">Temporary control client</text>
+  <text x="37" y="122" class="detail">Sends a signed pairing intent over LAN</text>
+  <path d="M328 146v369h-13" class="control"/>
+  <text x="214" y="180" class="detail">Control path</text>
+
+  <text x="100" y="196" text-anchor="middle" class="label">Computer</text>
+  <path d="M100 208v46" class="payload"/>
+  <text x="117" y="240" class="detail">HDMI</text>
+  <rect x="20" y="266" width="160" height="64" rx="3" class="box"/>
+  <text x="100" y="293" text-anchor="middle" class="label">Input hardware</text>
+  <text x="100" y="316" text-anchor="middle" class="detail">Encodes / sends</text>
+  <rect x="220" y="266" width="95" height="64" rx="3" class="box"/>
+  <text x="267" y="293" text-anchor="middle" class="label">Agent</text>
+  <text x="267" y="316" text-anchor="middle" class="detail">Local control</text>
+  <path d="M220 298h-28" class="control"/>
+  <text x="189" y="353" class="detail">Driver</text>
+  <path d="M100 342v43" class="payload"/>
+  <rect x="20" y="396" width="160" height="64" rx="3" class="box"/>
+  <text x="100" y="423" text-anchor="middle" class="label">Ethernet switch</text>
+  <text x="100" y="446" text-anchor="middle" class="detail">Carries the payload</text>
+  <path d="M100 472v43" class="payload"/>
+  <rect x="20" y="526" width="160" height="64" rx="3" class="box"/>
+  <text x="100" y="553" text-anchor="middle" class="label">Output hardware</text>
+  <text x="100" y="576" text-anchor="middle" class="detail">Receives / decodes</text>
+  <rect x="220" y="490" width="95" height="100" rx="3" class="box"/>
+  <text x="267" y="521" text-anchor="middle" class="label">Agent</text>
+  <text x="267" y="545" text-anchor="middle" class="detail">Saves</text>
+  <text x="267" y="566" text-anchor="middle" class="detail">pairing</text>
+  <path d="M220 558h-28" class="control"/>
+  <text x="189" y="615" class="detail">Driver</text>
+  <path d="M100 602v44" class="payload"/>
+  <text x="117" y="633" class="detail">HDMI</text>
+  <text x="100" y="675" text-anchor="middle" class="label">Display</text>
+  <path d="M18 698H342" stroke="#d9dce0"/>
+  <text x="18" y="726" class="detail">The client exits. The saved pairing remains.</text>
+</svg>

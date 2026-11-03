@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 660" width="1000" height="660" role="img" aria-labelledby="control-title control-description">
+  <title id="control-title">Yoke selects a pairing; endpoint hardware carries the payload</title>
+  <desc id="control-description">A temporary control client sends a signed pairing request over the LAN to the output endpoint's agent. Each endpoint has its own local agent and driver. The agent configures the local hardware; neither agent nor control client receives the payload. The main path runs from an HDMI source through input hardware, an Ethernet switch, output hardware, and a display. The output endpoint saves the pairing, which remains configured after the client exits. No hardware has been bench-tested.</desc>
+  <defs>
+    <marker id="payload-arrow" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="m2 2 4 3-4 3" fill="none" stroke="#315fcd" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></marker>
+    <marker id="control-arrow" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="m2 2 4 3-4 3" fill="none" stroke="#52606c" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></marker>
+    <style>
+      text {font-family:Arial,Helvetica,sans-serif;fill:#17202a}
+      .label {font-size:22px;font-weight:600;letter-spacing:-.4px}
+      .detail {font-size:18px;fill:#52606c}
+      .eyebrow {font-size:14px;letter-spacing:1.8px;font-weight:700}
+      .box {fill:#f8f7f4;stroke:#17202a;stroke-width:2}
+      .control {fill:none;stroke:#52606c;stroke-width:2;stroke-dasharray:6 6;marker-end:url(#control-arrow)}
+      .payload {fill:none;stroke:#315fcd;stroke-width:5;marker-end:url(#payload-arrow)}
+
+      @media (prefers-color-scheme:dark) {
+        [fill="#f8f7f4"] {fill:#15191f}
+        [fill="#fff"], [fill="#efede8"] {fill:#303943}
+        [fill="#dfe2e3"], [fill="#e0e2e2"], [fill="#d9dce0"] {fill:#242d36}
+        [fill="#17202a"] {fill:#11161d}
+        [fill="#315fcd"] {fill:#82a7ff}
+        [fill="#52606c"] {fill:#aeb8c7}
+        [stroke="#17202a"] {stroke:#b9c4d3}
+        [stroke="#d9dce0"], [stroke="#b4bbc0"] {stroke:#465260}
+        [stroke="#315fcd"] {stroke:#82a7ff}
+        [stroke="#52606c"] {stroke:#aeb8c7}
+        stop[stop-color="#fff"] {stop-color:#38434f}
+        stop[stop-color="#efede8"] {stop-color:#242d36}
+        .box, .device {fill:#303943;stroke:#b9c4d3}
+        .outline {stroke:#b9c4d3}
+        .port {fill:#11161d;stroke:#b9c4d3}
+        .payload, .cable, .wire {stroke:#82a7ff}
+        .control {stroke:#aeb8c7}
+        text {fill:#f3f4f6}
+        .detail {fill:#aeb8c7}
+      }
+    </style>
+  </defs>
+  <rect width="1000" height="660" fill="#f8f7f4"/>
+  <text x="34" y="35" class="eyebrow">TWO PATHS / ONE PAIRING</text>
+  <path d="M34 55H966" stroke="#d9dce0"/>
+
+  <rect x="383" y="86" width="234" height="80" rx="4" class="box"/>
+  <text x="500" y="116" text-anchor="middle" class="label">Control client</text>
+  <text x="500" y="144" text-anchor="middle" class="detail">CLI, button, automation</text>
+  <path d="M500 166v43H274v45M500 209h226v45" class="control"/>
+  <rect x="372" y="186" width="256" height="43" fill="#f8f7f4"/>
+  <text x="500" y="213" text-anchor="middle" class="detail">Signed pairing intent over LAN</text>
+
+  <rect x="190" y="252" width="168" height="75" rx="4" class="box"/>
+  <text x="274" y="282" text-anchor="middle" class="label">Local agent</text>
+  <text x="274" y="310" text-anchor="middle" class="detail">Input endpoint</text>
+  <rect x="642" y="252" width="168" height="75" rx="4" class="box"/>
+  <text x="726" y="282" text-anchor="middle" class="label">Local agent</text>
+  <text x="726" y="310" text-anchor="middle" class="detail">Saves output pairing</text>
+  <path d="M274 327v57M726 327v57" class="control"/>
+  <text x="305" y="365" class="detail">Driver</text>
+  <text x="757" y="365" class="detail">Driver</text>
+
+  <path d="M114 434h75M359 434h58M583 434h58M811 434h75" class="payload"/>
+  <rect x="190" y="390" width="168" height="88" rx="4" class="box"/>
+  <text x="274" y="423" text-anchor="middle" class="label">Input hardware</text>
+  <text x="274" y="453" text-anchor="middle" class="detail">Encodes / sends</text>
+  <rect x="418" y="399" width="164" height="70" rx="4" class="box"/>
+  <text x="500" y="428" text-anchor="middle" class="label">Ethernet</text>
+  <text x="500" y="453" text-anchor="middle" class="detail">Network switch</text>
+  <rect x="642" y="390" width="168" height="88" rx="4" class="box"/>
+  <text x="726" y="423" text-anchor="middle" class="label">Output hardware</text>
+  <text x="726" y="453" text-anchor="middle" class="detail">Receives / decodes</text>
+  <rect x="45" y="398" width="68" height="72" rx="4" class="box"/>
+  <path d="M56 412h46M56 420h46" stroke="#d9dce0" stroke-width="2"/>
+  <circle cx="59" cy="455" r="3" fill="#315fcd"/>
+  <text x="79" y="511" text-anchor="middle" class="label">Computer</text>
+  <rect x="886" y="402" width="80" height="53" rx="2" class="box"/>
+  <rect x="893" y="409" width="66" height="38" fill="#315fcd"/>
+  <path d="M926 455v11h-19M926 466h19" stroke="#17202a" stroke-width="3"/>
+  <text x="926" y="511" text-anchor="middle" class="label">Display</text>
+  <text x="148" y="414" text-anchor="middle" class="detail">HDMI</text>
+  <text x="849" y="414" text-anchor="middle" class="detail">HDMI</text>
+
+  <path d="M34 552H966" stroke="#d9dce0"/>
+  <path d="M35 587h57" class="payload"/>
+  <text x="111" y="594" class="detail">Payload travels between hardware endpoints.</text>
+  <path d="M35 628h57" class="control"/>
+  <text x="111" y="635" class="detail">Control selects the route. The client can exit after the pairing is saved.</text>
+</svg>

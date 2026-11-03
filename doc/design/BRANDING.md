@@ -10,7 +10,8 @@ interfaces, and proposed endpoint enclosures.
 ## Name and voice
 
 Write **Yoke** in prose. Use `yoke` for commands, package names, and code;
-use **YOKE** in the drawn wordmark and on equipment labels. The short line
+use **Yoke** in the outlined website wordmark. Existing **YOKE** equipment
+labels remain valid. The short line
 is **Control at the edge.** The explanatory description is **Controllerless
 pairing for HDMI and USB endpoints over switched Ethernet.**
 
@@ -29,7 +30,7 @@ solid silhouette so the same geometry works on screen and on a part.
 | Asset | Use |
 |---|---|
 | [yoke-mark.svg](../../site/assets/yoke-mark.svg) | Canonical monochrome geometry; CAD import, engraving, and single-color reproduction |
-| [yoke-lockup.svg](../../site/assets/yoke-lockup.svg) | Mark and custom outlined YOKE wordmark; site header, README, and document covers |
+| [yoke-lockup.svg](../../site/assets/yoke-lockup.svg) | Mark and outlined Instrument Sans wordmark; site header, README, and document covers |
 | [favicon.svg](../../site/assets/favicon.svg) | Small browser icon, with a quiet neutral background |
 | [site.css](../../site/assets/site.css) | Authoritative interface color, type, spacing, and responsive tokens |
 
@@ -42,8 +43,9 @@ radii of 6 and 12 units. Do not replace it with a typed character.
 
 The lockup and favicon repeat the canonical path as presentation
 derivatives. Their first symbol path must match the canonical path exactly;
-the asset test checks this. The wordmark is outlined geometry, so it does
-not depend on an installed font. Both the site and the lockup support the
+the asset test checks this. The title-case wordmark is outlined Instrument Sans at weight 620. Its
+geometry is a web presentation asset; it is independent of the canonical
+manufacturing mark and does not require an installed font. Both the site and the lockup support the
 system's light or dark preference without downloading assets.
 
 Use the mark in one solid foreground color. Preserve its proportions and
@@ -52,66 +54,79 @@ or enclose it in a new badge. Use the supplied favicon for browser contexts.
 Leave at least one band width (6 source units) clear around the visible
 mark in normal layouts. The SVG canvas alone supplies only part of that
 clear space. In a compact application icon, the supplied canvas is the
-minimum padding. Use the lockup at 110 CSS pixels wide or larger and the
+minimum padding. Use the lockup at 104 CSS pixels wide or larger and the
 standalone mark at 24 CSS pixels wide or larger. The favicon is the small
 size exception.
 
 ## Color
 
-Evergreen identifies actions and links. Pale sage is a selected surface,
-not a warning or an indicator that a device is operational. Most of the
-interface is neutral space, text, and fine rules. Use color sparingly;
-status always needs a word as well as a color.
+The palette pairs warm offwhite with charcoal and one restrained cobalt
+accent. Product pages use space, type, and device illustrations to explain
+Yoke. Documentation uses the same identity at a quieter reading scale.
+Cobalt identifies links, primary actions, and selected states; it is not an
+operational success indicator. Status always needs words as well as color.
 
 | Role / CSS token | Light | Dark |
 |---|---|---|
-| Heading and primary identity / `--ink` | `#203B32` | `#E2ECE5` |
-| Body text / `--text` | `#364B42` | `#CBD8CF` |
-| Secondary text / `--muted` | `#5C7065` | `#A3B6A9` |
-| Page / `--paper` | `#FAFBF8` | `#151E19` |
-| Quiet panel / `--panel` | `#EEF2ED` | `#1D2A22` |
-| Decorative rule / `--line` | `#D7DFD7` | `#36483B` |
-| Selection surface / `--accent` | `#DCE8DF` | `#2D4C3B` |
-| Text on selection / `--accent-ink` | `#244D3E` | `#D4E9DA` |
-| Link and focus / `--link` | `#275F50` | `#A8D2B8` |
-| Inline code / `--code` | `#EDF1EB` | `#27372B` |
-| Research notice / `--warning` | `#F3EDDF` | `#302E23` |
-| Code block / `--code-bg` | `#182B24` | `#101A13` |
-| Code text / `--code-text` | `#E1EAE3` | `#DCE9DF` |
-| Primary action / `--button-bg` | `#275F50` | `#A8D2B8` |
-| Action text / `--button-text` | `#FFFFFF` | `#18382B` |
+| Heading and identity / `--ink` | `#17202A` | `#F3F4F6` |
+| Body text / `--text` | `#39424D` | `#C6CBD2` |
+| Secondary text / `--muted` | `#626B76` | `#9AA4B2` |
+| Page / `--paper` | `#F8F7F4` | `#15191F` |
+| Elevated surface / `--surface` | `#FFFFFF` | `#1B2028` |
+| Quiet panel / `--panel` | `#EEEDE9` | `#202630` |
+| Decorative rule / `--line` | `#D9DCE0` | `#353D49` |
+| Selection surface / `--accent` | `#E8EEFC` | `#223354` |
+| Text on selection / `--accent-ink` | `#244D9D` | `#C6D6FF` |
+| Link / `--link` | `#2452BC` | `#A2BDFF` |
+| Identity accent and focus / `--cobalt` | `#315FCD` | `#82A7FF` |
+| Inline code / `--code` | `#EEEFEF` | `#262E39` |
+| Research notice / `--warning` | `#F3EEE0` | `#302E27` |
+| Code block / `--code-bg` | `#202732` | `#10141B` |
+| Code text / `--code-text` | `#ECF0F7` | `#E5EBF7` |
+| Primary action / `--button-bg` | `#2452BC` | `#A2BDFF` |
+| Action text / `--button-text` | `#FFFFFF` | `#142342` |
 
-Normal text needs at least 4.5:1 contrast with its actual surface; focus
-indicators and interactive boundaries need at least 3:1. The subtle
-`--line` token is for decorative separators only. Inputs use the stronger
-secondary-text color for their border. Links in prose remain underlined.
-Focus has a visible 3-pixel outline with space around it. The current-page
-navigation also uses stronger weight and `aria-current`.
+Normal text needs at least 4.5:1 contrast against its actual surface. Focus
+indicators and interactive boundaries need at least 3:1. `--line` supplies
+decorative separators; input boundaries use `--muted`. Prose links remain
+underlined. Keyboard focus uses a visible 3-pixel outline with space around
+it. Navigation identifies the current page through `aria-current`, weight,
+and a non-color cue.
 
 ## Typography and layout
 
-Use the local system sans-serif stack in `site.css`; never load a web font.
-Use the local monospace stack for commands, values, source, and identifiers.
-The outlined wordmark is an identity asset, not a body font.
+The website serves **Instrument Sans** locally from
+[`site/assets/fonts`](../../site/assets/fonts). Its full variable upright
+and italic fonts preserve the upstream glyph set and support weight 400–700. They are
+redistributed under the [SIL Open Font License 1.1](../../site/assets/fonts/OFL.txt).
+The font source and conversion are recorded beside the asset. Arial and
+Helvetica provide fallbacks. Commands and identifiers use the local
+monospace stack. No external runtime resources or font services are used.
 
-Body copy is 1 rem with a 1.7 line height. Headings use moderate weight and
-slight negative tracking; large homepage type is reserved for the single
-opening statement. Documentation headings stay smaller. Keep paragraphs
-short and technical tables readable; allow wide code and tables to scroll
-inside their own boxes. Do not shrink the whole page to fit them.
+Product headings use weight 500, tight tracking, and generous whitespace.
+The large opening statement belongs to the product page; documentation
+headings stay smaller. Body copy uses regular weight and a 1.65 line height.
+Keep a readable documentation measure, short paragraphs, and technical
+tables that scroll in their own boxes. Do not shrink the page to fit code.
 
-Use a 4-pixel spacing unit, with 8, 12, 16, 24, 32, and 48 pixels as the
-normal steps. Prefer alignment and space to nested cards or shadows. Use
-1-pixel rules and 3–5-pixel corner radii. The documentation shell keeps its
-navigation and reading column aligned; its 760-pixel mobile breakpoint
-matches the navigation script. Preserve keyboard access after viewport
-changes and when JavaScript is unavailable.
+The product layout has no documentation sidebar. Its opening pairs a plain
+product statement with an illustration of familiar devices and connections.
+Describe hardware illustrations as concepts. Follow with broad editorial
+sections, clear connection paths, and concrete uses. Avoid decorative
+terminal windows, dashboard furniture, and repeated stacks of small cards.
 
-Diagrams use the same surface and text tokens as the surrounding page.
-Keep labels as real text, supply an accessible title and description, and
-show control paths separately from media paths. The landing diagram has a
-text layout on narrow screens. Do not use the brand mark as a status light
-or a diagram node with an operational meaning.
+Documentation has curated navigation, a hub with local search, breadcrumbs,
+on-page headings, and previous/next links. The 760-pixel navigation
+breakpoint is shared with `site.js`. Preserve keyboard access after viewport
+changes and when JavaScript is unavailable. Use 4-pixel spacing steps,
+1-pixel rules, restrained 4–7-pixel corner radii, and no decorative shadows.
+
+Diagrams use the surrounding palette and clear labels. Give every image a
+useful alternative description and every inline diagram an accessible title
+and description. Distinguish endpoint media from control traffic. An
+interactive concept must identify its simulated behavior and retain a useful
+static explanation without JavaScript. Respect reduced-motion preferences.
+Do not give the identity mark an operational status meaning.
 
 ## Equipment and CAD reproduction
 
