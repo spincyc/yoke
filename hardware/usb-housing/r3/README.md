@@ -1,8 +1,9 @@
 # USB endpoint housing R3
 
 R3 adds a real locating joint, captive **metal** nuts and fully recessed screw
-heads to the bare Radxa ZERO 3E V1.2 enclosure. **R3 is not printed or released.**
-R1 and R2 files remain unchanged.
+heads to the bare Radxa ZERO 3E V1.2 enclosure. **The first R3 main-plate job
+was submitted and verified printing.** See the [dispatch record](print.json).
+Physical fit and function remain untested. R1 and R2 files remain unchanged.
 
 **Use M2.5 × 16 mm PH1 pan-head screws, measured under the head. Do not reuse
 the R1/R2 20 mm screws: they can bottom in the blind pockets and crack the lid.**
@@ -139,6 +140,8 @@ added heatsink, bracket, ingress rating or qualified tightening torque is
 included. Follow the PDF’s measurements, test limits and stop conditions.
 
 R3 changes the mechanics and screw length. No R1/R2 approval carries over.
-Neither the case nor its coupon has been sliced, released or dispatched.
-A future print requires fresh exact-file assembly/manufacturing review,
-release and authorization for a clear bed.
+The main plate passed exact-file assembly/manufacturing review and release
+before its single recorded dispatch. The coupon has not been sliced or
+dispatched. The PDF retains its design-stage preparation status; the dispatch
+record records the later print. Any subsequent print needs its own reviewed
+exact job, release and authorization for a clear bed.

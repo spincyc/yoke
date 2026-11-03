@@ -71,7 +71,13 @@
     "nut_spec": "https://www.inoxfasteners.com/wp-content/uploads/2016/11/Catalogo-2014.pdf"
   },
   "physical_validation": "NOT RUN",
-  "slice_release_dispatch": "NOT RUN",
+  "slice_release_dispatch": {
+    "main_plate": {
+      "record": "print.json",
+      "sha256": "e3cef31c79d6062169261d39a4ee737f991503da224ab45b60952e38f162ee8b"
+    },
+    "coupon": "NOT RUN"
+  },
   "limits": [
     "Vendor board mesh is nonmanifold: surface bounds are not a Boolean-volume proof.",
     "Sampled paths do not prove continuous collision-free movement.",
@@ -79,7 +85,7 @@
     "No R1/R2 release carries over. Future prints require exact-file release and clear-bed authorization."
   ],
   "sha256": {
-    "README.md": "1959f705a7cc120374db285d069ba8038b5ec7d05d6de866be1beb3dd05ee2c6",
+    "README.md": "72838b61d143fad2a8384e68b1cae2399f30e5ad1cb5be787bc2e746e2887232",
     "assembly.pdf": "cb3b23ae6ba265d8b553b6b4062c657b19c527ff7e40e2f39daf0bbdd0bb7530",
     "base-printed.stl": "fd23544b55aea49c676d7a713cb64c69114c80c45beec7fe278c195e22f67ae7",
     "base.stl": "13ddb5724bae0900056bfb310d28058e892e3fc1ae3a85b44fc73863e6b0296a",

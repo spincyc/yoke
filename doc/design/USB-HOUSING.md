@@ -6,7 +6,9 @@ tongues register the halves, screw heads sit in recesses, and metal nuts
 supply the threads. R1 and R2 retain their original geometry for reference.
 
 R1 was the first-article print revision. R2 added the canonical brand without
-changing its mechanics. **R2 and R3 have not been printed.** The R3 files do
+changing its mechanics. **R2 has not been printed. The first R3 main-plate
+job was submitted and verified printing**; see its
+[dispatch record](../../hardware/usb-housing/r3/print.json). The R3 files do
 not replace the original R1 G-code or its print record. Physical fit, cable
 access, retention and thermal testing of the revised case remain **NOT RUN**.
 
@@ -50,8 +52,9 @@ Download the [R3 fit coupon](../../hardware/usb-housing/r3/yoke-usb-housing-r3-c
 for the actual corner joint, head seat, nut trap and keeper interfaces.
 The coupon also needs its own reviewed print preparation before use.
 
-R3 is a CAD prototype, not a released print job. A future print
-needs an exact slice, assembly/manufacturing review and a clear bed.
+The first R3 main-plate job passed exact-slice and assembly/manufacturing
+review before dispatch. It remains a prototype pending physical tests.
+Subsequent prints need their own reviewed exact job and a clear bed.
 
 ![R2 branded housing, exact-mesh CAD preview](../../hardware/usb-housing/r2/preview.png)
 
@@ -77,7 +80,7 @@ digital checks, not a physical qualification.
 
 | Revision | Native CAD | Two-part plate | Instructions and evidence |
 | --- | --- | --- | --- |
-| R3 — current, NOT PRINTED | [OpenSCAD](../../hardware/usb-housing/r3/housing.scad) | [R3 STL](../../hardware/usb-housing/r3/yoke-usb-housing-r3.stl) | [Assembly PDF](../../hardware/usb-housing/r3/assembly.pdf), [guide](../../hardware/usb-housing/r3/README.md) |
+| R3 — current, print submitted | [OpenSCAD](../../hardware/usb-housing/r3/housing.scad) | [R3 STL](../../hardware/usb-housing/r3/yoke-usb-housing-r3.stl) | [Assembly PDF](../../hardware/usb-housing/r3/assembly.pdf), [guide](../../hardware/usb-housing/r3/README.md), [print record](../../hardware/usb-housing/r3/print.json) |
 | R1 — first article | [OpenSCAD](../../hardware/usb-housing/housing.scad) | [R1 STL](../../hardware/usb-housing/yoke-usb-housing-r1.stl) | [Assembly PDF](../../hardware/usb-housing/assembly.pdf), [print record](../../hardware/usb-housing/print.json) |
 | R2 — NOT PRINTED | [OpenSCAD](../../hardware/usb-housing/r2/housing.scad) | [R2 STL](../../hardware/usb-housing/r2/yoke-usb-housing-r2.stl) | [Rebuild script](../../hardware/usb-housing/r2/build.py), [mesh validation](../../hardware/usb-housing/r2/validation.json) |
 

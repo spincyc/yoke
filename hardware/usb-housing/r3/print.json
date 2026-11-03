@@ -1,0 +1,55 @@
+{
+  "schema": "yoke.usb-housing-print/1",
+  "revision": "R3",
+  "state": "SUBMITTED_AND_PRINTING_VERIFIED",
+  "printer_model": "FlashForge Adventurer 5M",
+  "job_filename": "yoke-usb-housing-r3.gcode",
+  "stl_sha256": "892be46f24ee5b9398ba411cb970c68323f240a7e60258bdeebd78f7074ea763",
+  "gcode_sha256": "7a4fa835da7851ed82866e613001255060946c07cc0b7d9bd9be024d18f83801",
+  "estimated_filament_g": 23.15,
+  "estimated_time_seconds": 7246,
+  "material_profile": "Flashforge Generic PLA",
+  "physical_validation": "NOT RUN",
+  "dispatch_attempted": true,
+  "assembly_packet_sha256": "5427bd5765f087e71d4ad42c36de925b6717caef3546287b5bb38c18810cea53",
+  "assembly_review_sha256": "1eff53a739678fd653404f415ba22ae89d692ae560169869baa9d2e89ccda8a1",
+  "assembly_pdf_sha256": "cb3b23ae6ba265d8b553b6b4062c657b19c527ff7e40e2f39daf0bbdd0bb7530",
+  "design_source_commit": "9438ee7c00a393e698d7efabdd457e5f716a9632",
+  "approval_result": "PASS",
+  "independent_reviewer": "housing-review-independent",
+  "geometry": {
+    "sampled_poses": 375,
+    "collisions": 0,
+    "near_gaps": 0,
+    "result": "WARN",
+    "limitation": "Official board mesh nonmanifold; conservative component surface bounds and nominal insertion reviewed separately. Sampled poses are not continuous-motion proof."
+  },
+  "digital_verification": {
+    "native_rebuild": "BYTE_IDENTICAL",
+    "mesh_preflight": "PASS",
+    "gcode_preflight": "PASS",
+    "assembly_approval": "PASS"
+  },
+  "filament_identification": "Printer firmware reports no material type; configured PLA profile used.",
+  "dispatch_attempt_count": 1,
+  "dispatch_outcome": "STARTED_AND_FILENAME_VERIFIED",
+  "submitted_at": "2026-11-03T01:31:46Z",
+  "acknowledged_at": "2026-11-03T01:31:53Z",
+  "printer_firmware": "5.1.8",
+  "job_identity": "yoke-usb-housing-r3.gcode",
+  "numeric_job_id": null,
+  "job_id_note": "Stock transport exposes filename identity, no numeric job ID.",
+  "printer_status_observed": {
+    "at": "2026-11-03T01:32:13.780487Z",
+    "state": "PRINTING",
+    "current_file": "yoke-usb-housing-r3.gcode"
+  },
+  "dispatch_ledger": {
+    "repository": "spincyc/lacuna",
+    "path": "tools/print/dispatch-log.jsonl",
+    "matching_rows_sha256": "ce60b0944bfa7de1cefef37b09b7c8f4cdee8be273f58cddc714b22fd75a2c1f",
+    "matching_rows_sha256_method": "SHA-256 of the exact UTF-8 JSONL bytes of matching rows, concatenated in ledger order with every terminating LF retained.",
+    "matching_row_count": 2,
+    "source_commit": "f8f2f0b58580ffda6c8a7c0dd870622d771106ef"
+  }
+}
