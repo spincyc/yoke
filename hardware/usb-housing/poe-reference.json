@@ -89,7 +89,7 @@
     }
   },
   "unresolved": [
-    "Actual HAT revision, fan and heatsink configuration.",
+    "Delivered HAT revision and cooling configuration: owner-selected listing shows fanless X1.0, while current official CAD includes an underside fan.",
     "Actual mated PCB gap: CAD says 18 mm; package lists 14.5 mm pillars. Neither source establishes which spacing applies to owner hardware.",
     "Screw-head diameter and protruding height, insulated pillar diameter, and complete assembly outer height.",
     "Fan fasteners, wire route and fitted heatsinks omitted from CAD."
@@ -102,5 +102,24 @@
     "review_sha256": "c7131e621f5ebf5423fcb42f8021c7dbbb73dcc58bccb19ef0e5389f876144db",
     "conclusion": "Independent STEP inspection reproduced the 18 mm PCB gap, missing hardware and 706.260 mm3 interference if the HAT is lowered to a 14.5 mm gap. Verified full-module and support/keepout envelopes remain necessary; lower-PCB edge retention could avoid requiring exact fastener head geometry.",
     "complete_design_review": "NOT RUN"
+  },
+  "owner_selected_product": {
+    "url": "https://www.amazon.com/dp/B0D1KF1L7G",
+    "asin": "B0D1KF1L7G",
+    "identity": "Official Radxa ZERO 3E PoE HAT (RA023); this exact ASIN is also linked by Radxa.",
+    "basis": "Owner supplied purchase listing on 2026-11-03; matched against retained official product distributor data.",
+    "listing_image_observations": "Main photo is marked Radxa 3E POE X1.0; underside photo shows no fan. These catalog images do not establish the revision or cooling configuration of the delivered unit.",
+    "dimensions": "No assembled board gap, full module height or mounting-hardware dimensions found in the listing.",
+    "image_sources": [
+      {
+        "url": "https://m.media-amazon.com/images/I/51wwyfugSEL._AC_SL1125_.jpg",
+        "sha256": "d9b0c02eecf3292b311ff95628a4ccf9d941369bfd03aa0037bda776c53f7d84"
+      },
+      {
+        "url": "https://m.media-amazon.com/images/I/515sD1jelmL._AC_SL1125_.jpg",
+        "sha256": "3e96c34a78ed8f5e04bd754984bdc91180d83c4cb4dbddb77b1454f6225cab11"
+      }
+    ],
+    "scope": "Product identity resolved; measured fit dimensions remain unresolved."
   }
 }

@@ -1,7 +1,7 @@
 # USB endpoint housing
 
 The required case holds one **Radxa ZERO 3E plus its PoE HAT**, including
-conductive mounting hardware, fan, wiring and any fitted heatsinks. It must
+conductive mounting hardware, wiring and any fitted fan or heatsinks. It must
 be a compact rectangle whose halves lower freely together and fasten with
 recessed M3 screws and RX-M3×5.7 heat-set inserts from the Lacuna stock.
 
@@ -9,6 +9,11 @@ recessed M3 screws and RX-M3×5.7 heat-set inserts from the Lacuna stock.
 bare-board geometry and digital review are not evidence of PoE compatibility.
 
 ## Complete-stack dimensions needed
+
+The owner selected [Radxa's Amazon kit B0D1KF1L7G](https://www.amazon.com/dp/B0D1KF1L7G).
+Its catalog images show a fanless board marked X1.0; they do not establish the
+delivered revision or assembled dimensions. The currently downloadable model
+includes a fan, so it cannot be assumed to represent that kit unchanged.
 
 The [mechanical reference record](../../hardware/usb-housing/poe-reference.json)
 records the official files inspected on 2026-11-03. Radxa's
@@ -33,9 +38,10 @@ require the metal screws and copper pillars for PoE. Printed supports must
 preserve these electrical connections and insulating sleeves. The enclosure's
 M3 screws remain separate from the board/HAT mounting hardware.
 
-Ventilation must provide clear paths from side inlets to the underside HAT
-fan and from both boards to upper outlets. Inlets must remain open on a flat
-desk; retention features and fan wires must clear them. Free area, component
+Ventilation must provide clear paths from side inlets into the space between
+the boards and from both boards to upper outlets. Include the inlet and outlet
+paths of any fitted fan. Inlets must remain open on a flat desk; retention
+features and wiring must clear them. Free area, component
 clearances and exact toolpaths require design review. Powered temperature,
 fan operation and sustained-load cooling remain physical tests.
 

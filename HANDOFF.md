@@ -13,6 +13,14 @@ not been modeled, sliced or dispatched. No cancellation was sent.
 
 ## Current dimensional block
 
+The owner identified the purchased kit as
+[Amazon ASIN B0D1KF1L7G](https://www.amazon.com/dp/B0D1KF1L7G), also linked by
+Radxa as a distributor listing for RA023. Its main catalog image is marked
+**X1.0** and its underside image shows no fan. This resolves product identity,
+but catalog images do not prove the delivered board revision. No assembled
+gap, complete height or hardware dimensions were found in the listing. Do not
+assume that the fan-equipped downloadable model represents this kit unchanged.
+
 The [mechanical reference record](hardware/usb-housing/poe-reference.json)
 pins the official CAD and product sources inspected on 2026-11-03. The
 combined STEP places the facing PCBs 18 mm apart, while Radxa's product
@@ -21,9 +29,10 @@ STEP files are byte-identical. The model also omits the mounting screws,
 pillars, fan fasteners, fan leads and photographed heatsinks. Its approximately
 36.96 mm height is not a verified envelope for the complete physical module.
 
-The owner has been asked for the HAT revision, actual facing-PCB gap, complete
-assembled height, screw-head and insulated-pillar dimensions, and fitted
-heatsinks. The cold reference review considers lower-board edge retention a
+The owner has been asked first for the actual facing-PCB gap, complete
+assembled height and presence of an underside fan. Earlier requested
+screw-head and pillar dimensions are necessary only if the chosen supports
+depend on them. The cold reference review considers lower-board edge retention a
 possible way to avoid head-specific supports, provided the module and hardware
 keepout envelopes are measured. It does not approve a complete housing or print.
 Do not resolve the spacing conflict by selecting one nominal value or treating
