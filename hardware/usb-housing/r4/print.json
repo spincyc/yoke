@@ -2,7 +2,7 @@
   "schema": "yoke.usb-housing-print/1",
   "revision": "R4",
   "kind": "JOINT_COUPON_TRIAL",
-  "state": "SUBMITTED_AND_PRINTING_VERIFIED",
+  "state": "OWNER_REPORTED_ASSEMBLY_FAILURE",
   "printer_model": "FlashForge Adventurer 5M",
   "printer_firmware": "5.1.8",
   "job_filename": "yoke-usb-housing-r4-coupon-trial.gcode",
@@ -66,9 +66,9 @@
     "state": "PRINTING",
     "current_file": "yoke-usb-housing-r4-coupon-trial.gcode"
   },
-  "physical_validation": "NOT RUN",
+  "physical_validation": "FAIL",
   "actual_stock_and_tool_fit": "Match actual insert before heat-setting and actual tools before loading",
-  "full_case_print_release": "BLOCKED_PENDING_PHYSICAL_COUPON_RESULTS",
+  "full_case_print_release": "BLOCKED_REJECTED_JOINT_DESIGN",
   "filament_identification": "Status API reported PLA; physical spool label was not independently inspected.",
   "dispatch_ledger": {
     "repository": "spincyc/lacuna",
@@ -77,5 +77,7 @@
     "matching_rows_sha256_method": "SHA-256 of exact matching UTF-8 JSONL bytes in ledger order, including terminating LF.",
     "matching_row_count": 2,
     "source_commit": "e2e40f56fb8c14b8a148f61291c251a6299be1c4"
-  }
+  },
+  "physical_result_file": "owner-result.json",
+  "physical_result_basis": "OWNER_REPORT"
 }

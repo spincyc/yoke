@@ -1,5 +1,9 @@
 # R4 independent mechanical review
 
+> Historical digital review. The owner subsequently reported that the printed
+> R4 pieces do not line up or slot together. See the [physical result](../owner-result.json).
+> R4 is rejected; this review is not authority to print it.
+
 Scope: `PROVISIONAL_MECHANICAL_REVIEW`. Nominal geometry checks **PASS** for the catalogue RX-M3x5.7 profile. Overall result and print release **BLOCKED**: actual stock identity/fit remain unconfirmed; every physical observation is **NOT RUN**. No historical R1/R3 approval is inherited.
 
 Reviewed final native source, actual component meshes, five coupon/fixture meshes and all five rendered PDF pages. Final PDF SHA256: `3a91c27b9285c120ab8562c516784aacd6e0a3d34a97df8cc6c8af326294c47e`. No open mechanical instruction finding remains. Mesh/source hashes and direct measurements are in `result.json`, `frozen-input.json`, `coupon-frozen-input.json` and the four geometry JSON reports.

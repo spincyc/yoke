@@ -1,0 +1,23 @@
+{
+  "schema": "yoke.usb-housing-owner-result/1",
+  "revision": "R4",
+  "result": "FAIL",
+  "basis": "OWNER_REPORT",
+  "on": "2026-11-03",
+  "owner_statement": "the pieces dont line up, they dont slot together",
+  "assembly_result": "FAIL",
+  "specific_failure_mode": "Owner reports alignment and joint assembly failure; dimensional cause is not established.",
+  "measured_dimensions": null,
+  "printed_job": "yoke-usb-housing-r4-coupon-trial.gcode",
+  "printed_mesh_sha256": "a77f3bc4149f3fe67d1707211cb6ea1acda4776ab59a852d2351156204d072ec",
+  "repeat_print_allowed": false,
+  "full_case_print_release": "BLOCKED_REJECTED_JOINT_DESIGN",
+  "replacement_requirements": [
+    "Two complete halves that slot together and screw together.",
+    "Compact flush rectangular exterior with recessed M3 screws and heat-set inserts.",
+    "Air inlets remain open on a flat surface, with top outlets.",
+    "Replace the horizontal slide and retaining hooks with a straight vertical locating joint."
+  ],
+  "physical_test_limit": "The owner observation supersedes the earlier digital review. No printed dimensions, insert fit or thermal measurements were supplied.",
+  "next_revision": "R5"
+}

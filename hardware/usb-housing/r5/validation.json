@@ -1,0 +1,69 @@
+{
+  "schema": "yoke.usb-housing-validation/1",
+  "revision": "R5",
+  "scope": "Nominal design and exact first-article print review; physical acceptance remains NOT RUN",
+  "source_sha256": {
+    "housing.scad": "da73f32fd7947e471b72c14ef8f2d6d585b8f6d48ba01392c36bc48ca123f37d",
+    "hardware.json": "11792694c0fabb92dd7f74a9831302ee16127c6ccc887e0eaaa069a191ca2f18",
+    "build.py": "d1ab4f3bf1a9abec838e6a1b9c4c2912afca27d78c0593eda81d472b95aba637",
+    "document.py": "6d7e00a313ee90dbbb95b46aa8054a8c00057a6b40a874d901446efcec307e29"
+  },
+  "parts_sha256": {
+    "base.stl": "7968646c8f65c17aaff19eefbf801226e3dced6db3d7d5469caff5d3658ad518",
+    "lid.stl": "0afa1b515b28f60ecbb747edbc1fe7de0d36183eda9ec23b9df2f81bf9fd51e6",
+    "screw.stl": "aac6d5ae6fe357eadc14fe14237aa1ebe9002b8ea12e8c2dc8bc7b7fe5681dd2",
+    "insert.stl": "d732d50a62801341ddd2e46a1f51ab03f956a14a48e7b7c523e7c8e70368d050",
+    "driver.stl": "fb5f5485a0f50e50698537e5a6fa4d958121aafb8efe801b67fde64d45ac9255",
+    "heat-tool.stl": "abba4f9adfb06fb57a31806d768c8a2929d0f7053bfb76771c067d157947bc29",
+    "board.stl": "1c1268c8af4b1a6c0b07fec07b3b28c6662e5d10c0c1b794c1f1083f31af8f27"
+  },
+  "independent_native_mesh_rebuild": "BYTE_IDENTICAL",
+  "mesh_preflight": "PASS",
+  "gcode_preflight": "PASS",
+  "assembly_review": "PASS",
+  "assembly_review_sha256": "f722959c7cbac897cb35724f098a73b4b3a657b4107e76666514a8895b056c1d",
+  "sampled_geometry": {
+    "assembly_poses": 619,
+    "tool_plan_poses": 947,
+    "collisions": 0,
+    "advisory_result": "WARN",
+    "exemptions": "Only deliberate base/insert heat-set interference.",
+    "limits": "Nominal flush surfaces produce near-gap warnings. Whole-board STL is nonmanifold; supplemented by actual surface and inverse STEP checks."
+  },
+  "independent_fit_checks": {
+    "lid_poses": 54,
+    "screw_entry_and_offset_poses": 180,
+    "base_screw_states": 4,
+    "board_surface_poses": 12,
+    "inverse_step_samples": 2747,
+    "collisions_or_containment_found": 0,
+    "xy_offsets_mm": [
+      -0.2,
+      0,
+      0.2
+    ],
+    "limits": "Finite rigid samples do not measure print tolerances, tilt/warp, actual cable/card/tool fit, usable threads, force, durability or cooling. The valid STEP solid covers 3944 faces; its 950 nonsolid faces retain raw-mesh sampling limits."
+  },
+  "geometry": {
+    "envelope_mm": [
+      84,
+      35.9,
+      20
+    ],
+    "lip_per_side_clearance_mm": 0.4,
+    "pcb_capture_play_mm": 0.48,
+    "side_inlet_area_mm2": 115.2,
+    "top_outlet_area_mm2": 273,
+    "head_bearing_area_mm2_per_screw": 6.17058583
+  },
+  "working_evidence_sha256": {
+    "r5-export-review.json": "dd5dfce61283c3242ece75a450d08f4362a4226993b0cbcb24de8c4953422643",
+    "step-inverse-containment.json": "8640c5268b44555f71109515db4dcbaeea3a030e18582665c64c3e48898d6058",
+    "native-geometry.json": "3e03fcf72f58e0b6820b7c0ee1124322fbf86c5a7e84414b7bcc21eb8773a1c3",
+    "material-audit.json": "0c315be494077ddffe2f89e91324d0325af259df5cf8eac0db5ca01acacfe1fa",
+    "toolpath-audit.json": "ec602a0a6f0dd531cfa0e0a8d936627b15c01d10d0bbd1ec94135c3d2e29216f",
+    "plate-identity.json": "b4006de9c7e5116d2cf06a1e7644eb1503c0c062ebe2a8b87b83e30d80f2b09d"
+  },
+  "physical_validation": "NOT RUN",
+  "print_record": "print.json"
+}

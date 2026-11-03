@@ -1,78 +1,69 @@
 # USB endpoint housing
 
-The case holds one **Radxa ZERO 3E V1.2**. R4 replaces the two rejected
-prints with a rectangular shell, a sliding joint and recessed M3 screws.
-It is a **design candidate, not a released print**. Physical fit and
-strength tests have not been run.
+The case holds one **Radxa ZERO 3E V1.2**. The replacement is a compact
+rectangle with two halves that lower straight together and fasten with four
+recessed M3 screws. It uses the same M3 screw assortment and RX-M3×5.7 heat-set
+inserts as Lacuna.
 
-![R4 rectangular case with recessed screws; nominal CAD preview](../../hardware/usb-housing/r4/preview.png)
+[R5 design and assembly](../../hardware/usb-housing/r5/README.md) ·
+[Assembly guide](../../hardware/usb-housing/r5/assembly.pdf)
 
-[R4 assembly and test plan](../../hardware/usb-housing/r4/README.md) ·
-[Assembly drawings](../../hardware/usb-housing/r4/assembly.pdf)
+![R5 rectangular housing with four recessed screw wells, side inlets and top vents; nominal CAD view](../../hardware/usb-housing/r5/preview.png)
 
-## R4: slots and screws
+## How it closes
 
-The lid lowers into locating slots, then slides into two retaining pockets
-at the back. Two screws at the Ethernet end hold it closed and prevent
-the slide from reversing. Opening reverses that sequence: remove both
-screws, slide the lid back, then lift it off.
+A chamfered lip inside the lid locates it in the base. Lower the lid vertically
+until the mating faces seat, then fit the four screws. To open it, remove the
+screws and lift straight up. The screws hold the case closed; they must never
+be used to force an interfering lid or board into place.
 
-The shell follows the loaded board's rectangular outline. Its fastener
-bosses stay inside the case; there are no projecting ears or turrets.
-The outer dimensions are **76.8 × 35.9 × 20 mm**, including the shell
-around the Ethernet connector's overhang.
-The screws do not pass through the PCB. Internal pads support the board
-and two small locating pegs register it.
+The nominal envelope is **84 × 35.9 × 20 mm**. Four internal fastener bays
+keep the screws clear of the PCB. There are no external ears or towers.
+The added length compared with R4 accommodates the two rear fasteners and
+removes the need for small retaining hooks. The case is for the bare board;
+an added PoE HAT or heatsink needs a separate clearance check.
 
-The hardware is the same type recorded in Lacuna's stock: **M3 socket-head
-screws and RX M3×5.7 heat-set inserts**. R4 uses two M3×8 screws, with
-recessed heads and clearance for a hex driver. Install the inserts in the
-empty base and let it cool before fitting the board.
+Low side inlets remain open on a desk, and top vents let warm air escape.
+Their geometry can be checked before printing; cooling performance requires
+a test with the actual powered board and workload.
 
-The nominal insert profile comes from the
-[Ruthex manufacturer datasheet](https://www.igo3d.com/mediafiles/Sonstiges/Ruthex/ruthex_Datenblatt_RX-Serie.pdf):
-4.6 mm outer diameter, 5.7 mm length and a 4.0 mm pilot hole. The actual
-stock still needs to be matched to that part. Printed-hole shrinkage,
-insert setting and screw fit need physical checks.
+## Assembly checks
 
-## Before another full case print
+The [first R5 print](../../hardware/usb-housing/r5/print.json) contains the
+**complete base and lid**. It was submitted and verified printing: estimated
+21.16 g PLA and 1 hour 36 minutes. Check their fit before
+installing metal parts or the board. Match the inserts to the specified
+RX-M3×5.7 part, set them in the empty base, and let it cool before assembly.
+The guide gives screw length, recess and engagement checks, board orientation,
+cable access and the reverse opening sequence.
 
-The first R4 [joint-test print](../../hardware/usb-housing/r4/print.json)
-was submitted and verified printing. It contains five small test pieces,
-uses an estimated 6.53 g of PLA and takes about 40 minutes. Use the separate
-[joint assembly and test instructions](../../hardware/usb-housing/r4/coupon-assembly.pdf)
-after cooling. A started print does not establish that the joints fit.
-
-Use the same Lacuna mesh, print-support and assembly-clearance tools,
-with the actual R4 geometry. Those checks can find unsupported features
-and modeled collisions. They cannot establish the fit of printed plastic,
-installed inserts or actual cables.
-
-First qualify small samples of the actual joints: the front screw,
-insert and locating slot; then the rear tab and retaining pocket.
-Check screw engagement and head recess, the full slide movement, repeated
-opening and closing, and retention under a measured separating load.
-Only then prepare a complete case for print review. The full case also
-needs board, cable, Ethernet latch and thermal checks before use.
+We use Lacuna's mesh, support, assembly and toolpath checks on the actual
+parts, with an independent review of the assembly guide. These checks do not
+prove the fit or cooling of printed plastic. R5 remains a first physical
+article until its assembly and thermal observations are recorded.
 
 <span id="r3-locating-joint-and-recessed-fasteners"></span>
 <span id="r2-branding"></span>
 <span id="download-and-rebuild"></span>
 <span id="r1r2-assembly-reference"></span>
 
-## Rejected and earlier revisions
+## Rejected revisions
 
-**Do not print R1 or R3 again.** The owner rejected both printed cases;
-the exact failure dimensions were not recorded. Their earlier digital
-approvals do not qualify R4 or establish that those assemblies worked.
-Lacuna's retired-job guard blocks the known rejected meshes and jobs.
+**Do not print R1, R3 or R4 again.** Their earlier digital reviews do not
+establish successful physical assembly. The printer guard blocks the known
+rejected jobs.
 
-| Revision | Status | Record |
+| Revision | Physical result | Record |
 |---|---|---|
-| R3 | Printed; owner reported assembly failure | [Owner result](../../hardware/usb-housing/r3/owner-result.json), [historical assembly guide](../../hardware/usb-housing/r3/README.md) |
-| R2 | Branding revision; not printed | [Native CAD](../../hardware/usb-housing/r2/housing.scad), [digital validation](../../hardware/usb-housing/r2/validation.json) |
+| R4 | Owner reports test pieces do not line up or slot together | [Owner result](../../hardware/usb-housing/r4/owner-result.json), [historical design](../../hardware/usb-housing/r4/README.md) |
+| R3 | Owner reports assembly failure | [Owner result](../../hardware/usb-housing/r3/owner-result.json) |
+| R2 | Branding revision; not printed | [Historical CAD](../../hardware/usb-housing/r2/housing.scad) |
 | R1 | Printed; owner rejected | [Original dispatch record](../../hardware/usb-housing/print.json) |
 
-R1–R3 used M2.5 screws and captive nuts. Their fasteners, projecting lugs
-and bore-cleanup instructions do not apply to R4. The [USB hardware
-design](USB-ENDPOINT.md) describes the two-box product this case belongs to.
+R4 depended on a sideways slide and small retaining hooks. Its separate test
+pieces also had unequal crop boundaries, making the instruction to align their
+outside faces ambiguous. Those are design and instruction weaknesses; the
+exact dimensional cause of the failed printed fit has not been measured.
+R5 replaces that joint and prints the complete halves together.
+
+The [USB hardware design](USB-ENDPOINT.md) describes the two-box product.

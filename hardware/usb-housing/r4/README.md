@@ -1,4 +1,11 @@
-# R4 compact housing — design review
+# R4 compact housing — rejected
+
+**Do not print R4.** The owner reports that the printed test pieces do not
+line up or slot together. The [physical result](owner-result.json) supersedes
+the earlier digital review below. The exact dimensional cause was not measured.
+The replacement uses a straight vertical locating joint and four screws.
+
+## Historical design and review
 
 R4 replaces the two rejected housing prints. It keeps the loaded ZERO 3E
 inside one flat
