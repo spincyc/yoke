@@ -69,7 +69,7 @@
   "physical_validation": "NOT RUN",
   "actual_stock_and_tool_fit": "Match actual insert before heat-setting and actual tools before loading",
   "full_case_print_release": "BLOCKED_PENDING_PHYSICAL_COUPON_RESULTS",
-  "filament_identification": "Printer firmware reports no material type; configured PLA profile used.",
+  "filament_identification": "Status API reported PLA; physical spool label was not independently inspected.",
   "dispatch_ledger": {
     "repository": "spincyc/lacuna",
     "path": "tools/print/dispatch-log.jsonl",

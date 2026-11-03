@@ -71,7 +71,7 @@
     "review/guide-sections.json": "6b8c413eae452769fc6279d49945a67e51ec815480051909d22e82d440afd371",
     "coupon-assembly.pdf": "bccc0fd7dc376bdb1b33d6bf0c02be64bb7ee8469a8ab0e827673f3198850484",
     "coupon_document.py": "8e5252ab90e7165d57344958ea3516f6e69d24c56e8477ab9bb9dce1f1873c29",
-    "print.json": "8109607ab59699500b042acf988ff38275d1bb62dcac7514e8e8af7ea829e7e3"
+    "print.json": "295bcb1a7cc42149edd6314dfb6d575edf728048048e8b2241a8003adb23b9a6"
   },
   "candidate_mesh_sha256": {
     "base.stl": "e129f9ab3b403f9cad1675e245d1474897bc53f06b21e905d604339b026231cd",
