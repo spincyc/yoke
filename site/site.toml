@@ -361,9 +361,20 @@ listed = false
 [[pages]]
 source = "hardware/usb-housing/r6/README.md"
 output = "hardware/usb-housing-r6.html"
-title = "USB PoE housing R6"
+title = "USB PoE housing R6 — superseded"
 section = "Hardware"
-summary = "Vented ZERO 3E and PoE HAT first article with a vertical nesting lid and removable PCB clips; physical fit and cooling remain untested."
+summary = "Printed PoE first article superseded on 2026-11-04 because the owner judged it too large. Do not print."
+layout = "docs"
+nav = "docs"
+parent = "engineering/index.html"
+listed = false
+
+[[pages]]
+source = "hardware/usb-housing/r7/README.md"
+output = "hardware/usb-housing-r7.html"
+title = "USB housings R7"
+section = "Hardware"
+summary = "Compact PoE (device side) and bare (computer side) ZERO 3E first articles sharing one base; physical fit and cooling remain untested."
 layout = "docs"
 nav = "docs"
 parent = "engineering/index.html"

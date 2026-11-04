@@ -1,5 +1,9 @@
 # R6 PoE housing first article
 
+**Superseded 2026-11-04: the owner judged the printed R6 too large. Do not
+print R6 again.** See [R7](../r7/README.md) and the
+[current housing status](../../../doc/design/USB-HOUSING.md).
+
 R6 is designed for the ordered Radxa ZERO 3E 2GB with GPIO
 ([B0CZD1C54N](https://www.amazon.com/dp/B0CZD1C54N)) and Radxa PoE HAT
 ([B0D1KF1L7G](https://www.amazon.com/dp/B0D1KF1L7G)). It has two nesting shell

@@ -1,82 +1,132 @@
 # USB endpoint housing
 
-The current design is **R6: Radxa ZERO 3E plus PoE HAT**, with two nesting
-shell halves and two internal PCB clips. It preserves the supplied conductive
-mounting hardware and insulating sleeves. R5 omitted the HAT and is retired.
+The current design is **R7: two compact boxes on one base design**. The
+device-side box holds a Radxa ZERO 3E with the RA023 PoE HAT. The
+computer-side box holds a bare ZERO 3E powered from the computer's USB-C
+port. R6 was superseded on 2026-11-04 because the owner judged the printed
+R6 too large. R5 omitted the HAT and is retired.
 
-## R6 PoE first article
+## R7 compact first articles
 
-[R6 source and assembly](../../hardware/usb-housing/r6/README.md) ·
-[Assembly guide](../../hardware/usb-housing/r6/assembly.pdf) ·
-[Print record](../../hardware/usb-housing/r6/print.json) ·
+[R7 source and design decisions](../../hardware/usb-housing/r7/README.md) ·
+[Assembly guide](../../hardware/usb-housing/r7/assembly.pdf) ·
+[Digital validation](../../hardware/usb-housing/r7/validation.json) ·
 [Mechanical references](../../hardware/usb-housing/poe-reference.json)
 
-![R6 PoE housing with one Ethernet end opening, one lower USB-C side opening and side/roof ventilation](../../hardware/usb-housing/r6/preview.png)
+![R7 PoE and bare housings: Ethernet end window, one long USB-C side opening, low inlets, side and roof vents; nominal CAD view](../../hardware/usb-housing/r7/preview.png)
 
-R6 passed independent cold review and was submitted once on 2026-11-03; the
-printer verified the exact job as PRINTING. The four-part plate estimates
-46.9 g PLA and about four hours. Physical acceptance remains NOT RUN.
+| Box | Outer size (mm) | Compared with R6 |
+|---|---|---|
+| PoE (device side) | 81.4 × 36.25 × 41.7 | 34% less volume |
+| Bare (computer side) | 81.4 × 36.25 × 18.5 | No R6 counterpart; R6 had only the PoE box |
 
-The enclosure is **89 × 45.5 × 46 mm**. Ethernet exits one end. A single
-**26.2 × 8.2 mm** opening along the lower side serves both USB-C ports.
-The opposite end is closed; HDMI is covered. Fit microSD before seating the
-board, and remove the electronics for card service.
+One print plate carries both boxes: two identical bases, the PoE lid and the
+bare lid. Lacuna's estimate is 44.3 g of PLA and about 3 h 51 min. Each box
+closes with four recessed **M3 × 8** socket-head screws in **RX-M3×5.7**
+inserts. Physical fit and powered cooling are **NOT RUN**. Electronics are
+expected 2026-11-05.
 
-Four pads support clear regions of the lower PCB. Two removable clips limit
-lift with 0.4 mm nominal clearance. No printed peg occupies a conductive
-mounting hole. The HAT fits after the clips are fastened, so neither its
-height nor its upper components determine enclosure retention.
+The plate passed a second independent cold review (the first failed the
+case-screw joint) and Lacuna approval. It was submitted once at
+2026-11-04 20:29:59 UTC and verified PRINTING with the exact filename at
+20:30:08 UTC. See the [print record](../../hardware/usb-housing/r7/print.json).
+Do not resend it; reconcile the existing job.
 
-Four recessed **M3 × 16** socket-head screws enter from underneath and engage
-RX-M3×5.7 heat-set inserts in the lid. Two **M3 × 8** screws and two additional
-inserts hold the clips. Install all six inserts in empty printed parts and
-let them cool before electronics are installed. The lid lowers vertically
-with 0.5 mm clearance per side; screws must never force the halves together.
+**Closure.** The lid lowers vertically over a 1.2 mm base lip, which sits
+below the PCB. Clearance is 0.4 mm per side and engagement is 1.5 mm. Each
+base post stays a solid 7.8 mm ring up to a seat at z = 4.6. The lid post
+bears on that ring over about 29 mm², and the four seats are the only hard
+stops. They leave a 0.3 mm shadow gap at the seam, which screws must never
+close.
 
-Both long sides have vent rows between and above the PCBs; roof slots provide
-upper outlets. Separate low side inlets remain open on a flat desk. The
-vent cuts pass through both the outer wall and inner locating skirt. Nominal
-side openings total 936 mm² between boards and 624 mm² above them; roof
-openings total 1,188 mm². These areas describe geometry, not measured cooling.
-Space is retained for the underside fan in the published model, without
-assuming the purchased HAT includes that fan.
+Heads sit 0.4 mm inside bottom wells. Each head bears on a bridged shelf,
+which four solid layers fuse into the post ring. The clamp runs from head to
+shelf to post ring, then to the seat and the lid insert, without loading
+either PCB.
+
+**Screws.** Two screws sit beside the RJ45 in space R6 did not use. The two
+closed-end posts merge into the end and side walls. An insert boss must lie
+outside the path along which the board stack is lowered, so these posts
+cannot move inside x ≈ 69.2. The [R7 README](../../hardware/usb-housing/r7/README.md#design-decisions)
+explains the constraint and the rejected alternatives.
+
+**Retention.** The SBC underside rests on six component-free edge pads. Lid
+ribs stop 0.4 mm above component-free top edges: on the HAT in the PoE box
+and on the SBC in the bare box. The ribs limit lift without clamping the
+boards. The complete Radxa stack is assembled outside the case and lowered as
+one unit. The case needs no clips.
+
+**Openings.**
+
+- **Ethernet:** one end. The other end is closed.
+- **USB-C:** a single long side opening serves both receptacles. Their faces
+  are 2.15 mm inside the outer wall, so ordinary overmolded plugs seat fully.
+- **HDMI:** covered.
+- **microSD:** changed with the lid off and the board lifted out. The design
+  allows 2.5–3 mm of card projection at the closed end.
+
+**Ventilation.** Low side inlets stay open on a desk. The boxes also have
+side rows and roof slots. Geometric open area is 2,270 mm² for PoE and
+1,511 mm² for bare. These areas are not cooling measurements.
 
 ## Reference limits and acceptance
 
 The ordered board is [ZERO 3E 2GB with GPIO, B0CZD1C54N](https://www.amazon.com/dp/B0CZD1C54N),
 and the HAT is [Radxa B0D1KF1L7G](https://www.amazon.com/dp/B0D1KF1L7G).
-The owner says neither has arrived and expects them Thursday. On 2026-11-03
-the owner explicitly requested a computed housing now. R6 therefore proceeds
-as a nominal first article; complete physical fit and powered cooling are
-**NOT RUN**.
-
 The [official assembly CAD](https://dl.radxa.com/zero3/docs/hw/3e/rs109_ra023.stp.zip)
-places facing PCBs 18 mm apart; Radxa's
+places facing PCBs 18 mm apart. Radxa's
 [product specification](https://radxa.com/products/accessories/zero-3e-poe-hat/)
-lists 14.5 mm pillars. Catalog photos show a fanless X1.0 HAT, while the
-published assembly includes a fan. These discrepancies remain recorded.
-The source model is kept unchanged; R6 does not claim that its spacing or
-complete height is a measured upper bound for the delivered parts.
+lists 14.5 mm pillars. R7 follows the 18 mm CAD with 1.0 mm roof clearance.
+Only the PoE lid depends on that gap. If the delivered stack differs, change
+`hat_gap` and reprint that lid; the base stays the same.
 
-At the reference placement, the tallest modeled component has 3.5 mm roof
-clearance. Diameter-8 corner reservations allow mounting hardware; card and
-cable reservations account for parts absent from the source. These are
-explicit design allowances. Additional heatsinks or wiring must fit inside
-the available space and clear the vents. The lower-PCB retention avoids the
-need to clamp against unknown HAT heights or screw heads.
+Catalog photos show a fanless X1.0 HAT, while the published assembly includes
+a fan. The fan fits between the boards, so it needs no extra envelope.
 
 Follow [Radxa's assembly instructions](https://docs.radxa.com/en/zero/zero3/accessories/3e-poe-hat)
-for the electrically required metal screws and insulated copper pillars.
-Enclosure screws are separate. On arrival, inspect the unpowered complete
-assembly first, then check cable access and ten opening/closing cycles.
-Powered testing compares sustained-load temperatures with the lid open and
-closed; throttling, resets, loose electrical mounting or softened plastic
-are stop conditions. Digital clearance checks cannot pass these physical tests.
+for the metal screws and insulated copper pillars. They carry PoE voltage. No
+case fastener substitutes for them, and no metal path from them reaches the
+outside. The bare box treats its mounting holes the same way. Those holes
+remain wired to the RJ45 centre taps, so nothing enters them.
+
+On arrival, the first checks are unpowered:
+
+- empty fit of each lid;
+- the complete board fit;
+- cable seating;
+- ten service cycles.
+
+Powered testing then compares sustained-load temperatures with the lid open
+and closed. Throttling, resets and softened plastic are stop conditions, as
+is case surface above a provisional 45 °C. Digital clearance checks cannot
+pass these physical tests.
+
+## Superseded R6 PoE first article
+
+[R6 source and assembly](../../hardware/usb-housing/r6/README.md) ·
+[Assembly guide](../../hardware/usb-housing/r6/assembly.pdf) ·
+[Print record](../../hardware/usb-housing/r6/print.json)
+
+**Superseded 2026-11-04: the owner judged the printed R6 too large.** It
+measured 89 × 45.5 × 46 mm. Most of the excess came from three places:
+
+- 12.7 mm at the closed end for case-screw and clip bosses;
+- a 7.5 mm USB-side gap for a clip boss, which left the USB-C faces 9.5 mm
+  inside the wall;
+- 3.5 mm of roof headroom.
+
+R6 passed independent cold review and was submitted once on 2026-11-03; the
+printer reported the exact job as PRINTING. It used two shell halves, two
+screw-retained PCB edge clips and four M3 × 16 case screws. Its physical
+acceptance was not run. Do not print R6 again.
 
 ## Historical R5 bare-board article
 
 [R5 design and assembly](../../hardware/usb-housing/r5/README.md) ·
 [Assembly guide](../../hardware/usb-housing/r5/assembly.pdf)
+
+R5 was retired on 2026-11-03 because the device-side box needs the PoE HAT.
+The R7 bare box now covers the computer-side, bare-board role.
 
 ![R5 rectangular housing with four recessed screw wells, side inlets and top vents; nominal CAD view](../../hardware/usb-housing/r5/preview.png)
 
@@ -119,12 +169,13 @@ article until its assembly and thermal observations are recorded.
 
 ## Rejected revisions
 
-**Do not print R1, R3, R4 or R5 again.** Their earlier digital reviews do not
-establish successful physical assembly. The printer guard blocks the known
-rejected jobs.
+**Do not print R1, R3, R4, R5 or R6 again.** Their earlier digital reviews do not
+establish successful physical assembly. The printer guard blocks the R1–R6
+jobs (Lacuna `tools/print/retired-jobs.d/`).
 
 | Revision | Physical result | Record |
 |---|---|---|
+| R6 | Printed; owner judged it too large (2026-11-04) | [Print record](../../hardware/usb-housing/r6/print.json), [R7 comparison](../../hardware/usb-housing/r7/README.md#where-the-space-went) |
 | R5 | Physical fit not observed; design omits required PoE HAT | [Print record](../../hardware/usb-housing/r5/print.json), [PoE reference](../../hardware/usb-housing/poe-reference.json) |
 | R4 | Owner reports test pieces do not line up or slot together | [Owner result](../../hardware/usb-housing/r4/owner-result.json), [historical design](../../hardware/usb-housing/r4/README.md) |
 | R3 | Owner reports assembly failure | [Owner result](../../hardware/usb-housing/r3/owner-result.json) |

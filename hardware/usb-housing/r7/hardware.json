@@ -1,0 +1,42 @@
+{
+  "revision": "R7",
+  "status": "NOMINAL_OWNER_STOCK_PROFILE",
+  "insert": {
+    "stock_id": "threaded-inserts-rx-m3x5p7",
+    "owner_label": "RX M3 x 5.7",
+    "quantity": 8,
+    "quantity_per_housing": 4,
+    "outside_diameter_mm": 4.6,
+    "length_mm": 5.7,
+    "pilot_diameter_mm": 4.0,
+    "lead_in_diameter_mm": 3.9,
+    "manufacturer_minimum_wall_mm": 1.6,
+    "product_code": "GE-M3x57-001",
+    "authority": "Owner-selected existing Lacuna stock profile; RX-M3x5.7 manufacturer nominal dimensions. Actual stock measurements and physical fit remain untested.",
+    "source": "https://www.ruthex.de/products/ruthex-gewindeeinsatz-m3-100-stuck-rx-m3x5-7-messing-gewindebuchsen",
+    "datasheet": "https://www.igo3d.com/mediafiles/Sonstiges/Ruthex/ruthex_Datenblatt_RX-Serie.pdf"
+  },
+  "screw": {
+    "stock_set": "FGRUH 750-piece M3 socket-head alloy-steel assortment",
+    "quantity": 8,
+    "quantity_per_housing": 4,
+    "under_head_length_mm": 8,
+    "head_diameter_envelope_mm": 6,
+    "head_height_envelope_mm": 3,
+    "authority": "M3 x 8 is part of the owner-confirmed Lacuna M3 socket-head stock (M3x8, M3x16 and M3x20); it was used for R5. Nominal maximum head envelope diameter 6 x height 3. Count and inspect before assembly. M3 x 16 and M3 x 20 are too long for this joint."
+  },
+  "physical_validation": "NOT RUN",
+  "print_scope": "Two compact housing first articles on one plate: two identical bases, one PoE lid (ZERO 3E + RA023 HAT, device side) and one bare lid (ZERO 3E only, computer side). Unloaded shell fit can be checked first; complete modules, cable fit and powered cooling remain NOT RUN.",
+  "poe_mounting": {
+    "quantity_pillars": 4,
+    "quantity_screws": 8,
+    "description": "Use the Radxa-supplied insulated copper pillars and CM2.5x4 screws. They carry PoE voltage (up to 57 V): keep them installed, tightened and insulated. No case fastener substitutes for them and no metal path reaches the outside.",
+    "modeling": "No claim of measured head/pillar dimensions. The case keeps diameter-8 reservations clear: below the SBC from 4 mm below its underside, between the boards, and to 4 mm above the HAT PCB at the 18 mm source spacing. The base also keeps a diameter-8.2 keepout above its floor at each mounting axis. These are design allowances, not hardware nominal dimensions.",
+    "physical_validation": "NOT RUN"
+  },
+  "bare_mounting": {
+    "description": "Computer-side ZERO 3E without HAT. Its mounting holes remain wired to the RJ45 centre taps, so the case leaves them empty: no printed peg, case fastener or other metal enters or touches them.",
+    "physical_validation": "NOT RUN"
+  },
+  "not_required": "No clips, clip screws, standoffs, nylon screws or other hardware beyond eight M3 x 8 screws, eight RX-M3x5.7 inserts and the Radxa-supplied PoE HAT kit."
+}

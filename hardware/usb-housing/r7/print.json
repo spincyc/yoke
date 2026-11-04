@@ -1,0 +1,69 @@
+{
+ "schema": "yoke.usb-housing-print/1",
+ "revision": "R7",
+ "kind": "COMPACT_POE_AND_BARE_FIRST_ARTICLES_ONE_PLATE",
+ "state": "SUBMITTED_AND_PRINTING_VERIFIED",
+ "printer_model": "FlashForge Adventurer 5M",
+ "printer_firmware": "5.1.8",
+ "job_filename": "yoke-usb-housing-r7.gcode",
+ "stl_sha256": "271bf994c4809f1edcd85ca1ec822ac8111cc7efc56979e8c0e4308e491f82be",
+ "gcode_sha256": "8f0488b223826bc4380e2afeaaf8604ba9459697908163c6e3d5a0b873721a57",
+ "toolpath_sha256": "21ec7cbca54ebca3271e829f3b8a4cc563f3a33233e4b796423e3abdf8786779",
+ "estimated_filament_g": 44.32,
+ "estimated_time": "3h51m04s plus preparation",
+ "material_profile": "Flashforge Generic PLA",
+ "layers": 189,
+ "supports": "DISABLED",
+ "bed_levelling": true,
+ "printed_parts": [
+  "poe-base",
+  "bare-base",
+  "poe-lid",
+  "bare-lid"
+ ],
+ "housing_dimensions_mm": {
+  "poe": [
+   81.4,
+   36.25,
+   41.7
+  ],
+  "bare": [
+   81.4,
+   36.25,
+   18.5
+  ]
+ },
+ "hardware": "Per box: four M3x8 case screws and four RX-M3x5.7 lid inserts. PoE box also uses the Radxa-supplied four insulated copper pillars and eight CM2.5x4 screws; the bare box leaves its mounting holes empty.",
+ "instructions": "assembly.pdf",
+ "assembly_pdf_sha256": "ef5d3416a2707d7c3612ca061c2de4bb79abbe2fb5eb3bcedd2dda5828b036e0",
+ "design_source_sha256": {
+  "build.py": "127252351cb56af9e5ae2423e48d44881b357bfc290a75af550d1915600458b7",
+  "check_access.py": "de10f3c3f9713d8472c7223d613e325e05b8590ff0f70ad76750cca8216852d8",
+  "check_joint.py": "61c988b4ef2dc5c57092a80ad7ca80c7e65b030a4128acd2d4a0218aba429833",
+  "check_toolpaths.py": "24e7bb302390af0f1dd126e595fa0572b90b1082d97f44927839ebe1852da2d7",
+  "document.py": "c2841964f01370343f7b27daab8ecc3b0b0fb42c51b19363d69e007695c1f9de",
+  "hardware.json": "da21ada95371659a64ad7d1afa1a10cbd47a96ec0f83149d664e0083ac84a599",
+  "housing.scad": "859122cc4a1fab94848a1e21b4834823253ed2cfa1cece60920f00746a1a483f"
+ },
+ "assembly_packet_sha256": "57d57b4d79cfb02436aa1e358c55cbfe9d501279a13cf61333650c434a911e6e",
+ "assembly_review_sha256": "494595f9477e46be087daaf907a33283196dbbb350c5f431a47561b53459ab66",
+ "independent_reviewer": "r7_cold_design_independent",
+ "review_history": "First independent review FAILED (case-screw spigots joined to the base by one unbridged layer; 3.09 mm2 stops). Fixed with fused post rings, real bridge layers and 29.3 mm2 seats; second independent review PASS.",
+ "approval_result": "PASS",
+ "approval_sha256": "3f86bd56220a1a53f037d181ab602722c760937025d6e4c3f856784bedfaaafa",
+ "geometry_advisory": "NOT RUN at approval (runtime absent); author's sampled run: 0 collisions, 25 designed near-contacts",
+ "dispatch_attempted": true,
+ "dispatch_attempt_count": 1,
+ "dispatch_outcome": "STARTED_AND_FILENAME_VERIFIED",
+ "submitted_at": "2026-11-04T20:29:59Z",
+ "acknowledged_at": "2026-11-04T20:30:08Z",
+ "physical_validation": "NOT RUN",
+ "physical_test_scope": "Unloaded shell fit and seam gap 0.15-0.45 mm; insert and screw fit with no post-ring or shelf rotation; measured HAT gap 17.7-18.3 mm else reprint only the PoE lid; complete electronics installation; USB-C and RJ45 cable seating; ten service cycles; sustained powered cooling.",
+ "dispatch_ledger": {
+  "path": "lacuna/tools/print/dispatch-log.jsonl",
+  "matching_rows_sha256": "3f3df0c9a6ec479ce9a6cb73318b3c00d906ad208958b584cb0d00e709247b29",
+  "matching_row_count": 2,
+  "matching_rows_sha256_method": "Exact matching UTF-8 JSONL bytes in ledger order, including LF."
+ },
+ "repeat_policy": "One authorized start consumed. Reconcile this job; never automatically resend or reauthorize."
+}

@@ -1,0 +1,124 @@
+{
+  "schema": "yoke.housing-validation/1",
+  "revision": "R7",
+  "scope": "Nominal compact PoE (device side) and bare (computer side) housing first articles on one plate; ordered hardware has not arrived.",
+  "owner_direction": "2026-11-04: R6 as printed is too large; make a compact PoE housing and a bare ZERO 3E housing for the USB-C-powered computer-side box.",
+  "revision_history": [
+    "2026-11-04 first R7 packet failed independent cold review: each spigot joined the base only through one 0.2 mm bridged layer over the head well (about 4.4 mm2), and the seat bore on about 3.1 mm2. Replaced by a solid diameter-7.8 base post ring fused through four full layers above the two bridge layers, seating the lid post at Z 4.6 over about 29 mm2."
+  ],
+  "dimensions_mm": {
+    "poe": [
+      81.4,
+      36.25,
+      41.7
+    ],
+    "bare": [
+      81.4,
+      36.25,
+      18.5
+    ],
+    "r6_poe": [
+      89,
+      45.5,
+      46
+    ],
+    "poe_volume_reduction_vs_r6": 0.339
+  },
+  "plate_sha256": "271bf994c4809f1edcd85ca1ec822ac8111cc7efc56979e8c0e4308e491f82be",
+  "gcode_sha256": "8f0488b223826bc4380e2afeaaf8604ba9459697908163c6e3d5a0b873721a57",
+  "toolpath_sha256": "21ec7cbca54ebca3271e829f3b8a4cc563f3a33233e4b796423e3abdf8786779",
+  "packet_sha256": "57d57b4d79cfb02436aa1e358c55cbfe9d501279a13cf61333650c434a911e6e",
+  "release_sha256": "de03b6cd09f0570ab68f22f8586ccf9e5a0954deb3a2977eb8f99fd1bcfd5df4",
+  "estimate": {
+    "filament_g": 44.32,
+    "time": "3h51m4s plus preparation",
+    "layers": 189,
+    "profile": "OrcaSlicer 2.4.2, Flashforge Adventurer 5M 0.4, 0.20mm Standard, Flashforge Generic PLA, supports disabled"
+  },
+  "physical_validation": "NOT RUN",
+  "checks": [
+    {
+      "id": "case_screw_joint",
+      "result": "PASS",
+      "record_sha256": "42b6ab0f9ebc59620a159594cd40b07557f47bbaa125dcfb5e5c506393c053d6",
+      "method": "check_joint.py sections the base at every printed layer from the head bearing (Z 3.4) to the seat (Z 4.6) on all four axes: two sacrificial bridge layers, then 4 fused full layers with the ring r 1.9-3.8 mm completely solid; unbridged post wall at the shelf >= 23.25 mm2. Seat contact (base top face against each lid's bottom face) >= 29.33 mm2 per post; no lid material below the seat."
+    },
+    {
+      "id": "screw_seat_toolpaths",
+      "result": "PASS",
+      "record_sha256": "8b4b90c4a9f2fc4f385e66eeb78cff4b52d72d37f2eecb948ad0ee9000c43b61",
+      "method": "Exact G-code at all eight head shelves: slot layer printed as slicer Bridge (>= 12 bridge segments, >= 13.3 mm over each well), square layer Bridge (>= 5 segments, >= 9.0 mm), bridge speed [25.0] mm/s with fan ['M106 S255']; then 4 solid fused layers (0 bridge segments) to the seat. Physical bridge strength NOT RUN."
+    },
+    {
+      "id": "native_reference_clearance",
+      "result": "PASS",
+      "record_sha256": "21989fbb94ae009f7f9ebfde993e027fb61e010914ca7164523c6234999ff0c2",
+      "method": "Base, PoE lid and bare lid sewn into valid OCCT solids in assembled position and intersected with the complete official RS109_RA023 STEP (SBC child for the bare box): zero volume and zero area. Minimum distances: PoE lid to HAT minimum distance 0.389 mm, PoE lid to SBC minimum distance 0.387 mm, bare lid to SBC minimum distance 0.387 mm."
+    },
+    {
+      "id": "assembly_insertion",
+      "result": "PASS",
+      "record_sha256": "21989fbb94ae009f7f9ebfde993e027fb61e010914ca7164523c6234999ff0c2",
+      "method": "Continuous 60 mm OCCT prism sweeps: complete stack lowered into the base (SBC and HAT children), PoE lid lowered over the complete assembly, bare lid lowered over the SBC, both lids lowered onto the base. All zero volume and area."
+    },
+    {
+      "id": "hardware_reserves",
+      "result": "PASS",
+      "record_sha256": "a0a70eff004713ad9dad88d1b7659024bb62a246b892a3fae0145f8bfb767309",
+      "method": "Diameter-8 Radxa reservations below the SBC, between the boards and above the HAT clear every printed part; nearest approach 0.1 mm by design. Reserves are not measured factory hardware."
+    },
+    {
+      "id": "insert_walls",
+      "result": "PASS",
+      "record_sha256": "a0a70eff004713ad9dad88d1b7659024bb62a246b892a3fae0145f8bfb767309",
+      "method": "For all eight lid inserts the annulus from the 4.6 mm insert OD to radius 3.85 mm over the insert length lies entirely inside the lid (wall >= 1.55 mm after tessellation; 1.6 mm nominal)."
+    },
+    {
+      "id": "cable_card_and_vent_allowances",
+      "result": "PASS",
+      "record_sha256": "a0a70eff004713ad9dad88d1b7659024bb62a246b892a3fae0145f8bfb767309",
+      "method": "147 checks: 12.5 x 7.5 USB-C overmold sweeps and full RJ45 jack-face sweeps for both boxes; nominal and expanded microSD allowances; every side, low-inlet and roof aperture open through wall, lip and base. Low inlets sit between the edge pads; the PoE rear inter-board row keeps only the two slots clear of the HAT GPIO header. Geometric open area 2269.5 mm2 PoE and 1511.4 mm2 bare; no airflow claim."
+    },
+    {
+      "id": "mesh_and_gcode",
+      "result": "PASS",
+      "record_sha256": "b7a795bcb13e0e35d146ce66b96506eca1105ac0afa54df38714a65ea6ce34c3",
+      "method": "Lacuna slice: four closed bodies, bed contact, every layer supported with declared bridge spans (6.2 mm head wells, 3.0 mm vents), 189 layers, supports disabled, exact mesh/job and thumbnail binding. Prepared-job dispatch dry run repeated mesh and G-code preflight PASS with ASSEMBLY_RELEASE=BLOCKED."
+    },
+    {
+      "id": "sampled_assembly",
+      "result": "WARN",
+      "record_sha256": "f6f16fc7eb4d106cb1c4fda1c6055bc48a85cc4222006b72a1e7c922d92e071d",
+      "method": "Lacuna sampled check of geometry-plan.json (sha256 1edf29279ee43c4533815725bed261bca1850455569e24c70fbe9aaef41cbb49): 3244 poses, 0 collisions, 25 designed near contacts (post seats, screw bearing and bore, 0.1 mm reserve margins). The official SBC mesh is nonmanifold and unreadable there; the native-STEP checks supplement it."
+    },
+    {
+      "id": "release_bookkeeping",
+      "result": "PASS",
+      "record_sha256": "de03b6cd09f0570ab68f22f8586ccf9e5a0954deb3a2977eb8f99fd1bcfd5df4",
+      "method": "Lacuna assembly_preflight passed every packet check before the review binding (plate-to-part triangle identity, inventory, joints, steps, page and input references); its only error is the intentionally absent review.json. Lacuna's renderer reproduced all six reviewed page hashes within the 18 pt margins."
+    },
+    {
+      "id": "printable_guide",
+      "result": "PENDING_REVIEW",
+      "record_sha256": "164d8ff9f6fd4fb60c57d3f380af86ea75fbfc241bd16736ffb254e9040c79f3",
+      "method": "Six monochrome Letter pages generated from the exact STL meshes; author-inspected rendered pages; independent page review required before release."
+    }
+  ],
+  "limits": [
+    "The source 18 mm PCB gap conflicts with the listed 14.5 mm pillars. Only the PoE lid depends on it; accept a measured gap of 17.7-18.3 mm, otherwise set hat_gap and reprint that lid.",
+    "Retention: the SBC rests on edge pads and lid ribs stop 0.4 mm above component-free top edges. Nothing clamps a PCB or loads the conductive pillars.",
+    "Acceptance after snugging: seam shadow gap 0.15-0.45 mm on every side; heads at or below the floor face; no shelf or post ring movement.",
+    "No digital result establishes printed tolerance, usable threads, shelf strength, cable or card fit, durability or powered cooling.",
+    "Inspect unpowered hardware on arrival, then run ten service cycles, then compare open and closed thermal runs."
+  ],
+  "independent_cold_review": {
+    "result": "PENDING",
+    "scope": "PREPRINT_ASSEMBLY_REVIEW",
+    "physical_validation": "NOT RUN",
+    "prior": "First R7 packet failed on the case-screw joint; this packet answers that finding."
+  },
+  "verification": {
+    "yoke_make_verify": "PASS: 1736 tests, 10 optional firmware skips, 61 documentation pages",
+    "lacuna_changes": "none"
+  }
+}
