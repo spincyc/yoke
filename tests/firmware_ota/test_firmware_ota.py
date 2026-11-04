@@ -79,32 +79,75 @@ def upload_binary(tmp_path_factory: pytest.TempPathFactory) -> Path:
         "journal",
         "clock",
         "selection",
+        "journal-codec",
+        "health",
+        "restart-guard",
+        "fail-health",
+        "probe",
     ],
 )
 def test_upload_outcomes(upload_binary: Path, fault: str) -> None:
+    """Upload faults plus the boot/restart policy (see host_upload.c modes):
+    journal-codec (versioned journal, legacy migration, unknown versions),
+    health (confirmation gate), restart-guard and fail-health (IR frames
+    finish before any planned restart or rollback; confirmed images stay)."""
     subprocess.run([str(upload_binary), fault], check=True, capture_output=True)
 
 
 def test_partition_boundaries() -> None:
-    """OTA slots never overlap the preserved application/trust partitions."""
+    """Commissioning geometry: no overlap, 16 MiB, preserved trust/app NVS and
+    OTA slots, plus core dump and IR code storage reserved before devices
+    are commissioned (OTA can never change this table)."""
     import csv
 
     partitions: dict[str, tuple[int, int]] = {}
+    kinds: dict[str, tuple[str, str]] = {}
     with (ROOT / "firmware/esp32/partitions.csv").open() as stream:
         for row in csv.reader(line for line in stream if not line.startswith("#")):
             if not row:
                 continue
-            partitions[row[0].strip()] = (
-                int(row[3].strip(), 0),
-                int(row[4].strip(), 0),
-            )
+            name = row[0].strip()
+            partitions[name] = (int(row[3].strip(), 0), int(row[4].strip(), 0))
+            kinds[name] = (row[1].strip(), row[2].strip())
     ordered = sorted(partitions.values())
     for (offset, size), (next_offset, _) in pairwise(ordered):
         assert offset + size <= next_offset
+    assert all(offset % 0x1000 == 0 and size % 0x1000 == 0 for offset, size in ordered)
     assert ordered[-1][0] + ordered[-1][1] <= 16 * 1024 * 1024
-    assert partitions["ota_0"][1] == partitions["ota_1"][1] == 6 * 1024 * 1024
+    assert partitions["ota_0"] == (0x30000, 6 * 1024 * 1024)
+    assert partitions["ota_1"] == (0x630000, 6 * 1024 * 1024)
     assert partitions["otatrust"] == (0x19000, 0x10000)
     assert partitions["nvs"] == (0x9000, 0x10000)
+    assert kinds["coredump"] == ("data", "coredump")
+    assert partitions["coredump"][1] >= 0x40000
+    assert kinds["ircodes"] == ("data", "nvs")
+    assert partitions["ircodes"][1] >= 0x100000
+    sdkconfig = (ROOT / "firmware/esp32/sdkconfig.defaults").read_text()
+    assert "CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y" in sdkconfig
+    assert "CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y" in sdkconfig
+
+
+def test_firmware_safety_configuration() -> None:
+    """Review findings encoded as configuration: the task watchdog panics,
+    IR output survives OTA flash writes, and the IR task/HTTPS server are
+    watched (their code subscribes; see ir_service.c and yoke_ota.c)."""
+    config = (ROOT / "firmware/esp32/sdkconfig.defaults").read_text().splitlines()
+    for line in (
+        "CONFIG_ESP_TASK_WDT_EN=y",
+        "CONFIG_ESP_TASK_WDT_INIT=y",
+        "CONFIG_ESP_TASK_WDT_PANIC=y",
+        "CONFIG_RMT_TX_ISR_CACHE_SAFE=y",
+        "CONFIG_RMT_RX_ISR_CACHE_SAFE=y",
+    ):
+        assert line in config
+    timeout = next(v for v in config if v.startswith("CONFIG_ESP_TASK_WDT_TIMEOUT_S="))
+    assert int(timeout.split("=")[1]) > 10  # longer than the TLS handshake deadline
+    ir_service = (ROOT / "firmware/esp32/components/yoke_ir/ir_service.c").read_text()
+    updater = (ROOT / "firmware/esp32/components/yoke_ota/yoke_ota.c").read_text()
+    assert "esp_task_wdt_add(NULL)" in ir_service
+    assert "esp_task_wdt_add_user" in updater and "httpd_queue_work" in updater
+    fragment = (ROOT / "firmware/esp32/components/yoke_ir/linker.lf").read_text()
+    assert "ir_encode (noflash)" in fragment
 
 
 def test_unique_local_credentials(tmp_path: Path) -> None:

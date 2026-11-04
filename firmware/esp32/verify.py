@@ -22,7 +22,10 @@ SCRATCH = ROOT / ".scratch/esp32-ota"
 IDF = SCRATCH / "esp-idf"
 IDF_TAG = "v5.5.6"
 IDF_COMMIT = "880a203ae603d08a94d06aa01e0d6761958e5e9e"
-MINIMUM_TESTS = 34
+MINIMUM_TESTS = 132
+# ESP32-S3 internal SRAM instruction bus; flash-mapped code is 0x42xxxxxx.
+IRAM = range(0x40370000, 0x403E0000)
+ISR_SYMBOLS = ("ir_tx_fill", "ir_tx_extend", "__wrap_esp_panic_handler")
 
 
 def run(command: list[str], env: dict[str, str], *, capture: bool = False) -> str:
@@ -166,6 +169,21 @@ def require_complete_report(report: Path) -> int:
     return len(cases)
 
 
+def require_iram(link_map: Path) -> None:
+    """The RMT encoder runs from the TX ISR while OTA flash writes disable
+    the cache: its code must be linked into internal IRAM."""
+    addresses = {}
+    for line in link_map.read_text().splitlines():
+        fields = line.split()
+        if len(fields) == 2 and fields[0].startswith("0x") and fields[1] in ISR_SYMBOLS:
+            addresses[fields[1]] = int(fields[0], 16)
+    for symbol in ISR_SYMBOLS:
+        if symbol not in addresses:
+            raise RuntimeError(f"{symbol} missing from the link map")
+        if addresses[symbol] not in IRAM:
+            raise RuntimeError(f"{symbol} is not linked into IRAM")
+
+
 def verify(env: dict[str, str], python: Path, jobs: int) -> None:
     print(
         "[firmware] Building pinned host mbedTLS and running every firmware test",
@@ -193,6 +211,7 @@ def verify(env: dict[str, str], python: Path, jobs: int) -> None:
             "-m",
             "pytest",
             "tests/firmware_ota",
+            "tests/firmware_ir",
             "-ra",
             f"--basetemp={SCRATCH / 'verify-pytest'}",
             f"--junitxml={report}",
@@ -204,6 +223,9 @@ def verify(env: dict[str, str], python: Path, jobs: int) -> None:
         f"[firmware] {count} tests passed with no skips; compiling ESP32-S3", flush=True
     )
     build = SCRATCH / "build"
+    # ESP-IDF applies sdkconfig.defaults only to symbols missing from an
+    # existing sdkconfig; regenerate it so the committed defaults are built.
+    (SCRATCH / "sdkconfig").unlink(missing_ok=True)
     run(
         [
             "bash",
@@ -232,6 +254,7 @@ def verify(env: dict[str, str], python: Path, jobs: int) -> None:
             "Target must compile exactly the generated SDK deadline adapter"
         )
     check_sdk(env)
+    require_iram(build / "yoke-ir-updater.map")
     image = (build / "yoke-ir-updater.bin").read_bytes()
     if not 288 <= len(image) <= 6 * 1024 * 1024:
         raise RuntimeError("App image does not fit the dual-OTA partition contract")

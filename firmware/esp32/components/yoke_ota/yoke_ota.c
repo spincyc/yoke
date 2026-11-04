@@ -12,9 +12,14 @@
 #include "esp_app_desc.h"
 #include "esp_https_server.h"
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 #include "esp_ota_ops.h"
 #include "esp_system.h"
+#include "esp_task_wdt.h"
 #include "esp_timer.h"
+#if CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH
+#include "esp_core_dump.h"
+#endif
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "mbedtls/sha256.h"
@@ -38,22 +43,21 @@
 #define TRUST_PARTITION "otatrust"
 #define HEALTH_US (60LL * 1000000)
 #define UPLOAD_US (120LL * 1000000)
-#define JOURNAL_MAGIC 0x594f5401U
-
-typedef struct {
-    uint32_t magic;
-    uint32_t target_address;
-    uint32_t pending;
-    char digest[65];
-    char version[33];
-    char state[24];
-    char error[80];
-} journal_t;
+#define REBOOT_DELAY_US 2000000
+#define WDT_PROBE_US 2000000
+#define JOURNAL_KEY "journal2"
+#define LEGACY_JOURNAL_KEY "journal"
 
 static const char *TAG = "yoke-ota";
 static nvs_handle_t trust;
 static SemaphoreHandle_t lock;
-static journal_t journal;
+static yoke_journal_t journal;
+static uint32_t boot_count;
+static void (*restart_guard)(void);
+static void (*status_hook)(cJSON *body);
+static esp_task_wdt_user_handle_t wdt_user;
+static esp_timer_handle_t probe_timer;
+static volatile bool probe_outstanding;
 static bool initialized, pending_verify;
 static httpd_handle_t server;
 static esp_timer_handle_t health_timer, reboot_timer;
@@ -73,10 +77,37 @@ static void state(const char *value, const char *error)
 
 static esp_err_t save_journal(void)
 {
-    journal.magic = JOURNAL_MAGIC;
-    esp_err_t err = nvs_set_blob(trust, "journal", &journal, sizeof(journal));
+    uint8_t blob[YOKE_JOURNAL_BLOB_MAX];
+    size_t size = yoke_ota_journal_encode(&journal, blob, sizeof(blob));
+    esp_err_t err = size ? nvs_set_blob(trust, JOURNAL_KEY, blob, size) : ESP_ERR_INVALID_SIZE;
     if (err == ESP_OK) err = nvs_commit(trust);
     return err;
+}
+
+/* Read the versioned journal, or migrate 0.1.0's record once. Journal
+ * problems never fail boot: the record is evidence, not trust. Returns a
+ * note for status when evidence had to be discarded. */
+static const char *load_journal(void)
+{
+    uint8_t blob[YOKE_JOURNAL_BLOB_MAX];
+    size_t size = sizeof(blob);
+    memset(&journal, 0, sizeof(journal));
+    esp_err_t err = nvs_get_blob(trust, JOURNAL_KEY, blob, &size);
+    if (err == ESP_OK) {
+        yoke_journal_result_t result = yoke_ota_journal_decode(blob, size, &journal);
+        if (result == YOKE_JOURNAL_OK) return NULL;
+        memset(&journal, 0, sizeof(journal));
+        return result == YOKE_JOURNAL_UNKNOWN_VERSION ? "journal-version-unknown-reset"
+                                                      : "journal-corrupt-reset";
+    }
+    if (err != ESP_ERR_NVS_NOT_FOUND) return "journal-unreadable-reset";
+    size = sizeof(blob);
+    err = nvs_get_blob(trust, LEGACY_JOURNAL_KEY, blob, &size);
+    if (err == ESP_ERR_NVS_NOT_FOUND) return NULL;
+    if (err == ESP_OK && yoke_ota_journal_decode_legacy(blob, size, &journal) == YOKE_JOURNAL_OK)
+        return NULL;
+    memset(&journal, 0, sizeof(journal));
+    return "legacy-journal-unreadable-reset";
 }
 
 static esp_err_t save_clock(void)
@@ -138,10 +169,50 @@ static esp_err_t validate_trust(void)
     return ret ? ESP_ERR_INVALID_ARG : ESP_OK;
 }
 
+/* Every planned restart lets the application finish physical output
+ * first (IR frames must never be cut by a reboot) and records the clock. */
 static void restart(void *arg)
 {
     (void)arg;
+    if (restart_guard) restart_guard();
+    (void)save_clock();
     esp_restart();
+}
+
+static void wdt_feed(void)
+{
+    if (wdt_user) (void)esp_task_wdt_reset_user(wdt_user);
+}
+
+/* The HTTPS server task blocks in select(), so it cannot feed the task
+ * watchdog itself. A periodic probe queued to that task feeds a TWDT user
+ * only when the task actually runs it: a wedged server panics and leaves a
+ * core dump. TLS handshakes (<= 10 s) stay below the 15 s timeout. */
+static void probe_work(void *arg)
+{
+    (void)arg;
+    probe_outstanding = false;
+    wdt_feed();
+}
+
+/* At most one probe is queued: httpd's control queue is small and shared
+ * with session-close requests, which must never be crowded out. */
+static void probe(void *arg)
+{
+    (void)arg;
+    if (!server || probe_outstanding) return;
+    probe_outstanding = true;
+    if (httpd_queue_work(server, probe_work, NULL) != ESP_OK) probe_outstanding = false;
+}
+
+/* Strong definition of the weak hook in the generated ESP-TLS handshake
+ * override (prepare_tls.py): a handshake is bounded by its own absolute
+ * deadline, so its wait loop proves the server task is alive. Without this
+ * an unauthenticated peer stalling handshakes back to back could starve
+ * the probe for longer than the watchdog timeout. */
+void yoke_tls_handshake_tick(void)
+{
+    wdt_feed();
 }
 
 static void health_expired(void *arg)
@@ -220,15 +291,7 @@ esp_err_t yoke_ota_init(void)
     if (err == ESP_OK) err = load_pem("client_cert", &client_cert, &client_cert_len);
     if (err == ESP_OK) err = validate_trust();
     if (err != ESP_OK) return err;
-    size_t size = sizeof(journal);
-    err = nvs_get_blob(trust, "journal", &journal, &size);
-    if (err == ESP_ERR_NVS_NOT_FOUND) memset(&journal, 0, sizeof(journal));
-    else if (err != ESP_OK) return err;
-    else if (size != sizeof(journal) || journal.magic != JOURNAL_MAGIC ||
-             !memchr(journal.state, 0, sizeof(journal.state)) ||
-             !memchr(journal.error, 0, sizeof(journal.error)) ||
-             !memchr(journal.digest, 0, sizeof(journal.digest)) ||
-             !memchr(journal.version, 0, sizeof(journal.version))) return ESP_ERR_INVALID_STATE;
+    const char *journal_note = load_journal();
     bool target_matches = running->address == journal.target_address;
     const char *boot = yoke_ota_boot_state(pending_verify, journal.pending, target_matches);
     if (!strcmp(boot, "rolled-back")) {
@@ -246,6 +309,11 @@ esp_err_t yoke_ota_init(void)
         journal.pending = 0;
         state("healthy", NULL); /* Reset after confirmation, before journal commit. */
     } else if (!journal.state[0]) state("idle", NULL);
+    if (journal_note && !journal.error[0])
+        snprintf(journal.error, sizeof(journal.error), "%s", journal_note);
+    if (nvs_get_u32(trust, "boots", &boot_count) != ESP_OK) boot_count = 0;
+    if (boot_count < UINT32_MAX) ++boot_count;
+    (void)nvs_set_u32(trust, "boots", boot_count); /* evidence only; committed below */
     err = save_journal();
     if (err == ESP_OK) err = save_clock();
     if (err != ESP_OK) return err;
@@ -256,6 +324,10 @@ esp_err_t yoke_ota_init(void)
     timer_args.callback = upload_expired;
     timer_args.name = "ota-upload";
     err = esp_timer_create(&timer_args, &upload_timer);
+    if (err != ESP_OK) return err;
+    timer_args.callback = probe;
+    timer_args.name = "ota-wdt-probe";
+    err = esp_timer_create(&timer_args, &probe_timer);
     if (err != ESP_OK) return err;
     initialized = true;
     ESP_LOGI(TAG, "version=%s slot=%s clock_source=provisioned-floor",
@@ -287,8 +359,11 @@ void yoke_ota_fail_health(void)
 {
     if (!lock) return;
     xSemaphoreTake(lock, portMAX_DELAY);
+    /* A confirmed image is never rolled back here; app_main retries or
+     * restarts (see firmware/esp32/main/main.c). */
     if (!pending_verify) { xSemaphoreGive(lock); return; }
     ESP_LOGE(TAG, "Boot health failed or deadline expired; rolling back");
+    if (restart_guard) restart_guard();
     /* Bootloader rollback still works if trust could not be opened. */
     esp_err_t err = esp_ota_mark_app_invalid_rollback_and_reboot();
     ESP_LOGE(TAG, "Rollback request returned %s; resetting", esp_err_to_name(err));
@@ -318,7 +393,42 @@ static esp_err_t reject(httpd_req_t *req, const char *status, const char *detail
     if (save_journal() != ESP_OK) ESP_LOGE(TAG, "Failed to persist update error");
     cJSON *body = cJSON_CreateObject();
     if (body) cJSON_AddStringToObject(body, "error", detail);
-    return respond(req, status, body);
+    (void)respond(req, status, body);
+    /* The response is sent; failing the handler makes HTTPD close the
+     * socket instead of purging an unread body (up to a whole slot, at the
+     * peer's pace) without feeding the watchdog. */
+    return ESP_FAIL;
+}
+
+static const char *reset_reason(void)
+{
+    switch (esp_reset_reason()) {
+    case ESP_RST_POWERON: return "power-on";
+    case ESP_RST_EXT: return "external-pin";
+    case ESP_RST_SW: return "software";
+    case ESP_RST_PANIC: return "panic";
+    case ESP_RST_INT_WDT: return "interrupt-watchdog";
+    case ESP_RST_TASK_WDT: return "task-watchdog";
+    case ESP_RST_WDT: return "other-watchdog";
+    case ESP_RST_DEEPSLEEP: return "deep-sleep";
+    case ESP_RST_BROWNOUT: return "brownout";
+    case ESP_RST_SDIO: return "sdio";
+    case ESP_RST_USB: return "usb";
+    case ESP_RST_JTAG: return "jtag";
+    case ESP_RST_EFUSE: return "efuse";
+    case ESP_RST_PWR_GLITCH: return "power-glitch";
+    case ESP_RST_CPU_LOCKUP: return "cpu-lockup";
+    default: return "unknown";
+    }
+}
+
+static bool coredump_present(void)
+{
+#if CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH
+    return esp_core_dump_image_check() == ESP_OK;
+#else
+    return false;
+#endif
 }
 
 static esp_err_t status_request(httpd_req_t *req)
@@ -343,6 +453,14 @@ static esp_err_t status_request(httpd_req_t *req)
         cJSON_AddStringToObject(body, "clock_source", "provisioned-floor");
         cJSON_AddNumberToObject(body, "local_epoch", (double)time(NULL));
         cJSON_AddStringToObject(body, "authentication", "mutual-tls-pinned-client");
+        cJSON_AddNumberToObject(body, "journal_version", YOKE_JOURNAL_VERSION);
+        cJSON_AddStringToObject(body, "reset_reason", reset_reason());
+        cJSON_AddNumberToObject(body, "uptime_s", (double)(esp_timer_get_time() / 1000000));
+        cJSON_AddNumberToObject(body, "boot_count", boot_count);
+        cJSON_AddNumberToObject(body, "heap_free", esp_get_free_heap_size());
+        cJSON_AddNumberToObject(body, "heap_min_free", esp_get_minimum_free_heap_size());
+        cJSON_AddBoolToObject(body, "coredump_present", coredump_present());
+        if (status_hook) status_hook(body);
     }
     esp_err_t err = respond(req, "200 OK", body);
     xSemaphoreGive(lock);
@@ -395,7 +513,9 @@ static esp_err_t upload_request(httpd_req_t *req)
     if (arm_upload(req, started) != ESP_OK) {
         failure = "upload-watchdog-failed"; goto failed;
     }
-    if (esp_ota_begin(next, req->content_len, &handle) != ESP_OK) {
+    /* Erase sector by sector while writing: no single multi-second erase
+     * stalls the server task (watchdog) or the IR task (cache disabled). */
+    if (esp_ota_begin(next, OTA_WITH_SEQUENTIAL_WRITES, &handle) != ESP_OK) {
         failure = "ota-begin-failed"; goto failed;
     }
     if (mbedtls_sha256_starts(&sha, 0) != 0) { failure = "sha256-init-failed"; goto failed; }
@@ -413,6 +533,7 @@ static esp_err_t upload_request(httpd_req_t *req)
             failure = "hash-or-flash-write-failed"; goto failed;
         }
         received += count;
+        wdt_feed();
     }
     if (esp_timer_get_time() - started >= UPLOAD_US) { failure = "upload-deadline"; goto failed; }
     disarm_upload();
@@ -442,9 +563,9 @@ static esp_err_t upload_request(httpd_req_t *req)
         journal.pending = 0; failure = "boot-selection-failed"; goto failed;
     }
     /* Schedule before sending: a dropped response must not cancel activation. */
-    if (esp_timer_start_once(reboot_timer, 2000000) != ESP_OK) {
+    if (esp_timer_start_once(reboot_timer, REBOOT_DELAY_US) != ESP_OK) {
         ESP_LOGE(TAG, "Reboot timer failed after boot selection; resetting");
-        esp_restart();
+        restart(NULL); /* still guarded: never cut an IR frame */
     }
     cJSON *body = cJSON_CreateObject();
     if (body) {
@@ -462,6 +583,17 @@ done:
     mbedtls_sha256_free(&sha);
     xSemaphoreGive(lock);
     return result;
+}
+
+static esp_err_t coredump_delete(httpd_req_t *req)
+{
+    cJSON *body = cJSON_CreateObject();
+    esp_err_t err = ESP_OK;
+#if CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH
+    if (coredump_present()) err = esp_core_dump_image_erase();
+#endif
+    if (body) cJSON_AddBoolToObject(body, "coredump_present", coredump_present());
+    return respond(req, err == ESP_OK ? "200 OK" : "500 Internal Server Error", body);
 }
 
 esp_err_t yoke_ota_start(void)
@@ -483,8 +615,31 @@ esp_err_t yoke_ota_start(void)
     if (err != ESP_OK) return err;
     httpd_uri_t status_uri = {.uri = "/v1/status", .method = HTTP_GET, .handler = status_request};
     httpd_uri_t upload_uri = {.uri = "/v1/firmware", .method = HTTP_PUT, .handler = upload_request};
+    httpd_uri_t coredump_uri = {.uri = "/v1/coredump", .method = HTTP_DELETE,
+                                .handler = coredump_delete};
     err = httpd_register_uri_handler(server, &status_uri);
     if (err == ESP_OK) err = httpd_register_uri_handler(server, &upload_uri);
-    if (err != ESP_OK) { httpd_ssl_stop(server); server = NULL; }
+    if (err == ESP_OK) err = httpd_register_uri_handler(server, &coredump_uri);
+    if (err == ESP_OK) err = esp_task_wdt_add_user("ota-httpd", &wdt_user);
+    if (err == ESP_OK) err = esp_timer_start_periodic(probe_timer, WDT_PROBE_US);
+    if (err != ESP_OK) {
+        if (wdt_user) { esp_task_wdt_delete_user(wdt_user); wdt_user = NULL; }
+        httpd_ssl_stop(server);
+        server = NULL;
+    }
     return err;
 }
+
+bool yoke_ota_pending_verify(void) { return pending_verify; }
+
+esp_err_t yoke_ota_save_clock_floor(void)
+{
+    /* NVS has its own lock; never take the upload lock from a timer. */
+    return initialized ? save_clock() : ESP_ERR_INVALID_STATE;
+}
+
+httpd_handle_t yoke_ota_server(void) { return server; }
+
+void yoke_ota_set_restart_guard(void (*guard)(void)) { restart_guard = guard; }
+
+void yoke_ota_set_status_hook(void (*hook)(cJSON *body)) { status_hook = hook; }

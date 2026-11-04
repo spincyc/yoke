@@ -21,6 +21,12 @@
 #define HTTPD_RESP_USE_STRLEN -1
 #define HTTP_GET 0
 #define HTTP_PUT 1
+#define HTTP_DELETE 2
+#define OTA_WITH_SEQUENTIAL_WRITES 0xfffffffeU
+enum { ESP_RST_UNKNOWN, ESP_RST_POWERON, ESP_RST_EXT, ESP_RST_SW, ESP_RST_PANIC,
+       ESP_RST_INT_WDT, ESP_RST_TASK_WDT, ESP_RST_WDT, ESP_RST_DEEPSLEEP, ESP_RST_BROWNOUT,
+       ESP_RST_SDIO, ESP_RST_USB, ESP_RST_JTAG, ESP_RST_EFUSE, ESP_RST_PWR_GLITCH,
+       ESP_RST_CPU_LOCKUP };
 #define HTTPD_SSL_TRANSPORT_SECURE 1
 #define HTTPD_SSL_CONFIG_DEFAULT() {0}
 #define shutdown host_shutdown
@@ -34,9 +40,10 @@ typedef int esp_ota_img_states_t;
 typedef struct { uint32_t address, size, subtype; const char *label; } esp_partition_t;
 typedef struct { char version[32], project_name[32]; } esp_app_desc_t;
 typedef void *esp_timer_handle_t;
+typedef void *esp_task_wdt_user_handle_t;
 typedef struct { void (*callback)(void *); const char *name; } esp_timer_create_args_t;
 typedef struct { size_t content_len; void *handle; } httpd_req_t;
-typedef struct { int unused; } cJSON;
+typedef struct cJSON { int unused; } cJSON;
 typedef struct { const char *uri; int method; esp_err_t (*handler)(httpd_req_t *); } httpd_uri_t;
 typedef struct {
     const uint8_t *servercert, *prvtkey_pem, *cacert_pem;
@@ -72,6 +79,15 @@ void mbedtls_entropy_init(); void mbedtls_entropy_free();
 void mbedtls_ctr_drbg_init(); void mbedtls_ctr_drbg_free();
 #endif
 esp_err_t nvs_get_str(); esp_err_t nvs_get_i64(); esp_err_t nvs_get_blob();
+esp_err_t nvs_get_u32(); esp_err_t nvs_set_u32();
+int esp_reset_reason(void);
+uint32_t esp_get_free_heap_size(void); uint32_t esp_get_minimum_free_heap_size(void);
+void cJSON_AddBoolToObject(cJSON *, const char *, bool);
+esp_err_t httpd_queue_work(httpd_handle_t, void (*)(void *), void *);
+esp_err_t esp_task_wdt_add_user(const char *, esp_task_wdt_user_handle_t *);
+esp_err_t esp_task_wdt_delete_user(esp_task_wdt_user_handle_t);
+esp_err_t esp_task_wdt_reset_user(esp_task_wdt_user_handle_t);
+esp_err_t esp_timer_start_periodic(esp_timer_handle_t, uint64_t);
 esp_err_t nvs_flash_init_partition(); esp_err_t nvs_open_from_partition();
 esp_err_t httpd_ssl_start(); esp_err_t httpd_ssl_stop(); esp_err_t httpd_register_uri_handler();
 

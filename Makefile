@@ -12,7 +12,7 @@ export TMPDIR := $(abspath .scratch/tmp)
 export PLAYWRIGHT_BROWSERS_PATH := $(abspath .scratch/cache/playwright)
 
 .PHONY: venv lint type test verify docs docs-serve browser-install verify-browser simulate \
-	benchmark-control benchmark-media benchmark-telemetry benchmark-usb verify-firmware verify-net \
+	benchmark-control benchmark-media benchmark-telemetry benchmark-usb verify-firmware firmware-bench verify-net \
 	media-send media-recv clean
 
 ROLE ?= recv
@@ -74,6 +74,15 @@ verify: lint type test docs
 
 verify-firmware:
 	$(PYTHON) firmware/esp32/verify.py
+
+# Host-only cost of the IR endpoint core (no SDK, no device): JSON on stdout.
+IR_CORE := firmware/esp32/components/yoke_ir
+firmware-bench:
+	mkdir -p .scratch/firmware-bench
+	cc -std=gnu17 -O2 -I $(IR_CORE)/include tests/firmware_ir/host_ir_bench.c \
+		$(IR_CORE)/ir_core.c $(IR_CORE)/ir_program.c $(IR_CORE)/ir_encode.c \
+		-o .scratch/firmware-bench/host-ir-bench
+	.scratch/firmware-bench/host-ir-bench
 
 simulate: venv
 	$(BIN)/python -m yoke.simulation --json

@@ -25,8 +25,14 @@ static int yoke_tls_step(void *context)
     return esp_mbedtls_server_session_continue_async(context);
 }
 
+/* Applications may feed a watchdog while a bounded handshake waits. */
+void __attribute__((weak)) yoke_tls_handshake_tick(void)
+{
+}
+
 static void yoke_tls_wait(void)
 {
+    yoke_tls_handshake_tick();
     vTaskDelay(1);
 }
 
