@@ -11,7 +11,7 @@ choice. The complete USB connection has not been built and bench-tested.
 | Part | Status |
 |---|---|
 | Hardware platform | Radxa ZERO 3E selected; one board in each box |
-| Case | R6 judged too large; compact R7 PoE and computer-side cases in design review; physical fit and cooling not yet tested |
+| Case | R6 judged too large; compact R7 PoE and computer-side cases printed 2026-11-04; physical fit and cooling not yet tested |
 | Pairing | Software saves pairings, restores them after restart, and handles lost connections |
 | Device-side firmware | USB/IP export with data-plane admission and a ZERO 3E install recipe; not yet run on the board |
 | Computer-side firmware | USB/IP-to-gadget bridge implemented in software and verified in simulation; not yet run on hardware |
@@ -20,8 +20,9 @@ choice. The complete USB connection has not been built and bench-tested.
 
 The computer-side box presents the remote device through its own USB
 port with Linux Raw Gadget. That path passes an end-to-end software
-simulation, which does not establish that the USB product works on real
-boards. The older Linux USB/IP import adapter remains a development tool
+simulation and a real-kernel loopback test in a virtual machine
+(`make verify-usb-kernel`). Neither establishes that the USB product works
+on real boards. The older Linux USB/IP import adapter remains a development tool
 that ends inside a Linux kernel. The product does
 not require the user's computer to run Linux; supported devices and
 computer compatibility still need testing.

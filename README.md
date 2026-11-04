@@ -19,9 +19,10 @@ manager can control the boxes, but is optional.
 
 The pairing software, stored settings, monitors and simulations exist.
 The computer-side box's USB bridge, which presents the remote device
-through its own USB port, is implemented and passes a pure-software
-end-to-end simulation. Nothing has run on the boards yet; hardware tests
-are the next step. IR firmware for an ESP32 PoE endpoint exists in
+through its own USB port, is implemented. It passes a pure-software
+end-to-end simulation and a real-kernel loopback test in a virtual
+machine. Nothing has run on the boards yet; hardware tests are the next
+step. IR firmware for an ESP32 PoE endpoint exists in
 software and awaits bench validation.
 
 The user's computer is separate from both boxes. Linux inside the boxes
