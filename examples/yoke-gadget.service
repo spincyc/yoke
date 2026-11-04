@@ -1,0 +1,46 @@
+# Computer-side box: present one remote USB/IP device through the OTG port.
+# See doc/design/USB-DATAPATH.md (runtime requirements) and ADR 0022.
+# Prerequisites:
+#   useradd --system --no-create-home --gid yoke yoke-gadget
+#   echo 'KERNEL=="raw-gadget", OWNER="yoke-gadget", MODE="0600"' \
+#     > /etc/udev/rules.d/70-yoke-raw-gadget.rules
+#   modprobe raw_gadget   (CONFIG_USB_RAW_GADGET; bench-unverified on Radxa)
+#   unbind any configfs gadget (ADB/NCM) from fcc00000.usb and put the
+#   DWC3 port in peripheral/OTG device role.
+# The agent's usb-gadget driver connects to /run/yoke-gadget/control.sock
+# (group yoke). Remove --socket and add --target HOST:PORT/BUSID for a
+# standalone bench run without the agent.
+[Unit]
+Description=yoke USB gadget worker (USB/IP to Raw Gadget)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=yoke-gadget
+Group=yoke
+UMask=0007
+RuntimeDirectory=yoke-gadget
+RuntimeDirectoryMode=0750
+ExecStart=/opt/yoke/current/venv/bin/python -m yoke.usb.worker \
+    --udc fcc00000.usb --socket /run/yoke-gadget/control.sock --power-ma 500
+Restart=always
+RestartSec=1
+# A stopped worker closes /dev/raw-gadget: the computer sees a disconnect.
+KillSignal=SIGTERM
+TimeoutStopSec=10s
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+DevicePolicy=closed
+DeviceAllow=/dev/raw-gadget rw
+CapabilityBoundingSet=
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

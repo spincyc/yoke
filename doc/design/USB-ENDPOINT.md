@@ -38,35 +38,47 @@ available without a proprietary management service.
 
 ## Prototype scope
 
-- Two Radxa ZERO 3E boards, each with its PoE HAT and one physical USB
-  connection at each end.
+- Two Radxa ZERO 3E boards with one physical USB connection at each end.
+  The device-side box uses its PoE HAT. Owner decision (2026-11-04): the
+  computer-side box has no PoE HAT and is powered by the computer through
+  the same OTG port that presents the device. Its declared draw (default
+  500 mA) and its pre-enumeration draw must be measured ⚠.
 - USB 2 first. Earlier USB 3 and 10GbE research does not set requirements
   for this prototype.
 - Ethernet and PoE power between the boxes and a compatible switch. Preserve
   Radxa's conductive mounting screws, insulated copper pillars and GPIO
   connection; powered operation still needs physical validation.
 - The [enclosure](USB-HOUSING.md) must accommodate the complete board/HAT
-  assembly, including its cooling parts: rectangular shell, freely nesting
+  assembly of the device-side box, including its cooling parts. The
+  computer-side box needs no HAT. Enclosure requirements: rectangular shell, freely nesting
   halves, recessed M3 screws, heat-set inserts and unobstructed ventilation.
   R6 is the computed PoE first article; physical fit and powered cooling
   remain NOT RUN. R5 omitted the HAT and is retired.
 
 ## Firmware status
 
-The pairing software, stored state, monitoring and Linux USB/IP adapter
-exist. The current USB/IP adapter can export devices and import them into
-a Linux kernel. **That adapter alone does not complete this hardware
-product.**
+The pairing software, stored state, monitoring and the Linux USB/IP adapter
+exist. The computer-side data path now exists in software. It is
+[documented in USB-DATAPATH.md](USB-DATAPATH.md) and covered by ADRs 0021
+and 0022:
 
-The computer-side box still needs the USB device/gadget bridge that
-presents the remote peripheral through its physical USB port. That work,
-USB device compatibility, recovery and end-to-end hardware testing remain
-unfinished. Do not replace the computer-side box with a Linux application
-host in product documentation or drawings to match the current adapter.
+- A separate worker imports the remote device with the open USB/IP protocol,
+  directly from the device-side box's stock `usbipd`.
+- It presents the device through the box's OTG port with Linux Raw Gadget.
+- The agent's `usb-gadget` driver routes it with metadata only.
+
+It is verified only in a pure-software simulation. That simulation
+covers keyboard, mouse, mass storage, serial (CDC-ACM), composite,
+full-speed-only, stalling and disconnecting device models, with Linux-,
+Windows- and macOS-style enumeration. **No hardware has been tested.**
+Raw Gadget availability in the Radxa kernel, DWC3 device-mode behavior,
+power draw and real-computer compatibility remain open bench items (⚠).
 
 The first hardware test must cover the complete path above, including the
 second box and its USB cable to a separate computer. A successful Linux
-USB/IP import is a backend test, not completion of that test.
+USB/IP import or a passing simulation is a backend test, not completion of
+that test. Do not replace the computer-side box with a Linux application
+host in product documentation or drawings.
 
 The [backend reference](../../site/pages/reference/backends.md#usbip)
 describes the existing adapter. The older

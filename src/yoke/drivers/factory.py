@@ -12,6 +12,7 @@ from pathlib import Path
 from yoke.config import AgentConfig, ConfigError
 from yoke.core.types import Kind, Role
 from yoke.drivers.base import Driver, DriverError
+from yoke.drivers.gadget import build_usb_gadget_driver
 from yoke.drivers.igmp import IgmpJoinDriver
 from yoke.drivers.jap import JapDecoderDriver, JapEncoderConfig, telnet_link_factory
 from yoke.drivers.shellcmd import SubprocessRunner
@@ -45,6 +46,8 @@ def build_driver(cfg: AgentConfig) -> Driver:
         return IgmpJoinDriver()
     if driver_type == "usbip":
         return _build_usbip(cfg, table)
+    if driver_type == "usb-gadget":
+        return build_usb_gadget_driver(cfg)
     if driver_type == "jap":
         return _build_jap(cfg, table)
     if driver_type == "stream":
