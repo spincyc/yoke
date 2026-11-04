@@ -130,6 +130,7 @@ src/yoke/
     sim.py       in-memory driver with scriptable fault injection
     igmp.py      decoder-side multicast join/leave (reference software path)
     usbip.py     usbip attach/detach + producer bind/unbind
+    gadget.py    metadata-only usb-gadget consumer: supervises the gadget worker
     jap.py       Just Add Power decoder API driver (channel switching)
     stream.py    starts/stops an out-of-process media pipeline (RTP)
     shellcmd.py  command-runner abstraction (mockable; never shell=True)
@@ -164,7 +165,13 @@ src/yoke/
   snoop.py       passive decoder/renderer for the control group
   terminal.py    shared escaping of untrusted terminal text
   update.py      standalone offline Linux release updater and recovery artifact
-firmware/esp32/  independent ESP-IDF Ethernet updater; IR routing is not implemented
+  usb/           computer-side USB data path, run only in the separate gadget worker:
+    usbip.py     USB/IP 1.1.1 wire codec; client.py userspace import client
+    rawgadget.py Raw Gadget ioctl backend behind gadget.py's GadgetBackend
+    proxy.py     descriptor cache, control relay, endpoint pumps; session.py, control.py
+    worker.py    yoke.usb.worker process and its bounded control socket
+firmware/esp32/  ESP-IDF IR endpoint: RMT IR, iTach-subset API, mutual-TLS OTA (ADRs 0025/0026)
+packaging/zero3e/ ZERO 3E device/computer box units, udev rules and install recipe
 tests/           offline behavior, fault, driver transcript, and loopback tests
 benchmarks/      reproducible control, media, and telemetry software measurements
 scripts/

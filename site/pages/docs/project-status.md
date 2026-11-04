@@ -11,15 +11,18 @@ choice. The complete USB connection has not been built and bench-tested.
 | Part | Status |
 |---|---|
 | Hardware platform | Radxa ZERO 3E selected; one board in each box |
-| Case | Two prints rejected by the owner; rectangular case with slot joint and M3 heat-set fasteners being redesigned |
+| Case | R6 judged too large; compact R7 PoE and computer-side cases in design review; physical fit and cooling not yet tested |
 | Pairing | Software saves pairings, restores them after restart, and handles lost connections |
-| Device-side firmware | Linux USB/IP export adapter exists; board integration and real device tests remain |
-| Computer-side firmware | Physical USB device/gadget bridge is unfinished |
+| Device-side firmware | USB/IP export with data-plane admission and a ZERO 3E install recipe; not yet run on the board |
+| Computer-side firmware | USB/IP-to-gadget bridge implemented in software and verified in simulation; not yet run on hardware |
+| Computer-side power | Powered by the user's computer through the OTG port; no PoE HAT on that box |
 | End-to-end tests | Still required, through both boxes and a USB cable to a separate computer |
 
-The current Linux USB/IP import adapter is a software development tool.
-It ends inside a Linux kernel. It does not replace the computer-side
-hardware box or establish that the USB product works. The product does
+The computer-side box presents the remote device through its own USB
+port with Linux Raw Gadget. That path passes an end-to-end software
+simulation, which does not establish that the USB product works on real
+boards. The older Linux USB/IP import adapter remains a development tool
+that ends inside a Linux kernel. The product does
 not require the user's computer to run Linux; supported devices and
 computer compatibility still need testing.
 
@@ -28,7 +31,7 @@ computer compatibility still need testing.
 | Area | Status |
 |---|---|
 | HDMI | Dedicated boxes planned; existing appliance and GStreamer adapters are available for software development |
-| IR | Hardware planned; transmission, learning, and the two-jack pass-through mode remain unfinished |
+| IR | ESP32 PoE endpoint firmware with RMT output and an iTach-compatible API, verified in host simulation; bench tests and the two-jack pass-through remain |
 | Monitoring | Status tools, terminal monitor, Prometheus, and JSON export available |
 | Reference media | Synthetic frames, packetization, FEC, jitter, and socket tests available; jpegxs and vc2 are ratio models, not codec implementations |
 

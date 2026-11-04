@@ -7,7 +7,7 @@ Connect both boxes to your Ethernet switch and pair them. The boxes save
 that pairing and keep it until a pair or unpair command changes it.
 
 The USB prototype uses **two Radxa ZERO 3E boards**. **USB 2 is the first
-deliverable.** HDMI and IR hardware are also planned. Thermite or another
+deliverable.** HDMI hardware is planned; IR uses a separate ESP32 PoE endpoint. Thermite or another
 manager can control the boxes, but is optional.
 
 [USB hardware](site/pages/usb.md) ·
@@ -17,11 +17,12 @@ manager can control the boxes, but is optional.
 
 ## Development status
 
-The pairing software, stored settings, monitors, simulations, and Linux
-USB/IP adapter exist. The complete USB bridge firmware and hardware tests
-are unfinished. The current USB/IP adapter alone does not implement the
-two-box product: the computer-side box still needs to present the remote
-USB device through its physical USB port.
+The pairing software, stored settings, monitors and simulations exist.
+The computer-side box's USB bridge, which presents the remote device
+through its own USB port, is implemented and passes a pure-software
+end-to-end simulation. Nothing has run on the boards yet; hardware tests
+are the next step. IR firmware for an ESP32 PoE endpoint exists in
+software and awaits bench validation.
 
 The user's computer is separate from both boxes. Linux inside the boxes
 is a firmware choice, not a requirement for that computer.

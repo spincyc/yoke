@@ -28,12 +28,14 @@ also cover software, tests, and earlier hardware research.
 | Read | For |
 |---|---|
 | [USB hardware design](../../../doc/design/USB-ENDPOINT.md) | Two ZERO 3E boxes, physical USB at each end, and remaining firmware work |
+| [USB data path](../../../doc/design/USB-DATAPATH.md) | Computer-side USB/IP client and Raw Gadget presentation, simulation and bench procedure |
 | [Earlier HDMI/USB3 study](../../../doc/design/EDGE-DEVICES.md) | Earlier alternatives and video research; superseded for the USB prototype |
 | [USB housing design](../../../doc/design/USB-HOUSING.md) | Enclosure requirements and revision history |
 | [Retired R5 case](../../../hardware/usb-housing/r5/README.md) | Historical bare-board article; omitted the required PoE HAT |
 | [Retired R3 assembly](../../../hardware/usb-housing/r3/README.md) | Historical failed revision; do not print |
 | [Linux updates](../../../doc/design/UPDATES.md) | Operator-controlled releases, readiness, rollback, and recovery |
-| [ESP32 updater](../../../doc/design/ESP32-UPDATES.md) | Ethernet firmware-update reference for future IR endpoints |
+| [IR endpoint](../../../doc/design/IR-ENDPOINT.md) | ESP32 PoE IR endpoint: RMT output, iTach-subset API, limits and bench procedure |
+| [ESP32 updater](../../../doc/design/ESP32-UPDATES.md) | Mutual-TLS Ethernet updates, health gating and recovery for the IR endpoint |
 | [Brand identity](../../../doc/design/BRANDING.md) | Shared screen and enclosure mark |
 
 ## Follow the reasoning
