@@ -59,6 +59,11 @@ RETRY_SPACING_BASE = 0.5
 RecvFn = Callable[[float], "tuple[bytes, float] | None"]
 
 
+def _read(clock: Callable[[], float] | None) -> float | None:
+    """Re-read an optional wall clock per datagram (ADR 0023)."""
+    return clock() if clock is not None else None
+
+
 def new_operation_author() -> str:
     """A fresh valid YWP/1 author independent of the reusable CLI identity."""
     return "op-" + secrets.token_hex(14)
@@ -157,7 +162,7 @@ def run_intent(
         item = io.recv(window_end)
         if item is None:
             break
-        snooper.observe(*item)
+        snooper.observe(*item, wall=_read(io.wall_clock))
 
     if io.origin in snooper.nodes:
         return IntentOutcome(
@@ -229,7 +234,7 @@ def run_intent(
         item = io.recv(next_wake)
         if item is None:
             continue
-        for record in snooper.observe(*item):
+        for record in snooper.observe(*item, wall=_read(io.wall_clock)):
             frame = record.frame
             if (
                 record.verdict == "ok"
@@ -295,7 +300,7 @@ def collect(
         item = recv(end)
         if item is None:
             break
-        snooper.observe(*item)
+        snooper.observe(*item, wall=_read(wall_clock))
     return snooper
 
 
@@ -430,7 +435,7 @@ def run_snoop(
             item = recv()
             if item is None:
                 break
-            for record in snooper.observe(*item):
+            for record in snooper.observe(*item, wall=_read(wall_clock)):
                 emit(render(record))
     except KeyboardInterrupt:
         pass
@@ -472,6 +477,12 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"PSK file (default: {DEFAULT_PSK_PATH} if it exists, else open mode)",
     )
     parser.add_argument("--origin", default=None, help="node id for sent frames")
+    parser.add_argument(
+        "--open",
+        action="store_true",
+        help="allow pair/unpair to send UNAUTHENTICATED intents when no PSK "
+        "is found (isolated labs only)",
+    )
     sub = parser.add_subparsers(dest="command", required=True)
     pair = sub.add_parser("pair", help="pair CONSUMER to PRODUCER")
     pair.add_argument("producer")
@@ -495,11 +506,29 @@ def build_parser() -> argparse.ArgumentParser:
     snoop.add_argument("--json", action="store_true", help="one JSON line per frame")
     agent = sub.add_parser("agent", help="run an endpoint agent")
     agent.add_argument("--config", required=True, help="agent TOML config path")
-    agent.add_argument(
+    agent_mode = agent.add_mutually_exclusive_group()
+    agent_mode.add_argument(
         "--commission",
         action="store_true",
         help="one-time permission to create missing state; never resets existing state",
     )
+    agent_mode.add_argument(
+        "--rebase-sequence",
+        action="store_true",
+        help="with the agent stopped and the clock confirmed correct, recover "
+        "from a future sequence reservation (ADR 0023), then exit",
+    )
+    admission = sub.add_parser(
+        "usbip-admission",
+        help="root helper: apply the USB/IP data-plane allowlist (ADR 0024)",
+    )
+    admission.add_argument("action", choices=["apply"])
+    admission.add_argument(
+        "--port", type=int, required=True, help="usbipd TCP port to filter"
+    )
+    admission.add_argument("--request", default="/run/yoke/usbip-admission.json")
+    admission.add_argument("--status", default="/run/yoke-admission/status.json")
+    admission.add_argument("--nft", default="nft", help="nft executable")
     simulate = sub.add_parser(
         "simulate", help="run deterministic offline failure scenarios"
     )
@@ -516,12 +545,27 @@ def _out(line: str) -> None:
     print(line, flush=True)
 
 
-def _cmd_agent(config_path: str, *, commission: bool = False) -> int:
+def _cmd_agent(
+    config_path: str, *, commission: bool = False, rebase: bool = False
+) -> int:
     try:
         cfg = config.load(Path(config_path))
     except config.ConfigError as exc:
         _err(str(exc))
         return 2
+    if rebase:
+        from yoke import statefile
+        from yoke.net.runner import rebase_sequence
+
+        try:
+            _out(rebase_sequence(cfg))
+        except statefile.StateError as exc:
+            _err(f"yoke agent: {exc}")
+            return 4
+        except OSError as exc:
+            _err(f"agent I/O failed: {exc}")
+            return 3
+        return 0
     if commission:
         cfg = replace(cfg, allow_new_state=True)
     if not cfg.psk:
@@ -554,7 +598,24 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     command: str = args.command
     if command == "agent":
-        return _cmd_agent(str(args.config), commission=bool(args.commission))
+        return _cmd_agent(
+            str(args.config),
+            commission=bool(args.commission),
+            rebase=bool(args.rebase_sequence),
+        )
+    if command == "usbip-admission":
+        from yoke.drivers.shellcmd import SubprocessRunner
+        from yoke.drivers.usbip import apply_admission
+
+        if not 1 <= args.port <= 65535:
+            return _command_error(args, 2, "--port must be 1 through 65535")
+        return apply_admission(
+            request=Path(args.request),
+            status=Path(args.status),
+            port=int(args.port),
+            runner=SubprocessRunner(),
+            nft=str(args.nft),
+        )
     if command == "simulate":
         from yoke import simulation
 
@@ -587,6 +648,14 @@ def main(argv: list[str] | None = None) -> int:
             problems.append("CLI origin must differ from endpoint ids")
         if problems:
             return _command_error(args, 2, *problems)
+        if not psk and not args.open:
+            # Unsigned intents only reach explicit open-mode labs (ADR 0023).
+            return _command_error(
+                args,
+                2,
+                f"no PSK: pass --psk-file FILE (default {DEFAULT_PSK_PATH}), or "
+                "--open to send UNAUTHENTICATED lab intents",
+            )
 
     group: str = args.group
     port: int = args.port

@@ -7,6 +7,7 @@ performs no device calls; the agent runner owns driver execution and lifetimes.
 from __future__ import annotations
 
 import math
+from pathlib import Path
 
 from yoke.config import AgentConfig, ConfigError
 from yoke.core.types import Kind, Role
@@ -16,7 +17,13 @@ from yoke.drivers.jap import JapDecoderDriver, JapEncoderConfig, telnet_link_fac
 from yoke.drivers.shellcmd import SubprocessRunner
 from yoke.drivers.sim import SimDriver
 from yoke.drivers.stream import StreamDriver, SubprocessSupervisor
-from yoke.drivers.usbip import UsbipAttachDriver, UsbipBindDriver
+from yoke.drivers.usbip import (
+    DEFAULT_ADMISSION_REQUEST,
+    DEFAULT_ADMISSION_STATUS,
+    NftablesAdmission,
+    UsbipAttachDriver,
+    UsbipBindDriver,
+)
 
 
 def build_driver(cfg: AgentConfig) -> Driver:
@@ -76,8 +83,37 @@ def _build_usbip(cfg: AgentConfig, table: dict[str, object]) -> Driver:
     busids = [b for b in raw_busids if isinstance(b, str) and b]
     if len(busids) != len(raw_busids):
         raise ConfigError("driver.busids: entries must be non-empty strings")
+    # ADR 0024: root provisioning may own bindings; admission is opt-in.
+    bindings = table.get("bindings", "agent")
+    if bindings not in ("agent", "external"):
+        raise ConfigError("driver.bindings: expected 'agent' or 'external'")
+    mode = table.get("admission", "none")
+    if mode not in ("none", "nftables"):
+        raise ConfigError("driver.admission: expected 'none' or 'nftables'")
+    paths: dict[str, Path] = {}
+    for key, default in (
+        ("admission_request", DEFAULT_ADMISSION_REQUEST),
+        ("admission_status", DEFAULT_ADMISSION_STATUS),
+    ):
+        value = table.get(key, str(default))
+        if not isinstance(value, str) or not value.startswith("/"):
+            raise ConfigError(f"driver.{key}: expected an absolute path")
+        paths[key] = Path(value)
     try:
-        return UsbipBindDriver(SubprocessRunner(), host=host, port=port, busids=busids)
+        return UsbipBindDriver(
+            SubprocessRunner(),
+            host=host,
+            port=port,
+            busids=busids,
+            bindings=str(bindings),
+            admission=NftablesAdmission(
+                port=port,
+                request_path=paths["admission_request"],
+                status_path=paths["admission_status"],
+            )
+            if mode == "nftables"
+            else None,
+        )
     except DriverError as exc:
         raise ConfigError(f"driver: {exc}") from exc
 

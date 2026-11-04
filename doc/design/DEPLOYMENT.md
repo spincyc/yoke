@@ -75,12 +75,17 @@ stripped on load; every other byte is significant, so hex avoids any raw
 ```
 
 Yoke refuses a PSK file with any group/other access, a final symbolic link,
-a nonregular file, an empty key, or more than 4096 bytes. These checks apply
-to both CLI and agent. Open mode (no `psk_file`) is for offline labs only;
-startup warns `UNAUTHENTICATED`, and status/intent JSON labels it
-`open-unauthenticated`. It accepts unsigned control frames from anyone on
-the segment. A site PSK authenticates membership in the trusted site; any
-holder can forge another node's messages (the accepted ADR 0005 limitation).
+a nonregular file, an empty key, a key shorter than 32 bytes, or more than
+4096 bytes. These checks apply to both CLI and agent. Open mode is for
+offline labs only and is never a default (ADR 0023): an agent config
+without `psk_file` must say `open_mode = true`, and `yoke pair`/`unpair`
+without a key need `--open`. Startup warns `UNAUTHENTICATED`, and
+status/intent JSON labels it `open-unauthenticated`. Open mode accepts
+unsigned control frames from anyone on the segment. A site PSK
+authenticates membership in the trusted site; any holder can forge another
+node's messages (the accepted ADR 0005 limitation). Control sockets bind
+the group address, so unicast datagrams to a host's control port are never
+read.
 
 Create a dedicated `yoke` system account and make `/etc/yoke/psk` readable
 only by that account (owner `yoke`, mode 0600). Give that account ownership
@@ -131,7 +136,10 @@ sudo -u yoke /opt/yoke/current/venv/bin/python -m yoke.cli agent --commission \
     --config /etc/yoke/agent.toml
 ```
 
-Confirm the startup announce, then stop it and start the service. The
+Confirm the startup announce, then stop it and start the service. Commission
+only with a synchronized clock: a fresh identity's first sequence floor
+comes from the wall clock, while later restarts are anchored to durable
+state and can advance at most 60 s from the clock (ADR 0023). The
 commissioning option permits an absent state file to be created through
 the normal durable startup barrier. Existing valid state is restored;
 corrupt, unreadable, symbolic-link, and nonregular state are errors even
@@ -148,11 +156,22 @@ is not an automatic recovery procedure (ADRs 0012 and 0016).
 ## Service
 
 `examples/yoked.service` runs under the dedicated unprivileged account,
-with a private state directory and restart. It has no network-online or
-management-process dependency. An absent interface can fail startup;
-systemd retries as the network becomes available. Drivers that require
-device access or usbip privileges need a narrowly scoped installation
-specific to that driver. The sample grants no blanket root access.
+with a private state directory, restart, no capabilities and
+`NoNewPrivileges`. It has no network-online or management-process
+dependency. An absent interface can fail startup; systemd retries as the
+network becomes available. It is ordered `After=time-sync.target` but does
+not want or require it (ADR 0023): if a site enables a time-wait unit the
+agent starts once the clock is synchronized; otherwise it starts anyway
+and frame admission follows the clock when it is stepped later. The agent
+itself never gains privileges: USB/IP privileged work runs in separate
+root units from [`packaging/zero3e/`](../../packaging/zero3e/install.sh)
+(see ZERO 3E boxes below and ADR 0024).
+
+The agent logs to stderr, which systemd sends to the journal with
+priorities (`journalctl -u yoked`). Logs carry the full driver error text,
+committed pairings, peer loss and return, admission changes and clock
+diagnostics; multicast events stay bounded to 128-byte details. Set
+`Environment=YOKE_LOG_LEVEL=debug` in a drop-in to troubleshoot.
 
 The agent durably saves before acking and re-announces on restart. A CLI
 or snooper may exit at any time without ending the endpoint's route;
@@ -177,6 +196,57 @@ pictures or physical output. Install the external media tools from
 `MEDIA.md` and provide the service account the required display/device
 access. No external media tools are required for the deterministic `sim`
 driver or `yoke simulate`.
+
+## ZERO 3E boxes
+
+⚠ Bench-unverified: this recipe is checked offline (unit syntax, privilege
+boundaries, staged install, simulated admission), not on the boxes. The
+peripheral port's bus id, Debian's `usbip` paths and the kernel's handling
+of the rules need a first bench run.
+
+Install the package as above on both boxes, plus `usbip` and `nftables`
+from the distribution on the device-side box. Then, from the checkout:
+
+```
+sudo packaging/zero3e/install.sh device --node-id usb-dev \
+    --host 10.20.30.2 --busid 1-1          # this box's control-VLAN IPv4
+sudo packaging/zero3e/install.sh computer  # on the computer-side box
+```
+
+The installer creates the `yoke` account and directories, installs the
+agent units and role drop-ins, never overwrites `/etc/yoke/agent.toml`,
+and prints the remaining enable/commission commands; it starts nothing.
+`--root DIR` stages the files without touching the system.
+
+On the **device side** the agent (producer) stays unprivileged. Root-owned
+units do one job each:
+
+| Unit / file | Job |
+|---|---|
+| `modules-load.d/yoke-usbip-host.conf` | load `usbip-host` at boot |
+| `70-yoke-usbip-bind.rules` → `yoke-usbip-bind@BUSID.service` | bind the configured bus position(s) to `usbip-host` at coldplug and on every replug |
+| `yoke-usbip-admission.service` + `.path` | load the `inet yoke_usbip` nftables table: new TCP sessions to the USB/IP port only from admitted consumers and loopback (`CAP_NET_ADMIN` only) |
+| `yoke-usbipd.service` | run `usbipd`, only after the admission table exists |
+
+The generated `agent.toml` sets `bindings = "external"` (the agent never
+runs `usbip bind`) and `admission = "nftables"`. The agent admits each
+consumer whose authenticated announces claim it, at the IPv4 source of
+those announces (ADR 0024); the computer-side box's USB/IP client connects
+from that same address. Check with
+`cat /run/yoke-admission/status.json` and `nft list table inet yoke_usbip`.
+The producer reports `pending` until the helper applied its latest
+allowlist and `error` if the helper failed.
+
+On the **computer side** the installer only installs the unprivileged
+agent. Its USB gadget worker and that worker's unit are installed
+separately and are not part of this recipe.
+
+A lab Linux consumer that imports through the kernel (`vhci-hcd`) uses
+`install.sh vhci-lab`: a udev rule makes the `vhci_hcd` attach/detach
+attributes group-writable for `yoke`, tmpfiles creates `/run/vhci_hcd`
+owned by `yoke`, and a drop-in allows writing it, so `usbip attach` writes
+the import and its connection record under one identity. Granting only
+the sysfs half makes every import a record-less RECOVERY_REQUIRED port.
 
 ## Day-2 operations
 
@@ -206,6 +276,16 @@ driver or `yoke simulate`.
 - **Key rotation**: distribute the new PSK, restart agents (order
   irrelevant; agents with the old key are simply deaf/dropped until
   restarted, visible as `auth` counters in `rx-drop` events).
+- **Clocks**: an RTC-less box booted behind its peers drops their frames
+  as `stale` and logs `this clock is behind`; it recovers on the next frame
+  after time synchronization steps the clock, without a restart. If the
+  agent logs `durable sequence bound is …s ahead` or `own sequence is …s
+  beyond`, and `timedatectl` confirms the clock is correct, an earlier boot
+  persisted a future reservation: stop `yoked`, run
+  `sudo -u yoke /opt/yoke/current/venv/bin/python -m yoke.cli agent
+  --config /etc/yoke/agent.toml --rebase-sequence` once, then start it.
+  The command refuses while the agent runs or when the bound is already
+  admissible, and keeps the pairing (ADR 0023). Never edit `state.json`.
 
 ## Failure playbook
 
@@ -214,6 +294,11 @@ driver or `yoke simulate`.
 | Consumer announces `pending` | producer absent or media not confirmed | is the producer announcing? check its driver events |
 | `rx-drop {auth: n}` rising | key mismatch or an intruder | compare PSK provisioning; snoop for the origin id |
 | `rx-drop {stale: n}` rising on one origin | clock far behind + state loss (ADR 0007), or replay attack | check that node's NTP; snoop its seq values |
+| One node drops everyone as `stale`; its log says `this clock is behind` | that box booted before time sync | fix its time source; admission recovers on the next frame |
+| Log says `durable sequence bound is …s ahead` | clock behind, or a past future-clock boot | confirm the clock; if correct, `--rebase-sequence` (Day-2) |
+| USB producer `pending`: `admission allowlist … not yet applied` | admission helper has not run | `systemctl status yoke-usbip-admission.path yoke-usbip-admission.service` |
+| USB consumer `error`, producer `active`, no import | consumer's address not admitted | its announces must reach the producer; compare `/run/yoke-admission/status.json` |
+| USB consumer reports `RECOVERY_REQUIRED` | an owned import lost its connection record | follow the message: restore the record or `usbip detach -p PORT` |
 | Video dies ~4 min after working | querier lost, snooping state aged out | pin the querier (HARDWARE.md §network) |
 | Re-pair glitches for seconds | fast-leave off (old+new stream > port speed) | enable fast-leave |
 | Everything works except one trunk | jumbo-frame mismatch on that trunk | verify MTU end-to-end |

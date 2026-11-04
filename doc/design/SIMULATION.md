@@ -93,7 +93,19 @@ are simulated. This benchmark therefore measures control software, not
 switch throughput, media payload performance or hardware latency.
 
 The existing `tests/simnet.py` remains the test-focused harness for historical
-convergence regressions. The installed harness uses public core APIs and has
+convergence regressions and the field-failure scenarios added by ADRs 0023
+and 0024. Its virtual clock is true time and every node's monotonic clock;
+each node also has a wall-clock skew, set at boot or reboot and changed by
+`step_clock` (an NTP step or a bad RTC), and receives `now + skew` with
+every input. Each sender has a transport address, and `inject_raw` can
+claim any address, so producer data-plane admission is simulated end to
+end: `data_plane_admits` models the rendered firewall rules, including
+replayed and forged claims. `driver_status` reports backend health from
+outside a command, such as a producer's device being unplugged and
+replugged. Scenarios cover booting before time sync, clock steps forward
+and back on either side of an active route, a far-future reboot, a restart
+far behind the durable bound, an immediate consumer retry on producer
+replug, and admission of exactly the claiming consumer. The installed harness uses public core APIs and has
 no dependency on the test package. `tests/test_simulation.py` pins seeded
 scenario outcomes, replayable output, clock/socket independence, observer
 noninterference, persistence crash boundaries and fault-policy behavior.

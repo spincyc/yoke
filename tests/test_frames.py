@@ -8,6 +8,8 @@ deterministic: fixed timestamps, seeded RNG, no network, no wall clock.
 from __future__ import annotations
 
 import contextlib
+import hashlib
+import hmac
 import json
 import random
 import re
@@ -15,7 +17,15 @@ from typing import Any
 
 import pytest
 
-from yoke.core.frames import EncodeError, FrameDrop, canonical_bytes, decode, encode
+from yoke.core.frames import (
+    EncodeError,
+    FrameDrop,
+    SignedMessageError,
+    canonical_bytes,
+    decode,
+    encode,
+    signed_message,
+)
 from yoke.core.types import (
     MAX_FRAME_BYTES,
     MAX_JSON_DEPTH,
@@ -618,3 +628,405 @@ def test_json_depth_limit_round_trips_at_exact_wire_boundary() -> None:
     assert decode(raw, PSK).body == body
     with pytest.raises(EncodeError):
         encode(FrameType.EVT, ORIGIN, 2, TS, {"nested": [value]}, PSK)
+
+
+# --- Transmitted-bytes authentication (signed message = datagram minus sig) --
+#
+# Helpers below build third-party datagrams WITHOUT calling signed_message:
+# each datagram is ``prefix + sig_member + suffix`` and its signed message is
+# ``prefix + suffix`` by construction (PROTOCOL.md Authentication excision).
+
+HEX_SIG = re.compile(r"[0-9a-f]{64}")
+JSON_WS = b" \t\n\r"
+
+
+def _hmac_hex(psk: bytes, message: bytes) -> str:
+    return hmac.new(psk, message, hashlib.sha256).hexdigest()
+
+
+def _own(prefix: str, member: str, suffix: str, psk: bytes = PSK) -> bytes:
+    """Sign ``prefix + suffix`` and splice the sig member in between.
+
+    ``member`` holds a ``{sig}`` placeholder and its own separator: a
+    trailing ``,`` when other members follow, a leading ``,`` when last.
+    """
+    message = (prefix + suffix).encode("utf-8")
+    sig = _hmac_hex(psk, message) if psk else ""
+    return (prefix + member.replace("{sig}", sig) + suffix).encode("utf-8")
+
+
+def _without_sig(raw: bytes) -> dict[str, Any]:
+    obj = json.loads(raw.decode("utf-8"))
+    del obj["sig"]
+    assert isinstance(obj, dict)
+    return obj
+
+
+def _drop_reason(raw: bytes, psk: bytes = PSK) -> DropReason:
+    with pytest.raises(FrameDrop) as excinfo:
+        decode(raw, psk)
+    return excinfo.value.reason
+
+
+THIRD_PARTY_TS = 1_793_000_000.1  # not representable: %.17g differs from repr
+THIRD_PARTY_SEQ = 1_793_000_000_000_000_000
+
+
+def test_third_party_float_formatting_authenticates() -> None:
+    ts_text = "%.17g" % THIRD_PARTY_TS  # noqa: UP031 — C printf on purpose
+    assert ts_text == "1793000000.0999999" != repr(THIRD_PARTY_TS)
+    raw = _own(
+        f'{{"body":{{}},"id":"thirdparty","seq":{THIRD_PARTY_SEQ},',
+        '"sig":"{sig}",',
+        f'"t":"bye","ts":{ts_text},"v":1}}',
+    )
+    # The legacy rule alone (canonical re-serialization) cannot verify it.
+    assert canonical_bytes(_without_sig(raw)) != signed_message(raw)
+    assert decode(raw, PSK) == Frame(
+        type=FrameType.BYE,
+        origin="thirdparty",
+        seq=THIRD_PARTY_SEQ,
+        ts=THIRD_PARTY_TS,
+        body={},
+    )
+
+
+def test_escaped_unicode_signed_over_own_bytes() -> None:
+    raw = _own(
+        '{"body":{"err":null,"kind":"hdmi","media":null,"name":"caf\\u00e9 '
+        '\\u5c71 \\/","pairing":null,"role":"producer","state":"idle"},'
+        '"id":"node-1","seq":7,',
+        '"sig":"{sig}",',
+        '"t":"ann","ts":1755000000.5,"v":1}',
+    )
+    assert b"\\u00e9" in raw
+    assert decode(raw, PSK).body["name"] == "café 山 /"
+
+
+@pytest.mark.parametrize(
+    ("prefix", "member", "suffix"),
+    [
+        pytest.param(
+            "\r\n{ ",
+            '"sig" :\t"{sig}" ,',
+            '\n  "v": 1, "t": "bye", "id": "node-1",\n'
+            ' "seq": 7, "ts": 0, "body": { } }\n',
+            id="sig-first",
+        ),
+        pytest.param(
+            '{"v":1,"t":"bye",\t',
+            '"sig":"{sig}",',
+            ' "body" : {},"ts":1.0e0, "id":"node-1","seq":7}',
+            id="sig-middle",
+        ),
+        pytest.param(
+            '{\n  "body": {},\n  "ts": 17.25,\n  "seq": 7,\n  "id": "node-1",\n'
+            '  "t": "bye",\n  "v": 1',
+            ',\n  "sig": "{sig}"',
+            "\n}",
+            id="sig-last",
+        ),
+        pytest.param(
+            '{"body":{},"id":"node-1","seq":7,',
+            '"\\u0073ig":"{sig}",',
+            '"t":"bye","ts":0,"v":1}',
+            id="escaped-sig-key",
+        ),
+    ],
+)
+def test_whitespace_and_member_order_signed_over_own_bytes(
+    prefix: str, member: str, suffix: str
+) -> None:
+    raw = _own(prefix, member, suffix)
+    assert signed_message(raw) == (prefix + suffix).encode("utf-8")
+    frame = decode(raw, PSK)
+    assert (frame.type, frame.origin, frame.seq, frame.body) == (
+        FrameType.BYE,
+        "node-1",
+        7,
+        {},
+    )
+    assert _drop_reason(raw, OTHER_PSK) is DropReason.AUTH
+
+
+def test_legacy_canonical_signature_over_noncanonical_bytes_still_accepted() -> None:
+    raw = encode(FrameType.ACK, ORIGIN, SEQ, TS, BODIES[FrameType.ACK], PSK)
+    obj = json.loads(raw.decode("utf-8"))
+    reordered = {key: obj[key] for key in ["ts", "body", "sig", "seq", "id", "t", "v"]}
+    legacy = json.dumps(reordered, indent=1, ensure_ascii=True).encode("utf-8")
+    message = signed_message(legacy)
+    assert message != canonical_bytes(_without_sig(legacy))
+    assert obj["sig"] != _hmac_hex(PSK, message)  # only the legacy rule matches
+    assert decode(legacy, PSK) == decode(raw, PSK)
+
+
+@pytest.mark.parametrize("psk", [PSK, OPEN], ids=["psk", "open"])
+@pytest.mark.parametrize(
+    "frame_type", list(FrameType), ids=[t.value for t in FrameType]
+)
+def test_excision_equals_canonical_for_reference_frames(
+    frame_type: FrameType, psk: bytes
+) -> None:
+    raw = encode(frame_type, ORIGIN, SEQ, TS, BODIES[frame_type], psk)
+    message = signed_message(raw)
+    assert message == canonical_bytes(_without_sig(raw))
+    sig = json.loads(raw.decode("utf-8"))["sig"]
+    assert sig == (_hmac_hex(psk, message) if psk else "")
+
+
+def test_signature_must_bind_transmitted_bytes() -> None:
+    prefix = '{ "body" : { "name" : "caf\\u00e9", "n" : [1, 2.5] } ,\t'
+    member = '"sig" : "{sig}" ,'
+    suffix = '\n"id":"node-1", "seq":7, "t":"evt", "ts":0.5, "v":1 }'
+    raw = _own(prefix, member, suffix)
+    original = decode(raw, PSK)
+    excised = range(len(prefix), len(raw) - len(suffix))
+    for index, byte in enumerate(raw):
+        replacements = [b for b in JSON_WS if b != byte] if byte in JSON_WS else []
+        replacements += [ord("x"), byte ^ 0x01, byte ^ 0x20]
+        for new in replacements:
+            mutated = bytearray(raw)
+            mutated[index] = new
+            if new == byte:
+                continue
+            if index in excised and byte in JSON_WS and new in JSON_WS:
+                # Insignificant whitespace inside the excised member is the
+                # one unauthenticated region; content cannot change there.
+                assert decode(bytes(mutated), PSK) == original
+                continue
+            with pytest.raises(FrameDrop):
+                decode(bytes(mutated), PSK)
+    # Content-preserving edits outside the sig member are still rejected:
+    # the signature binds the bytes, not the parsed value.
+    for old, new in [
+        (b"\\u00e9", b"\\u00E9"),
+        (b", 2.5", b",\t2.5"),
+        (b"0.5", b"5e-1"),
+    ]:
+        variant = raw.replace(old, new, 1)
+        assert json.loads(variant) == json.loads(raw)
+        assert _drop_reason(variant) is DropReason.AUTH
+
+
+def test_own_bytes_signature_over_different_bytes_is_auth() -> None:
+    prefix, suffix = '{"body":{},"id":"node-1","seq":7,', '"t":"bye","ts":0,"v":1}'
+    other = _hmac_hex(PSK, (prefix + " " + suffix).encode("utf-8"))
+    raw = (prefix + f'"sig":"{other}",' + suffix).encode("utf-8")
+    assert _drop_reason(raw) is DropReason.AUTH
+
+
+def test_own_bytes_signature_with_wrong_key_is_auth() -> None:
+    raw = _own(
+        '{"body":{},"id":"node-1","seq":7, ',
+        '"sig":"{sig}",',
+        '"t":"bye","ts":0,"v":1}',
+    )
+    assert _drop_reason(raw, OTHER_PSK) is DropReason.AUTH
+    assert _drop_reason(raw, OPEN) is DropReason.AUTH
+
+
+def test_uppercase_own_bytes_signature_is_auth_before_compare() -> None:
+    prefix, suffix = '{"body":{},"id":"node-1","seq":7,', '"t":"bye","ts":0,"v":1}'
+    sig = _hmac_hex(PSK, (prefix + suffix).encode("utf-8")).upper()
+    raw = (prefix + f'"sig":"{sig}",' + suffix).encode("utf-8")
+    with pytest.raises(FrameDrop) as excinfo:
+        decode(raw, PSK)
+    assert excinfo.value.reason is DropReason.AUTH
+    assert excinfo.value.detail == "sig format"
+
+
+def test_sig_value_moved_into_body_is_auth() -> None:
+    raw = encode(FrameType.BYE, ORIGIN, SEQ, TS, {}, PSK)
+    obj = json.loads(raw.decode("utf-8"))
+    moved = {**obj, "body": {"sig": obj["sig"]}, "sig": ""}
+    assert _drop_reason(canonical_bytes(moved)) is DropReason.AUTH
+    # Excising the nested copy instead of the top-level member is not
+    # the signed message either.
+    nested = (
+        '{"body":{"sig":"' + obj["sig"] + '"},"id":"node-1","seq":7,'
+        '"sig":"' + obj["sig"] + '","t":"bye","ts":1755000000.5,"v":1}'
+    ).encode("utf-8")
+    assert _drop_reason(nested) is DropReason.AUTH
+
+
+def test_nested_sig_key_is_not_the_excised_member() -> None:
+    body_sig = '"body":{"detail":{"sig":"inner"},"event":"started","sig":"x"},'
+    prefix = "{" + body_sig + '"id":"node-1","seq":7,'
+    suffix = '"t":"evt","ts":0,"v":1}'
+    raw = _own(prefix, '"sig":"{sig}",', suffix)
+    assert signed_message(raw) == (prefix + suffix).encode("utf-8")
+    assert decode(raw, PSK).body == {
+        "detail": {"sig": "inner"},
+        "event": "started",
+        "sig": "x",
+    }
+    # A sender that signed the bytes with a NESTED sig member removed
+    # signed different content and must fail.
+    wrong_message = (
+        '{"body":{"detail":{"sig":"inner"},"event":"started"},'
+        '"id":"node-1","seq":7,' + suffix
+    ).encode("utf-8")
+    forged = raw.replace(
+        json.loads(raw)["sig"].encode(), _hmac_hex(PSK, wrong_message).encode()
+    )
+    assert _drop_reason(forged) is DropReason.AUTH
+
+
+def test_string_contents_resembling_sig_member_are_skipped() -> None:
+    tricky = '"body":{"note":"\\",\\"sig\\":\\"0\\",\\\\"},'
+    prefix = "{" + tricky + '"id":"node-1","seq":7,'
+    suffix = '"t":"evt","ts":0,"v":1}'
+    raw = _own(prefix, '"sig":"{sig}",', suffix)
+    assert signed_message(raw) == (prefix + suffix).encode("utf-8")
+    assert decode(raw, PSK).body == {"note": '","sig":"0",\\'}
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        b'{"a":1}',
+        b'{"sig":""}',
+        b'[{"sig":"","a":1}]',
+        b'"sig"',
+        b'{"a":1,"sig":7}',
+        b'{"a":1,"sig":"","sig":""}',
+        b'{"sig":"","sig":"","a":1}',
+        b'{"a":1,"sig":""} {}',
+        b'{"a":1,"sig":""',
+        b'{"a":1,"sig":""]}',
+        b'{"a":1,"sig":"" "b":2}',
+        b'{"a":1,"sig":"" x',
+        b'{"a":"unterminated,"sig":""}',
+        b"",
+    ],
+)
+def test_signed_message_structural_failures_raise(raw: bytes) -> None:
+    with pytest.raises(SignedMessageError):
+        signed_message(raw)
+    assert issubclass(SignedMessageError, ValueError)
+
+
+def _ws(rng: random.Random) -> str:
+    if rng.random() < 0.5:
+        return ""
+    return "".join(rng.choice(" \t\n\r") for _ in range(rng.randrange(1, 4)))
+
+
+def _jstr(text: str, rng: random.Random) -> str:
+    """A JSON string with randomly chosen (valid) escaping per character."""
+    out = []
+    for char in text:
+        if ord(char) < 0x10000 and rng.random() < 0.2:
+            out.append(f"\\u{ord(char):04{rng.choice('xX')}}")
+        elif char == "/" and rng.random() < 0.5:
+            out.append("\\/")
+        else:
+            out.append(json.dumps(char, ensure_ascii=False)[1:-1])
+    return '"' + "".join(out) + '"'
+
+
+def _value(value: Any, rng: random.Random) -> str:
+    if isinstance(value, dict):
+        items = list(value.items())
+        rng.shuffle(items)
+        parts = [
+            _ws(rng) + _jstr(k, rng) + _ws(rng) + ":" + _ws(rng) + _value(v, rng)
+            for k, v in items
+        ]
+        return "{" + ",".join(p + _ws(rng) for p in parts) + _ws(rng) + "}"
+    if isinstance(value, list):
+        inner = ",".join(_ws(rng) + _value(v, rng) + _ws(rng) for v in value)
+        return "[" + inner + _ws(rng) + "]"
+    if isinstance(value, str):
+        return _jstr(value, rng)
+    if isinstance(value, float):
+        return rng.choice([repr(value), "%.17g" % value, f"{value:.17e}"])  # noqa: UP031
+    return json.dumps(value)
+
+
+def _third_party_frame(
+    rng: random.Random, frame_type: FrameType
+) -> tuple[bytes, bytes, range, Frame]:
+    """Serialize a random third-party frame signed over its own bytes.
+
+    Returns (datagram, signed message, excised byte range, expected frame).
+    The layout is ``{ ws M0 a0 , b0 M1 ... M(n-1) a(n-1) }``; the excised
+    pieces are tagged while building it, independently of
+    ``signed_message``: a non-last sig member takes its trailing
+    whitespace and comma, a last one takes the preceding comma and the
+    whitespace after that comma.
+    """
+    seq = rng.randrange(1, 1 << 63)
+    ts = rng.choice([TS, THIRD_PARTY_TS, 0.1, 1e-7, 12345.678])
+    body = BODIES[frame_type]
+    unsigned: dict[str, Any] = {
+        "v": 1,
+        "t": frame_type.value,
+        "id": ORIGIN,
+        "seq": seq,
+        "ts": ts,
+        "body": body,
+    }
+    members = [
+        _jstr(k, rng) + _ws(rng) + ":" + _ws(rng) + _value(v, rng)
+        for k, v in unsigned.items()
+    ]
+    rng.shuffle(members)
+    sig_at = rng.randrange(len(members) + 1)
+    members.insert(sig_at, _jstr("sig", rng) + _ws(rng) + ":" + _ws(rng) + '"\0"')
+    count = len(members)
+    sig_last = sig_at == count - 1
+    pieces: list[tuple[str, bool]] = [("{", False), (_ws(rng), False)]
+    for index, member in enumerate(members):
+        is_sig = index == sig_at
+        pieces.append((member, is_sig))
+        if index == count - 1:
+            pieces.append((_ws(rng), False))
+            continue
+        before_last_sig = sig_last and index + 1 == sig_at
+        pieces += [
+            (_ws(rng), is_sig),
+            (",", is_sig or before_last_sig),
+            (_ws(rng), before_last_sig),
+        ]
+    pieces.append(("}", False))
+    message = "".join(text for text, excised in pieces if not excised)
+    sig = _hmac_hex(PSK, message.encode("utf-8"))
+    datagram = b""
+    span_start = span_end = -1
+    for text, excised in pieces:
+        if excised and span_start < 0:
+            span_start = len(datagram)
+        datagram += text.replace("\0", sig).encode("utf-8")
+        if excised:
+            span_end = len(datagram)
+    frame = Frame(type=frame_type, origin=ORIGIN, seq=seq, ts=ts, body=body)
+    return datagram, message.encode("utf-8"), range(span_start, span_end), frame
+
+
+def test_seeded_reserialization_signed_over_own_bytes_verifies() -> None:
+    rng = random.Random(20261104)
+    positions = set()
+    for round_index in range(240):
+        frame_type = list(FrameType)[round_index % len(FrameType)]
+        raw, message, excised, expected = _third_party_frame(rng, frame_type)
+        if len(raw) > MAX_FRAME_BYTES:
+            continue
+        positions.add(raw.index(b'"sig"') if b'"sig"' in raw else -1)
+        assert signed_message(raw) == message
+        assert json.loads(message) == _without_sig(raw)
+        assert decode(raw, PSK) == expected
+        assert _drop_reason(raw, OTHER_PSK) is DropReason.AUTH
+        for _ in range(25):
+            index = rng.randrange(len(raw))
+            new = rng.randrange(256)
+            if new == raw[index]:
+                continue
+            mutated = bytearray(raw)
+            mutated[index] = new
+            if index in excised and raw[index] in JSON_WS and new in JSON_WS:
+                assert decode(bytes(mutated), PSK) == expected
+                continue
+            with pytest.raises(FrameDrop):
+                decode(bytes(mutated), PSK)
+    assert len(positions) > 20  # sig member landed in many places

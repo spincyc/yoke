@@ -145,3 +145,41 @@ def test_other_group_on_shared_port_is_not_received() -> None:
             other.close()
     finally:
         rx.close()
+
+
+def test_unicast_to_control_port_is_not_received() -> None:
+    """ADR 0023: the control socket reads only group-addressed datagrams."""
+    rx = open_or_skip(interface="127.0.0.1")
+    tx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        rx.settimeout(1.0)
+        tx.sendto(b"unicast-probe", ("127.0.0.1", PORT))
+        rx.sendto(b"group-probe", (GROUP, PORT))
+        try:
+            data, _ = rx.recvfrom(2048)
+        except TimeoutError:  # pragma: no cover - environment-dependent
+            pytest.skip("loopback multicast unavailable")
+        # The group datagram arrives; the earlier unicast one never does.
+        assert data == b"group-probe"
+        rx.settimeout(0.1)
+        with pytest.raises(TimeoutError):
+            rx.recvfrom(2048)
+    finally:
+        tx.close()
+        rx.close()
+
+
+def test_socket_binds_group_address(monkeypatch: pytest.MonkeyPatch) -> None:
+    bound: list[object] = []
+
+    class RecordingSocket:
+        def setsockopt(self, *args: object) -> None:
+            pass
+
+        def bind(self, address: object) -> None:
+            bound.append(address)
+
+    monkeypatch.setattr("yoke.net.mcast.sys.platform", "linux")
+    monkeypatch.setattr("yoke.net.mcast.socket.socket", lambda *a: RecordingSocket())
+    open_multicast_socket(GROUP, PORT, interface="127.0.0.1")
+    assert bound == [(GROUP, PORT)]

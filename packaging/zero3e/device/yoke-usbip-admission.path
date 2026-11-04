@@ -1,0 +1,14 @@
+# Re-apply the USB/IP admission allowlist whenever the agent requests it.
+# The agent rewrites a request that stays unapplied for 5 s, so a trigger
+# missed while the helper runs cannot wedge admission (⚠ bench-unverified).
+[Unit]
+Description=Watch yoke USB/IP admission requests
+
+[Path]
+PathChanged=/run/yoke/usbip-admission.json
+Unit=yoke-usbip-admission.service
+TriggerLimitIntervalSec=10s
+TriggerLimitBurst=100
+
+[Install]
+WantedBy=multi-user.target

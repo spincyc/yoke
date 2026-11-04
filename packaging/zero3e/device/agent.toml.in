@@ -1,0 +1,21 @@
+# yoke agent for the ZERO 3E device-side box. Written once by install.sh;
+# never overwritten. See DEPLOYMENT.md "ZERO 3E boxes".
+node_id = "@NODE_ID@"
+role = "producer"
+kind = "usb"
+name = "@NODE_ID@"
+psk_file = "/etc/yoke/psk"
+state_file = "/var/lib/yoke/state.json"
+# This box's address on the control VLAN: multicast interface, and the
+# address consumers' USB/IP clients connect to.
+interface = "@HOST@"
+
+[driver]
+type = "usbip"
+host = "@HOST@"
+port = @PORT@
+busids = [@BUSIDS@]
+# Root provisioning binds the devices (yoke-usbip-bind@.service) and owns the
+# firewall (yoke-usbip-admission); the agent only requests admission.
+bindings = "external"
+admission = "nftables"

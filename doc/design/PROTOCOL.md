@@ -1,10 +1,11 @@
 # Yoke Wire Protocol v1 (YWP/1)
 
 Status: normative for v1, with compatible correctness clarifications in
-ADR 0012. The frame envelope and version remain **YWP/1**: existing clients
-can still send intents and observe multicast. An incompatible authority or
-wire change requires a new version; these fixes do not implement the planned
-per-device/source-authorized YWP/2 security model.
+ADRs 0012, 0023 and 0024. The frame envelope and version remain **YWP/1**:
+existing clients can still send intents and observe multicast. An
+incompatible authority or wire change requires a new version; these fixes
+do not implement the planned per-device/source-authorized YWP/2 security
+model.
 
 ## Transport
 
@@ -18,22 +19,38 @@ per-device/source-authorized YWP/2 security model.
 - One frame per datagram. Maximum encoded frame size: **1200 bytes**;
   encoders MUST reject larger frames, decoders MUST drop them (count:
   `oversize`).
+- Receivers read only datagrams addressed to the control group: the
+  reference socket binds the group address, so unicast datagrams sent to
+  a host's control port are never delivered to the protocol (ADR 0023).
+  Datagram source addresses are transport metadata, not authenticated
+  identity; their only protocol use is producer admission (see Producer
+  state machine).
 
 ## Encoding
 
-A frame is canonical JSON, UTF-8, with:
+A frame is one JSON object text (RFC 8259), UTF-8, in one datagram. JSON
+must contain finite numbers, unique object keys, valid Unicode and at most
+32 nested containers. Invalid inputs are dropped as `malformed`, never
+allowed to escape the receive loop as parser or encoding exceptions.
 
-- keys sorted lexicographically at every level,
-- separators `,` and `:` (no whitespace),
-- encoders MUST NOT emit non-integer numbers anywhere except the `ts`
-  field (see below); decoders MUST tolerate them in bodies (robustness —
-  the signature binds parsed content either way).
+Receivers MUST accept any valid JSON formatting: member order,
+insignificant whitespace, number spelling (`1793000000.1` or
+`1.7930000000999999e9`) and string escapes (`é` or `é`) do not
+affect validity, because the signature binds the transmitted bytes (see
+Authentication). Encoders MUST NOT emit non-integer numbers anywhere
+except the `ts` field; decoders MUST tolerate them in bodies.
 
-Canonical bytes = `json.dumps(obj, sort_keys=True, separators=(",", ":"),
-ensure_ascii=False, allow_nan=False).encode("utf-8")`. JSON must contain
-finite numbers, unique object keys, valid Unicode and at most 32 nested
-containers. Invalid inputs are dropped as `malformed`, never allowed to
-escape the receive loop as parser or encoding exceptions.
+The reference encoder emits **canonical** bytes: keys sorted
+lexicographically at every level, separators `,` and `:` with no
+whitespace, non-ASCII characters unescaped, and numbers in Python's
+shortest round-trip spelling (`json.dumps(obj, sort_keys=True,
+separators=(",", ":"), ensure_ascii=False, allow_nan=False)`). Canonical
+form is a property of reference senders and the legacy verification path
+below, not a requirement on third-party senders. Duplicate detection
+(Replay defense) compares the canonical re-serialization of the whole
+parsed frame, `sig` included: a byte-identical repeat is a `dup`, while a
+re-formatted copy signed over its own bytes carries a different `sig` and
+counts as `stale`.
 
 ## Frame envelope
 
@@ -52,11 +69,37 @@ Unknown envelope fields ⇒ drop (count: `malformed`). Unknown fields
 
 ### Authentication
 
-`sig = HMAC-SHA256(psk, canonical_bytes(frame_without_sig)).hexdigest()`
-where `frame_without_sig` is the frame object with the `sig` key removed
-entirely. The PSK is site-provisioned key bytes (from a config file,
-mode 0600, at most one trailing newline stripped; hex is recommended so
-no raw whitespace is ambiguous — see DEPLOYMENT.md). `sig` MUST match
+`sig = HMAC-SHA256(psk, signed_message).hexdigest()`, where the signed
+message is the **transmitted datagram with its `sig` member excised**
+(ADR 0023):
+
+1. Locate the single top-level member whose key, after JSON unescaping,
+   is `sig`. Let K be the byte offset of its key's opening quote and E the
+   offset just past the closing quote of its string value. Members of
+   nested objects are never excised.
+2. If the member is not the last member of the top-level object, remove
+   bytes from K through the `,` that terminates it (inclusive; the first
+   non-whitespace byte after E). If it is the last member, remove bytes
+   from the `,` that precedes it (the last non-whitespace byte before K)
+   up to E. All other bytes, including any other whitespace, are kept.
+
+A sender MUST sign exactly the unsigned bytes it transmits. For a
+canonical frame the signed message equals the canonical bytes of the
+frame object without `sig`, which is what every YWP/1 reference sender has
+always signed. For compatibility, receivers MUST also accept a `sig` that
+verifies over that legacy canonical re-serialization of the parsed frame
+without `sig`; either message may be tried first, each compared in
+constant time. Whitespace inside the excised member is not authenticated
+and carries no meaning. The legacy path keeps today's property that any
+re-serialization of a canonically signed frame verifies; it may be retired
+only by a future protocol version. Published conformance vectors, including third-party
+formatting and negative cases, are in
+[`tests/vectors/ywp1-auth.json`](../../tests/vectors/ywp1-auth.json).
+
+The PSK is site-provisioned key bytes (from a config file,
+mode 0600, at most one trailing newline stripped, at least 32 bytes; hex
+is recommended so no raw whitespace is ambiguous — see DEPLOYMENT.md).
+Open mode (no key) must be selected explicitly (ADR 0023). `sig` MUST match
 `^([0-9a-f]{64})?$` — 64 lowercase hex digits, or empty in open mode;
 any other string ⇒ drop (count: `auth`) before the compare (a non-hex
 `sig` must never reach the constant-time comparison, which can crash on
@@ -75,20 +118,36 @@ duplicates are normal on multicast.
 Sequence units are Unix nanoseconds (ADR 0007), not seconds. A sender
 durably reserves a block before emitting frames from it: persisted `seq`
 is the reserved upper bound, not merely the last sequence already emitted.
-After restart it starts above that bound, using the larger of that bound
-and `int(unix_time) * 1_000_000_000` as its floor, and persists a fresh
-reservation before announcing. Unused reserved numbers are skipped. A
+After restart it starts above that bound `S` and persists a fresh
+reservation before announcing. Its floor is
+`max(S, min(W, S + SEQ_FLOOR_JUMP))` where `W = int(unix_time) *
+1_000_000_000`; with no durable bound (`S = 0`, first commissioning) the
+floor is `W`. The wall clock can therefore advance a restart floor by at
+most 60 s: a boot with a far-future clock cannot persist a reservation
+that peers reject (ADR 0023). Unused reserved numbers are skipped. A
 reservation failure releases no frames beyond the previous durable bound.
 This prevents sequence reuse even when a process restarts in the same second
 or its wall clock moves backwards while its durable state survives.
 
 The reference implementation reserves 4096 numbers at a time. Receivers
-still reject values more than one hour ahead of their approximate wall
-clock. State loss, receive replay-map eviction and malicious site-key holders
+reject (count: `stale`, without advancing the replay mark) values more
+than `SEQ_FUTURE_MARGIN` (one hour) ahead of their **current** wall clock:
+the shell reads wall time for each received frame and supplies it to the
+core, so a clock step by time synchronization takes effect on the next
+frame. Timers remain monotonic and never observe wall-clock steps. A node
+reports, in its local log only, authenticated frames it rejects by this
+bound and the condition where its own next sequence exceeds the bound for
+its current clock. In the latter case either its clock is behind (peers
+with correct clocks still admit it) or an earlier boot persisted a future
+reservation; the defined recovery for the second case is the explicit
+`yoke agent --rebase-sequence` operation, which with the clock confirmed
+correct saves `S = (int(unix_time) + 3600) * 1_000_000_000` and leaves the
+pairing unchanged. Nothing rebases automatically.
+
+State loss, receive replay-map eviction and malicious site-key holders
 remain limitations: this is not cryptographic anti-replay across arbitrary
 reflashes or an ownership lease. State recovery is an explicit operator
-decision. Timer inputs are monotonic; a separately injected startup wall
-time supplies the sequence floor and future-sequence estimate.
+decision.
 
 ## Versions
 
@@ -120,19 +179,33 @@ startup (after state restore), and immediately after any state change.
   "state": "idle" | "active" | "pending" | "error",
   "err": "<detail>" | null,
   "pairing": { "producer": "<id>" | null, "version": [n, "<id>"] } | null,
-  "media": { ... } | null }
+  "media": { ... } | null,
+  "driver_status": { "detail": "<str>" } }      # optional
 ```
 
 - Consumers MUST include `pairing` (null producer = unpaired; version
   `[0, ""]` when never paired). Producers set `pairing: null`.
+- `driver_status` is optional evidence from the local backend: `detail` is
+  a non-empty human string of at most 128 UTF-8 bytes (truncated at a
+  character boundary). Senders omit the member when there is no detail and
+  omit it first when the frame budget is tight; receivers MUST NOT require
+  it and ignore other members inside it. `err` is likewise bounded human
+  text, shortened to fit the frame budget.
 - Producers MUST include `media`, an opaque **driver-defined** object
   that the paired consumer's driver of the same `kind` knows how to
   consume; the control plane never interprets it (ADR 0002). It MUST be
   a JSON object or null, and MUST be ≤ the frame budget. The reference
   drivers use: software HDMI (igmp) `{"group": "<ipv4>", "port": <int>}`;
   Just Add Power (jap) `{"channel": <int>, "group": "<ipv4>"}`; USB
-  (usbip) `{"host": "<ipv4>", "port": <int>, "busids": ["<busid>",
-  ...]}`. A consumer whose driver rejects the media shape surfaces
+  (usbip) `{"host": "<host>", "port": <int>, "busids": ["<busid>",
+  ...]}`. The USB/IP `host` is an IPv4 literal, an IPv6 literal (bare or
+  bracketed, with an optional `%zone` of letters, digits, `_ . -`), or a
+  DNS name of LDH labels (≤ 63 bytes each, ≤ 253 bytes total, optional
+  trailing dot); `port` is 1–65535; `busids` are 1–64 unique
+  `<bus>-<port>[.<port>…]` strings of ≤ 31 bytes; each
+  `"<host> <port> <busid>\n"` connection record must fit 99 bytes. A
+  producer that enforces data-plane admission advertises an IPv4 literal
+  (ADR 0024). A consumer whose driver rejects the media shape surfaces
   `driver-error` and retries — the media contract is enforced by the
   drivers, not this envelope. Consumers set `media: null`.
 
@@ -170,8 +243,9 @@ rejections and MUST NOT change state.
 An applied ACK confirms the saved pairing, not successful media activation
 or completed backend release after unpair.
 Clients distinguish that result from a subsequent matching consumer announce
-reporting active media. Open-PSK lab operation is explicitly identified by
-tools; it is not authenticated deployment.
+reporting active media. Open-PSK lab operation must be selected explicitly
+(`open_mode = true` for agents, `--open` for intent senders) and is
+identified by tools; it is not authenticated deployment.
 
 ### `evt` — event
 
@@ -179,15 +253,30 @@ tools; it is not authenticated deployment.
 { "event": "<slug>", "detail": { ... } }
 ```
 
-Normative event slugs: `pairing-applied`, `media-up`, `media-pending`,
-`media-down`, `driver-error`, `driver-retry`, `peer-lost`,
-`peer-returned`, `rx-drop`, `started`, `stopping`. `rx-drop` detail
-carries the drop counters `{malformed, version, auth, stale, oversize}`
-and is emitted at most once per `ANN_INTERVAL` when counters changed; an
-`auth` count rising is how an authentication failure surfaces (there is
-no separate `auth-fail` event). `driver-error` detail is
-`{"detail": "<str>"}`. A rejected intent surfaces only as its `ack`
-(see below), not as an event.
+Normative event slugs and their `detail` objects:
+
+| Event | `detail` |
+|---|---|
+| `started` | `{}` |
+| `stopping` | `{}` |
+| `pairing-applied` | `{"producer": P, "version": [n, "<id>"]}`; P is `"<id>"` or `null` |
+| `media-up` | `{}` or `{"detail": "<str>"}` (driver evidence) |
+| `media-pending` | `{}` or `{"producer": "<id>"}` |
+| `media-down` | `{}` |
+| `driver-error` | `{"detail": "<str>"}` (may be `""`) |
+| `driver-retry` | `{"producer": "<id>"}` (attach) or `{"operation": "detach"}` |
+| `peer-lost` | `{"peer": "<id>", "reason": R}`; R is `"timeout"` or `"bye"` |
+| `peer-returned` | `{"peer": "<id>"}` |
+| `rx-drop` | `{"malformed": n, "version": n, "auth": n, "stale": n, "oversize": n}` |
+
+Detail strings are human text of at most 128 UTF-8 bytes, truncated at a
+character boundary; the full text belongs in the sender's local log
+(ADR 0023). Counters are cumulative non-negative integers since the
+sender started. Receivers MUST ignore unknown slugs and unknown `detail`
+members. `rx-drop` is emitted at most once per `ANN_INTERVAL` when
+counters changed; an `auth` count rising is how an authentication
+failure surfaces (there is no separate `auth-fail` event). A rejected
+intent surfaces only as its `ack` (see below), not as an event.
 
 ### `bye`
 
@@ -233,6 +322,12 @@ Repeated error or pending polls MUST NOT postpone an already scheduled
 retry. Retry deadlines advance only after an attempted reconciliation;
 successful attachment resets backoff. A backend reporting pending drift
 from a live configured producer schedules bounded reattachment as well.
+When the paired producer's announced `state` changes from anything else
+to `active` while the consumer is `error` or `pending` with no teardown
+outstanding, the consumer resets its backoff and reattaches immediately
+(a replugged device or newly applied admission must not wait out a 30 s
+backoff). The producer's `state` is otherwise advisory and never causes
+a detach (ADR 0023).
 
 Unpaired configuration does not prove that the driver has released its old
 resources. After explicit unpair, or an unknown-producer replacement, track
@@ -271,11 +366,17 @@ in the physical inventory. No physical OTG presentation is implied.
 Ownership intent alone cannot identify an import whose upstream connection
 record was never written: ports lacking corroborating tuple metadata remain
 untouched and report manual recovery required, without blocking unrelated
-routes. Reject targets that cannot fit the upstream connection-record limit
+routes. A missing owned import is attributed only to record-less ports
+that were absent when that import was last observed with its record (or,
+before the first observation, absent before the import was attempted);
+when none exists the import is gone and re-attach proceeds (ADR 0024).
+Reject targets that cannot fit the upstream connection-record limit
 before side effects. Producer unbind releases only bindings this driver
 established; an already-bound export is not automatically owned.
 Producer polls may reconcile startup bind failure or a returned configured
-device; explicit unbind disables automatic repair.
+device; explicit unbind disables automatic repair. With externally
+provisioned bindings (ADR 0024) the producer driver never binds or unbinds
+and reports unbound devices as errors.
 
 Announcements must remain encodable during error and readiness transitions.
 Optional evidence is omitted first, then human error text is shortened to
@@ -315,6 +416,25 @@ consumer's pairing independently regardless (a losing consumer sits in
 `error`/`pending` with its driver retrying). HDMI producers are
 inherently shareable — multiple decoders may join one encoder's group —
 so nothing enforces exclusivity there.
+
+**Data-plane admission (USB/IP reference backend, ADR 0024).** A producer
+configured for admission derives its admission set locally from accepted
+frames; nothing is added to the wire. A consumer is admitted when all
+hold: its latest accepted announce has `role: "consumer"`, this
+producer's `kind` and `pairing.producer` equal to this producer's id; it
+is neither timed out (`PEER_TIMEOUT`) nor departed (`bye`); and its
+admitted address is confirmed. The address is the IPv4 source of the
+consumer's accepted frames (any type); it is set or changed only after
+`ADMISSION_CONFIRMATIONS` (2) consecutive accepted frames from the same
+source. Frames dropped for any reason — including `dup` and `stale`
+replays — never bind or confirm an address. The producer publishes the
+complete set, as (consumer id, address) pairs, to its backend whenever it
+changes and publishes the empty set when it starts, so a restarted
+producer never inherits stale permission. The backend restricts new
+media-plane sessions to those addresses and loopback; established
+sessions are not torn down by the control plane. Addresses are
+unauthenticated transport metadata: admission raises the bar against
+off-path LAN hosts, not against on-path attackers or site-key holders.
 
 ## Peer tracking
 
@@ -361,9 +481,14 @@ intent is not re-offered forever. `superseded` acks evict nothing.
 | `CLI_RETRY` | 5 sends, 0.5 s × 2ⁿ spacing; deadline 10 s |
 | `INTENT_CACHE_TTL` | 24 h |
 | `SUPPRESSION_WINDOW` | 0.2–1.2 s |
+| `SEQ_FUTURE_MARGIN` | 3600 s (admission bound ahead of current wall time) |
+| `SEQ_FLOOR_JUMP` | 60 s (maximum wall-clock advance of a restart floor) |
+| `ADMISSION_CONFIRMATIONS` | 2 consecutive accepted frames |
 
-All timers derive from the injected clock; nothing reads wall time
-directly in `core`.
+All timers derive from the injected monotonic clock; nothing reads a
+clock directly in `core`. Wall time enters the core only as a value the
+shell reads with each input, for the sequence floor and the future
+admission bound.
 
 ## Snooper
 
@@ -388,7 +513,8 @@ peer's last announcement time.
 Text renderers escape terminal control characters (ASCII/C1 and Unicode
 format/separator controls); JSON diagnostic output retains the original data.
 Observers apply the same future-sequence admission bound as nodes, using
-injected monotonic/startup-wall clocks before updating replay high-water.
+the wall time their shell reads for each observed datagram (or the last
+supplied reading) before updating replay high-water.
 If distinct normalized intents reuse one consumer/version, a version-only
 ACK cannot establish which body it acknowledges: report ambiguity rather
 than attributing success to one body. A fresh operation version resolves

@@ -320,7 +320,9 @@ class Snooper:
     input arrives through :meth:`observe` or an injected :meth:`topology`
     timestamp. Construction takes paired monotonic ``now`` and startup
     ``wall_time`` origins for the same future-sequence bound as an agent;
-    omitting ``wall_time`` uses ``now`` as both clock origins.
+    omitting ``wall_time`` uses ``now`` as both clock origins. Shells pass
+    each datagram's wall-clock reading to :meth:`observe` so a clock step
+    changes the bound on the next datagram (ADR 0023).
     """
 
     def __init__(
@@ -348,8 +350,16 @@ class Snooper:
         self.intents: dict[str, IntentView] = {}
         self.counts: dict[str, int] = dict.fromkeys(VERDICTS, 0)
 
-    def observe(self, raw: bytes, now: float) -> list[SnoopRecord]:
-        """Judge one datagram received at ``now``; returns one record."""
+    def observe(
+        self, raw: bytes, now: float, *, wall: float | None = None
+    ) -> list[SnoopRecord]:
+        """Judge one datagram received at ``now``; returns one record.
+
+        ``wall`` is the shell's wall-clock reading at receipt; without it the
+        last supplied reading is extrapolated with monotonic time.
+        """
+        if wall is not None and math.isfinite(wall) and wall >= 0:
+            self._wall_offset = wall - now
         if self._start is None:
             self._start = now
         rel = now - self._start

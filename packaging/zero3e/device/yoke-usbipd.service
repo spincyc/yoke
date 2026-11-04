@@ -1,0 +1,25 @@
+# USB/IP export daemon for the ZERO 3E device-side box (ADR 0024).
+# Requires the admission table first: if it cannot be installed, the daemon
+# never opens TCP @PORT@ to the LAN (fail closed).
+# ⚠ bench-unverified: Debian's usbip package path, and that usbipd needs no
+# capabilities as uid 0 (it writes root-owned usbip_sockfd attributes). If
+# the journal shows EPERM on the bench, record it before relaxing this unit.
+[Unit]
+Description=USB/IP daemon for yoke exports
+Requires=yoke-usbip-admission.service
+After=yoke-usbip-admission.service systemd-modules-load.service network.target
+
+[Service]
+ExecStart=/usr/sbin/usbipd --tcp-port @PORT@
+Restart=on-failure
+RestartSec=2
+CapabilityBoundingSet=
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+
+[Install]
+WantedBy=multi-user.target

@@ -24,22 +24,26 @@ role = "consumer"
 kind = "hdmi"
 state_file = "{state}"
 """
+# A configuration that is valid without a key must opt into lab mode.
+OPEN_LAB = MINIMAL + "open_mode = true\n"
+KEY = b"0123456789abcdef0123456789abcdef"  # MIN_PSK_BYTES of key material
 
 
 class TestConfigLoad:
     def test_minimal(self, tmp_path: Path) -> None:
-        cfg = load(write_config(tmp_path, MINIMAL.format(state=tmp_path / "s.json")))
+        cfg = load(write_config(tmp_path, OPEN_LAB.format(state=tmp_path / "s.json")))
         assert cfg.node.node_id == "tv-den"
         assert cfg.node.role is Role.CONSUMER
         assert cfg.node.kind is Kind.HDMI
         assert cfg.node.name == "tv-den"  # defaults to node_id
-        assert cfg.psk == b""  # open mode
+        assert cfg.psk == b""  # explicit open mode
+        assert cfg.open_mode is True
         assert cfg.port == 9753
         assert cfg.driver == {}
 
     def test_full(self, tmp_path: Path) -> None:
         psk = tmp_path / "psk"
-        psk.write_bytes(b"sekrit\n")
+        psk.write_bytes(KEY + b"\n")
         psk.chmod(0o600)
         cfg = load(
             write_config(
@@ -51,14 +55,15 @@ class TestConfigLoad:
             )
         )
         assert cfg.node.name == "Den TV"
-        assert cfg.psk == b"sekrit"  # only the trailing newline stripped
+        assert cfg.psk == KEY  # only the trailing newline stripped
+        assert cfg.open_mode is False
         assert (cfg.group, cfg.port) == ("239.1.2.3", 1234)
         assert cfg.interface == "10.0.0.5"
         assert cfg.driver["type"] == "jap"
 
     def test_psk_preserves_internal_and_whitespace_bytes(self, tmp_path: Path) -> None:
         psk = tmp_path / "psk"
-        psk.write_bytes(b" \tkey with spaces \x00\n")  # only final \n stripped
+        psk.write_bytes(b" \tkey with spaces \x00" + KEY + b"\n")  # final \n only
         psk.chmod(0o600)
         cfg = load(
             write_config(
@@ -66,11 +71,11 @@ class TestConfigLoad:
                 MINIMAL.format(state=tmp_path / "s.json") + f'psk_file = "{psk}"\n',
             )
         )
-        assert cfg.psk == b" \tkey with spaces \x00"
+        assert cfg.psk == b" \tkey with spaces \x00" + KEY
 
     def test_group_or_other_readable_psk_refused(self, tmp_path: Path) -> None:
         psk = tmp_path / "psk"
-        psk.write_bytes(b"sekrit")
+        psk.write_bytes(KEY)
         psk.chmod(0o644)
         text = MINIMAL.format(state=tmp_path / "s.json") + f'psk_file = "{psk}"\n'
         with pytest.raises(ConfigError, match="group/other-accessible"):
@@ -97,7 +102,7 @@ class TestConfigLoad:
         ],
     )
     def test_invalid_values(self, tmp_path: Path, mutation: str) -> None:
-        base = MINIMAL.format(state=tmp_path / "s.json")
+        base = OPEN_LAB.format(state=tmp_path / "s.json")
         # Later assignments in TOML would be duplicates; rebuild instead.
         for line in mutation.splitlines():
             key = line.split(" ", 1)[0]
@@ -174,7 +179,7 @@ class TestStateFile:
 )
 def test_network_options_fail_at_config_load(tmp_path: Path, extra: str) -> None:
     with pytest.raises(ConfigError):
-        load(write_config(tmp_path, MINIMAL.format(state=tmp_path / "s.json") + extra))
+        load(write_config(tmp_path, OPEN_LAB.format(state=tmp_path / "s.json") + extra))
 
 
 def test_config_read_error_is_actionable(tmp_path: Path) -> None:
@@ -204,6 +209,37 @@ def test_config_psk_fifo_is_rejected_without_waiting(tmp_path: Path) -> None:
 
 
 def test_config_rejects_nul_state_path(tmp_path: Path) -> None:
-    text = MINIMAL.format(state="bad\\u0000state")
+    text = OPEN_LAB.format(state="bad\\u0000state")
     with pytest.raises(ConfigError, match="state_file"):
+        load(write_config(tmp_path, text))
+
+
+def test_missing_psk_requires_explicit_open_mode(tmp_path: Path) -> None:
+    # ADR 0023: omitting psk_file never silently selects unauthenticated mode.
+    with pytest.raises(ConfigError, match="psk_file is required"):
+        load(write_config(tmp_path, MINIMAL.format(state=tmp_path / "s.json")))
+
+
+def test_psk_and_open_mode_are_contradictory(tmp_path: Path) -> None:
+    psk = tmp_path / "psk"
+    psk.write_bytes(KEY)
+    psk.chmod(0o600)
+    text = OPEN_LAB.format(state=tmp_path / "s.json") + f'psk_file = "{psk}"\n'
+    with pytest.raises(ConfigError, match="contradictory"):
+        load(write_config(tmp_path, text))
+
+
+@pytest.mark.parametrize("value", ['"yes"', "1"])
+def test_open_mode_must_be_boolean(tmp_path: Path, value: str) -> None:
+    text = MINIMAL.format(state=tmp_path / "s.json") + f"open_mode = {value}\n"
+    with pytest.raises(ConfigError, match="open_mode"):
+        load(write_config(tmp_path, text))
+
+
+def test_short_psk_is_refused(tmp_path: Path) -> None:
+    psk = tmp_path / "psk"
+    psk.write_bytes(KEY[:-1] + b"\n")
+    psk.chmod(0o600)
+    text = MINIMAL.format(state=tmp_path / "s.json") + f'psk_file = "{psk}"\n'
+    with pytest.raises(ConfigError, match="at least 32"):
         load(write_config(tmp_path, text))

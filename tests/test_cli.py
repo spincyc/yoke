@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 import types
 from collections import deque
 from dataclasses import replace
@@ -29,6 +30,7 @@ from yoke.cli import (
     run_snoop,
     run_status,
 )
+from yoke.config import resolve_psk as config_resolve
 from yoke.core.frames import decode, encode
 from yoke.core.node import Node
 from yoke.core.types import (
@@ -47,6 +49,7 @@ from yoke.core.types import (
 from yoke.snoop import NodeView
 
 PSK = b"cli-site-secret-0123"
+KEY = b"0123456789abcdef0123456789abcdef"  # MIN_PSK_BYTES of key
 ORIGIN = "cli-test"
 AUTHOR = "op-test"
 TS = 1_755_000_000.0
@@ -511,6 +514,7 @@ def write_config(tmp_path: Path) -> Path:
         'role = "consumer"\n'
         'kind = "hdmi"\n'
         f'state_file = "{state}"\n'
+        "open_mode = true\n"
     )
     return cfg
 
@@ -560,7 +564,7 @@ def test_main_bad_producer_id_exits_2(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     psk_file = tmp_path / "psk"
-    psk_file.write_bytes(b"secret")
+    psk_file.write_bytes(KEY)
     psk_file.chmod(0o600)
     code = main(["--psk-file", str(psk_file), "pair", "BAD_ID", "tv-den"])
     assert code == 2
@@ -571,7 +575,7 @@ def test_main_bad_origin_exits_2(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     psk_file = tmp_path / "psk"
-    psk_file.write_bytes(b"secret")
+    psk_file.write_bytes(KEY)
     psk_file.chmod(0o600)
     code = main(
         [
@@ -611,19 +615,19 @@ def test_default_origin_sanitizes_hostname() -> None:
 
 def test_resolve_psk_explicit_file(tmp_path: Path) -> None:
     psk_file = tmp_path / "psk"
-    psk_file.write_bytes(b"secret-key\n")
+    psk_file.write_bytes(KEY + b"\n")
     psk_file.chmod(0o600)
     psk, warning = resolve_psk(str(psk_file))
-    assert psk == b"secret-key"
+    assert psk == KEY
     assert warning is None
 
 
 def test_resolve_psk_default_present(tmp_path: Path) -> None:
     default = tmp_path / "psk"
-    default.write_bytes(b"site-key")
+    default.write_bytes(KEY)
     default.chmod(0o600)
     psk, warning = resolve_psk(None, default_path=default)
-    assert psk == b"site-key"
+    assert psk == KEY
     assert warning is None
 
 
@@ -759,7 +763,7 @@ def test_invalid_network_arguments_fail_before_socket(
 @pytest.mark.parametrize("mode", [0o644, 0o640, 0o620, 0o601])
 def test_cli_refuses_exposed_psk(tmp_path: Path, mode: int) -> None:
     path = tmp_path / "psk"
-    path.write_bytes(b"secret")
+    path.write_bytes(KEY)
     path.chmod(mode)
     with pytest.raises(ValueError, match="group/other-accessible"):
         resolve_psk(str(path))
@@ -776,7 +780,7 @@ def test_cli_rejects_empty_and_oversize_psk(tmp_path: Path, content: bytes) -> N
 
 def test_cli_rejects_psk_symlink(tmp_path: Path) -> None:
     key = tmp_path / "key"
-    key.write_bytes(b"secret")
+    key.write_bytes(KEY)
     key.chmod(0o600)
     link = tmp_path / "psk"
     link.symlink_to(key)
@@ -897,7 +901,9 @@ def test_status_table_escapes_control_characters() -> None:
 
 def test_wall_clock_rollback_does_not_change_retry_deadline() -> None:
     net = FakeNet([(1000.1, ann_consumer())])
-    stamps = iter([2000.0, 2000.0, 1900.0, 1800.0, 1700.0, 1600.0])
+    # Readings: observer start, the observed announce (ADR 0023 re-reads wall
+    # time per datagram), then one per send.
+    stamps = iter([2000.0, 2000.0, 2000.0, 1900.0, 1800.0, 1700.0, 1600.0])
     io = replace(net.io(), wall_clock=lambda: next(stamps))
     outcome = run_intent(io, "pair", "tv-den", "cam-1")
     assert outcome.exit_code == 1
@@ -1048,3 +1054,87 @@ def test_delayed_authentic_ack_cannot_commit_a_new_target_from_stale_announce() 
     ]
     assert node.pairing.producer == "cam-1"
     assert node.pairing.version == (1, "op-z")
+
+
+def test_pair_without_psk_requires_explicit_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # ADR 0023: unsigned intents are never sent by default.
+    monkeypatch.setattr("yoke.cli.DEFAULT_PSK_PATH", tmp_path / "absent")
+    monkeypatch.setattr(
+        "yoke.cli.resolve_psk",
+        lambda explicit: config_resolve(explicit, tmp_path / "absent"),
+    )
+
+    def forbidden(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("socket opened without explicit open mode")
+
+    monkeypatch.setattr("yoke.cli.open_multicast_socket", forbidden)
+    assert main(["pair", "cam-1", "tv-den"]) == 2
+    assert "--open" in capsys.readouterr().err
+
+
+def test_short_cli_psk_is_refused(tmp_path: Path) -> None:
+    path = tmp_path / "psk"
+    path.write_bytes(KEY[:31])
+    path.chmod(0o600)
+    with pytest.raises(ValueError, match="at least 32"):
+        resolve_psk(str(path))
+
+
+def test_usbip_admission_helper_entry_point(tmp_path: Path) -> None:
+    # ADR 0024 root helper; `true` stands in for nft (no firewall mutation).
+    status = tmp_path / "admission" / "status.json"
+    code = main(
+        [
+            "usbip-admission",
+            "apply",
+            "--port",
+            "3240",
+            "--request",
+            str(tmp_path / "absent.json"),
+            "--status",
+            str(status),
+            "--nft",
+            "true",
+        ]
+    )
+    assert code == 0
+    assert json.loads(status.read_text())["applied"] is True
+    assert main(["usbip-admission", "apply", "--port", "0", "--nft", "true"]) == 2
+
+
+def test_rebase_sequence_recovers_future_reservation(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # ADR 0023: explicit recovery, no manual state edit, pairing preserved.
+    from yoke import statefile
+    from yoke.core.types import Pairing, PersistedState
+
+    cfg = write_config(tmp_path)
+    state_path = tmp_path / "state.json"
+    future = (int(time.time()) + 10 * 365 * 86400) * 1_000_000_000
+    pairing = Pairing("cam-1", (3, "op-a"))
+    statefile.save(state_path, PersistedState(seq=future, pairing=pairing))
+    assert main(["agent", "--config", str(cfg), "--rebase-sequence"]) == 0
+    rebased = statefile.load(state_path)
+    assert rebased.pairing == pairing
+    assert rebased.seq < future
+    assert rebased.seq <= (int(time.time()) + 3601) * 1_000_000_000
+    assert "rebased durable sequence bound" in capsys.readouterr().out
+    # Refuses when the bound is already admissible (cannot cause reuse).
+    assert main(["agent", "--config", str(cfg), "--rebase-sequence"]) == 4
+    assert "nothing to rebase" in capsys.readouterr().err
+    assert statefile.load(state_path).seq == rebased.seq
+
+
+def test_rebase_sequence_refuses_while_agent_holds_state(tmp_path: Path) -> None:
+    from yoke import statefile
+    from yoke.core.types import PersistedState
+
+    cfg = write_config(tmp_path)
+    state_path = tmp_path / "state.json"
+    statefile.save(state_path, PersistedState(seq=2**62))
+    with statefile.lock(state_path):
+        assert main(["agent", "--config", str(cfg), "--rebase-sequence"]) == 4
+    assert statefile.load(state_path).seq == 2**62

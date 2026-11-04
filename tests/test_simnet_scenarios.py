@@ -630,3 +630,196 @@ def test_unpair_then_repair_same_consumer() -> None:
     applied = [a["version"] for a in net.acks("con-1") if a["applied"] is True]
     assert applied == [[1, CLI], [2, CLI], [3, CLI]]
     assert net.quiescent()
+
+
+# -- ADR 0023: wall-clock skew and steps --------------------------------------
+
+NS = 1_000_000_000
+TWO_HOURS = 7200.0
+
+
+def test_boot_before_ntp_recovers_when_the_clock_steps() -> None:
+    """RTC-less consumer after a PoE outage: booted 2 h behind, NTP later."""
+    net = SimNet(seed=11)
+    net.add_node("prod-1", Role.PRODUCER, Kind.USB)
+    net.add_node("con-1", Role.CONSUMER, Kind.USB, wall_skew=-TWO_HOURS)
+    net.run(3.0)
+    # The consumer's own frames are admissible (durable floor), so peers
+    # see it; it cannot yet admit correct-clock frames.
+    assert "con-1" in net.nodes["prod-1"].node.peers
+    assert "prod-1" not in net.nodes["con-1"].node.peers
+    version, _ = net.send_intent("pair", "con-1", "prod-1")
+    net.run(2.0)
+    assert net.pairing_of("con-1").producer is None  # the intent was "future"
+    assert net.drops_of("con-1")["stale"] > 0
+    assert any("this clock is behind" in log.message for log in net.nodes["con-1"].logs)
+    # NTP steps the clock: recovery without a restart.
+    net.step_clock("con-1", TWO_HOURS)
+    net.send_intent("pair", "con-1", "prod-1", version=version)
+    net.run(4.0)
+    assert net.pairing_of("con-1") == Pairing("prod-1", version)
+    assert net.state_of("con-1") is NodeState.ACTIVE
+    assert net.agree("con-1") == Pairing("prod-1", version)
+
+
+def test_clock_steps_forward_and_back_never_disrupt_an_active_route() -> None:
+    net = SimNet(seed=12)
+    mesh(net, kind=Kind.USB)
+    version, _ = net.send_intent("pair", "con-1", "prod-1")
+    net.run(3.0)
+    assert net.state_of("con-1") is NodeState.ACTIVE
+    before = net.event_slugs("con-1")
+    for node_id, delta in (
+        ("con-1", +3 * 3600.0),  # bad NTP server: forward
+        ("con-1", -3 * 3600.0),  # corrected back
+        ("prod-1", -TWO_HOURS),  # producer stepped back (still sends fine)
+        ("prod-1", +TWO_HOURS),
+    ):
+        net.step_clock(node_id, delta)
+        net.run(10.0)
+        assert net.state_of("con-1") is NodeState.ACTIVE
+        assert net.pairing_of("con-1") == Pairing("prod-1", version)
+    new_events = net.event_slugs("con-1")[len(before) :]
+    # Timers are monotonic: no peer loss, retries or media flaps on the
+    # consumer from wall-clock steps.
+    assert not {"peer-lost", "media-pending", "driver-retry"} & set(new_events)
+
+
+def test_far_future_reboot_cannot_mute_a_node() -> None:
+    """ADR 0023: one boot with a far-future clock persists at most a capped
+    reservation; peers keep admitting the node before and after the fix."""
+    net = SimNet(seed=13)
+    mesh(net, kind=Kind.USB)
+    version, _ = net.send_intent("pair", "con-1", "prod-1")
+    net.run(3.0)
+    stale_before = net.drops_of("prod-1")["stale"]
+    net.reboot("con-1", wall_skew=10 * 365 * 86400.0)
+    net.run(5.0)
+    assert net.nodes["con-1"].stored.seq <= int(net.now + 3600) * NS
+    net.reboot("con-1", wall_skew=0.0)  # clock fixed, restarted again
+    net.run(5.0)
+    assert net.drops_of("prod-1")["stale"] == stale_before
+    assert net.state_of("con-1") is NodeState.ACTIVE
+    assert net.agree("con-1") == Pairing("prod-1", version)
+
+
+def test_restart_before_ntp_with_clock_far_behind_keeps_sequence_fresh() -> None:
+    net = SimNet(seed=14)
+    mesh(net, kind=Kind.USB)
+    version, _ = net.send_intent("pair", "con-1", "prod-1")
+    net.run(3.0)
+    # Power outage: no RTC, the clock restarts a day behind its saved bound.
+    net.reboot("con-1", wall_skew=-86400.0)
+    net.run(5.0)
+    stale = net.drops_of("prod-1")["stale"]
+    net.run(5.0)
+    assert net.drops_of("prod-1")["stale"] == stale  # own frames never stale
+    assert "con-1" in net.nodes["prod-1"].node.peers
+    assert net.pairing_of("con-1") == Pairing("prod-1", version)
+
+
+# -- ADR 0023: producer readiness edge ----------------------------------------
+
+
+def test_producer_replug_triggers_immediate_consumer_retry() -> None:
+    from yoke.core.types import DriverStatus
+
+    net = SimNet(seed=15)
+    mesh(net, kind=Kind.USB)
+    net.send_intent("pair", "con-1", "prod-1")
+    net.run(3.0)
+    assert net.state_of("con-1") is NodeState.ACTIVE
+    # Device unplugged at the producer: its export fails, the consumer's
+    # import fails and keeps failing while backoff grows.
+    net.driver_status("prod-1", DriverStatus(NodeState.ERROR, "device unplugged"))
+    consumer = net.nodes["con-1"]
+    consumer.driver.fail_attach_times(1000)
+    net.driver_status("con-1", DriverStatus(NodeState.ERROR, "import vanished"))
+    net.run(40.0)
+    assert consumer.node._backoff >= 16.0
+    # Replug: the producer reports active; the consumer must not wait out
+    # its backoff (up to 30 s).
+    consumer.driver.fail_attach_times(0)
+    consumer.driver.set_status(None)
+    scheduled = consumer.node._retry_at
+    assert scheduled is not None and scheduled - net.now > 1.0
+    net.driver_status("prod-1", DriverStatus(NodeState.ACTIVE, "1 device(s) exported"))
+    replugged = net.now
+    net.run(1.0)
+    assert net.state_of("con-1") is NodeState.ACTIVE
+    retries = [t for t in net.event_times("con-1", "driver-retry") if t >= replugged]
+    assert retries and retries[0] - replugged < 0.1 and retries[0] < scheduled
+
+
+# -- ADR 0024: producer data-plane admission ----------------------------------
+
+
+def admitted(net: SimNet, producer: str) -> tuple[tuple[str, str], ...]:
+    return net.nodes[producer].admitted or ()
+
+
+def test_data_plane_admits_only_the_consumer_that_claims_the_producer() -> None:
+    net = SimNet(seed=16)
+    net.add_node("prod-1", Role.PRODUCER, Kind.USB, admission=True, address="10.0.1.1")
+    net.add_node("prod-2", Role.PRODUCER, Kind.USB, admission=True, address="10.0.1.2")
+    net.add_node("con-1", Role.CONSUMER, Kind.USB, address="10.0.1.10")
+    net.add_node("con-2", Role.CONSUMER, Kind.USB, address="10.0.1.11")
+    net.run(3.0)
+    assert admitted(net, "prod-1") == ()
+    assert not net.data_plane_admits("prod-1", "10.0.1.10")
+    assert net.data_plane_admits("prod-1", "127.0.0.1")  # its own readiness probe
+    version, _ = net.send_intent("pair", "con-1", "prod-1")
+    net.run(3.0)
+    assert admitted(net, "prod-1") == (("con-1", "10.0.1.10"),)
+    # The computer-side box's userspace USB/IP client runs on the same box
+    # as its consumer agent, so it connects from the admitted address.
+    assert net.data_plane_admits("prod-1", "10.0.1.10")
+    assert not net.data_plane_admits("prod-1", "10.0.1.11")  # unpaired consumer
+    assert not net.data_plane_admits("prod-1", "10.66.0.9")  # any LAN host
+    assert admitted(net, "prod-2") == ()
+    # Re-pair: admission moves with the authenticated claim.
+    net.send_intent("pair", "con-1", "prod-2", version=(version[0] + 1, CLI))
+    net.run(3.0)
+    assert admitted(net, "prod-1") == ()
+    assert admitted(net, "prod-2") == (("con-1", "10.0.1.10"),)
+    # Consumer disappears: admission is revoked after the peer timeout.
+    net.set_offline("con-1")
+    net.run(8.0)
+    assert admitted(net, "prod-2") == ()
+
+
+def test_spoofed_and_replayed_claims_never_admit_an_attacker() -> None:
+    net = SimNet(seed=17)
+    net.add_node("prod-1", Role.PRODUCER, Kind.USB, admission=True)
+    net.add_node("con-1", Role.CONSUMER, Kind.USB, address="10.0.1.10")
+    net.run(3.0)
+    net.send_intent("pair", "con-1", "prod-1")
+    net.run(3.0)
+    attacker = "10.66.0.9"
+    # 1. Replay the consumer's latest authentic announce from the attacker's
+    #    address, repeatedly: duplicates and stale copies bind nothing.
+    claim = next(
+        entry.raw
+        for entry in reversed(net.log)
+        if entry.origin == "con-1" and entry.ftype is FrameType.ANN
+    )
+    for _ in range(3):
+        net.inject_raw(claim, "attacker", address=attacker)
+        net.run(0.01)
+    # 2. Forge a claim for a made-up consumer without the site key.
+    body: Body = {
+        "role": "consumer",
+        "kind": "usb",
+        "name": "evil",
+        "state": "pending",
+        "err": None,
+        "pairing": {"producer": "prod-1", "version": [9, "evil"]},
+        "media": None,
+    }
+    for seq in (1, 2):
+        forged = encode(FrameType.ANN, "evil", seq, T0, body, b"x" * 32)
+        net.inject_raw(forged, "attacker", address=attacker)
+    net.run(3.0)
+    assert admitted(net, "prod-1") == (("con-1", "10.0.1.10"),)
+    assert not net.data_plane_admits("prod-1", attacker)
+    assert net.drops_of("prod-1")["auth"] >= 2

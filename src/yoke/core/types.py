@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 PROTOCOL_VERSION = 1
 CONTROL_GROUP = "239.121.111.107"
@@ -39,6 +39,14 @@ NS_PER_S = 1_000_000_000
 # rejected so a spoofed high-water cannot permanently mute a real origin
 # (ADR 0010).
 SEQ_FUTURE_MARGIN_S = 3600
+# A restart floor may advance past the durable reservation by at most this
+# much wall-clock time (ADR 0023): one boot with a far-future clock cannot
+# persist a reservation that peers reject as future. Frames advance the
+# sequence by one nanosecond, so 60 s still clears >10^10 later frames.
+SEQ_FLOOR_JUMP_S = 60
+# Producer data-plane admission (ADR 0024): a consumer's source address is
+# set or changed only after this many consecutive accepted frames from it.
+ADMISSION_CONFIRMATIONS = 2
 # Bounds on per-origin bookkeeping so a device cycling through distinct
 # node ids cannot exhaust memory (ADR 0010). A peer lost or departed for
 # longer than PEER_FORGET is dropped; the replay/rejection/intent maps
@@ -234,9 +242,26 @@ class Persist:
     request_id: int = 0
 
 
+LogLevel = Literal["debug", "info", "warning", "error"]
+
+
 @dataclass(frozen=True)
 class Log:
+    """A local, unbounded diagnostic line; never put on the wire (ADR 0023)."""
+
     message: str
+    level: LogLevel = "info"
 
 
-Effect = SendFrame | SendRaw | AttachMedia | DetachMedia | Persist | Log
+@dataclass(frozen=True)
+class Admission:
+    """Producer data-plane admission set (ADR 0024).
+
+    Complete replacement set of ``(consumer id, IPv4 source address)``
+    pairs, sorted. An empty tuple revokes every admission.
+    """
+
+    peers: tuple[tuple[str, str], ...]
+
+
+Effect = SendFrame | SendRaw | AttachMedia | DetachMedia | Persist | Log | Admission

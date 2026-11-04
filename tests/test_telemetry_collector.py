@@ -173,3 +173,13 @@ def test_invalid_or_backwards_clocks_fail(now: float) -> None:
     collector = TelemetryCollector(PSK, now=0, wall_time=1000)
     with pytest.raises(ValueError):
         collector.snapshot(now)
+
+
+def test_collector_uses_each_datagrams_wall_reading() -> None:
+    # ADR 0023: telemetry/runtime.py passes time.time() per datagram.
+    now, wall = 1000.0, 1_755_000_000.0
+    collector = TelemetryCollector(PSK, now=now, wall_time=wall - 7200)
+    raw = ann_producer(seq=int(wall) * 1_000_000_000 + 1)
+    assert collector.observe(raw, now, wall=wall - 7200)[0].verdict == "stale"
+    raw = ann_producer(seq=int(wall) * 1_000_000_000 + 2)
+    assert collector.observe(raw, now + 1, wall=wall + 1)[0].verdict == "ok"

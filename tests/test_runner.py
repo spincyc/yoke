@@ -129,6 +129,7 @@ def make_harness(
     driver_poll_interval: float = 30.0,  # quiet unless a test wants it
     driver_executor: SerialExecutor | None = None,
     on_ready: Callable[[], None] | None = None,
+    admission: bool = False,
 ) -> Harness:
     log: list[LogEntry] = []
     saved: list[PersistedState] = []
@@ -144,6 +145,7 @@ def make_harness(
         wall_time=wall_clock(),
         media=sim.describe(),
         seed=7,
+        admission=admission,
     )
 
     def default_save(path: Path, state: PersistedState) -> None:
@@ -1287,3 +1289,94 @@ def test_run_agent_returns_zero_on_keyboard_interrupt(
         driver={"type": "sim"},
     )
     assert run_agent(cfg) == 0
+
+
+# --- ADR 0023/0024: wall clock, source address and local logging -------------
+
+
+NS = 1_000_000_000
+
+
+async def test_runner_rereads_wall_clock_for_each_frame() -> None:
+    """An agent started before NTP recovers when the clock steps, no restart."""
+    async with running_agent() as h:
+        await eventually(lambda: len(h.transport.sent) >= 2)
+        h.wall_clock.now = T0 - 7200  # the OS clock is two hours behind
+        ann = encode(FrameType.ANN, "prod-1", int(T0) * NS + 5, T0, PROD_ANN, PSK)
+        await h.inbox.put((ann, ADDR))
+        await eventually(lambda: h.node._drops["stale"] == 1)
+        assert "prod-1" not in h.node.peers
+        h.wall_clock.now = T0  # NTP stepped the clock
+        ann = encode(FrameType.ANN, "prod-1", int(T0) * NS + 6, T0, PROD_ANN, PSK)
+        await h.inbox.put((ann, ADDR))
+        await eventually(lambda: "prod-1" in h.node.peers)
+
+
+class AdmittingDriver(SimDriver):
+    def __init__(self, media: Body) -> None:
+        super().__init__(media=media)
+        self.admitted: list[tuple[tuple[str, str], ...]] = []
+
+    def admit(self, peers: tuple[tuple[str, str], ...]) -> None:
+        self.admitted.append(peers)
+
+
+async def test_runner_forwards_admission_with_datagram_source() -> None:
+    driver = AdmittingDriver(PROD_MEDIA)
+    async with running_agent(
+        role=Role.PRODUCER, node_id="prod-1", driver=driver, admission=True
+    ) as h:
+        await eventually(lambda: driver.admitted == [()])
+        claim: Body = {
+            "role": "consumer",
+            "kind": "hdmi",
+            "name": "tv",
+            "state": "pending",
+            "err": None,
+            "pairing": {"producer": "prod-1", "version": [1, "cli-1"]},
+            "media": None,
+        }
+        for seq in (1, 2):
+            raw = encode(FrameType.ANN, "tv-1", seq, T0, claim, PSK)
+            await h.inbox.put((raw, ("10.0.0.44", 9753)))
+        await eventually(lambda: driver.admitted[-1] == (("tv-1", "10.0.0.44"),))
+
+
+def test_configure_logging_formats_for_journal_and_console() -> None:
+    import io
+
+    from yoke.net.runner import configure_logging
+
+    logger = logging.getLogger("yoke")
+    saved_level = logger.level
+    journal, console = io.StringIO(), io.StringIO()
+    try:
+        configure_logging(journal, environ={"JOURNAL_STREAM": "8:9"})
+        logging.getLogger("yoke.agent").warning("driver error: %s", "x" * 300)
+        assert journal.getvalue() == f"<4>yoke.agent: driver error: {'x' * 300}\n"
+        configure_logging(console, environ={"YOKE_LOG_LEVEL": "debug"})
+        logging.getLogger("yoke.agent").debug("detail")
+        assert "DEBUG yoke.agent: detail" in console.getvalue()
+        # The replacement handler does not duplicate output.
+        assert journal.getvalue().count("driver error") == 1
+        assert [h.get_name() for h in logger.handlers].count("yoke-agent") == 1
+    finally:
+        for handler in list(logger.handlers):
+            if handler.get_name() == "yoke-agent":
+                logger.removeHandler(handler)
+        logger.setLevel(saved_level)
+
+
+async def test_core_log_levels_reach_the_agent_logger(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.INFO, logger="yoke.agent"):
+        async with running_agent() as h:
+            await eventually(lambda: len(h.transport.sent) >= 2)
+            await h.inbox.put((pair_intent(), ADDR))
+            await eventually(lambda: len(h.acks()) >= 1)
+    messages = {(r.levelno, r.message) for r in caplog.records}
+    assert any(
+        level == logging.INFO and m.startswith("pairing committed: producer=prod-1")
+        for level, m in messages
+    )

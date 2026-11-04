@@ -62,9 +62,11 @@ def open_multicast_socket(
     receive control frames.
 
     SO_REUSEADDR (and SO_REUSEPORT where available) lets an agent, the
-    CLI, and a snooper share one host. IP_MULTICAST_LOOP stays on so
-    same-host processes hear each other. TTL 1 keeps control traffic on
-    the local network (PROTOCOL.md Transport).
+    CLI, and a snooper share one host. The socket is bound to the group
+    address, so only datagrams addressed to the group are received.
+    IP_MULTICAST_LOOP stays on so same-host processes hear each other.
+    TTL 1 keeps control traffic on the local network (PROTOCOL.md
+    Transport).
 
     ``interface`` is the local IPv4 address of the NIC on the AV/control
     VLAN. On a multi-homed host it MUST be set (config key ``interface``)
@@ -86,7 +88,11 @@ def open_multicast_socket(
             sock.setsockopt(
                 socket.IPPROTO_IP, getattr(socket, "IP_MULTICAST_ALL", 49), 0
             )
-        sock.bind(("", port))
+        # Binding the group address makes the kernel deliver only datagrams
+        # addressed to the group: unicast to this host's control port is
+        # never read (ADR 0023). Outbound frames still use the interface's
+        # unicast source address. Windows cannot bind a multicast address.
+        sock.bind(("" if sys.platform.startswith("win") else group, port))
         mreq = struct.pack("4s4s", socket.inet_aton(group), if_addr)
         sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
         sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, if_addr)

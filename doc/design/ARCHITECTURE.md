@@ -207,10 +207,15 @@ modules would make recovery depend on the release it must recover.
 ### Sans-I/O core
 
 `core.node.Node` is a pure state machine. Inputs: decoded frames plus a
-monotonic timestamp; `poll(now)` for timers, and explicit persistence and
-driver completion inputs. Outputs: a list of effects
-— frames to send, driver commands, events, state to persist. The shell
-(`net.runner`) performs effects. Consequences:
+monotonic timestamp, the wall-clock reading the shell took at receipt and
+the datagram's source address; `poll(now)` for timers, and explicit
+persistence and driver completion inputs. Wall time only bounds how far a
+peer's sequence may run ahead and seeds a capped restart floor; every timer
+is monotonic, so clock steps by time synchronization neither expire peers
+nor move retries (ADR 0023). Outputs: a list of effects — frames to send,
+driver commands, producer data-plane admission sets, leveled local log
+lines, state to persist. The shell (`net.runner`) performs effects.
+Consequences:
 
 - Every protocol behavior, timer, and failure mode is unit-testable with
   a fake clock and no sockets.
@@ -260,21 +265,32 @@ covered offline (see ADR 0006).
 | Agent reboot | Pairing + seq persisted; rejoins and re-applies before first announce |
 | Storage write fails | Committed pairing retained; no success ACK or uncommitted driver change |
 | Two local processes use one state file | Second startup fails on the held exclusive lease |
+| Box boots before time sync (no RTC) | Its own frames stay admissible; it admits peers once the clock steps, without restart |
+| Boot with a far-future clock | Restart floor advances at most 60 s past durable state; explicit rebase recovers older future reservations |
+| USB producer device replugged | Producer's `active` announce makes the paired consumer reattach immediately |
+| Owned USB/IP import vanishes beside unrelated record-less ports | Only ports newer than the import's last sighting can block; otherwise re-attach proceeds |
 | Old driver call completes after reassignment | Work is serialized and stale-generation results are discarded |
 | Forged/altered frames | HMAC-PSK verification; failures counted and evented, frame dropped |
 | Partition | Each side keeps last state; versions reconcile on heal |
 
 ## Security
 
-Control frames are authenticated with HMAC-SHA256 over canonical frame
-bytes using a pre-shared key provisioned per site (ADR 0005). Replay is
+Control frames are authenticated with HMAC-SHA256 over the transmitted
+frame bytes (with the `sig` member excised; the legacy canonical
+re-serialization is also accepted) using a pre-shared key of at least 32
+bytes provisioned per site (ADRs 0005, 0023). Published vectors let other
+implementations verify interoperability. Replay is
 bounded by per-origin monotonic sequence numbers. The threat model is
 "a device without the site key must not re-route streams or spoof state".
 Every site-key holder is trusted to author messages, including another
-node's origin. Open mode is explicitly unauthenticated and intended for
-isolated labs. Control metadata is cleartext so the passive snooper can
-observe it. Media-plane security belongs to the endpoint backend; the
-reference USB/IP transport does not add encryption or per-peer admission.
+node's origin. Open mode is explicitly unauthenticated, must be selected
+explicitly and is intended for isolated labs. Control metadata is cleartext so the passive snooper can
+observe it. Media-plane security belongs to the endpoint backend. The
+reference USB/IP backend adds no encryption, but a producer can restrict
+new data sessions to the consumers whose authenticated announces claim it,
+at their announces' source addresses, through a root nftables helper
+(ADR 0024). Source addresses are not authenticated, so this stops off-path
+LAN hosts, not on-path attackers or key holders.
 See [Security](../../SECURITY.md) for the exact boundary.
 
 Multicast is a supported operating mode, not a debugging mirror managed by
@@ -317,6 +333,14 @@ media remains point-to-point under ADR 0011.
   Announcements reconstruct recently observed endpoint state; an observer
   cannot prove an unobserved endpoint's physical state, recover every
   historical event, or authenticate individual holders of a shared key.
+- **Clock prerequisite.** A box whose clock stays more than an hour behind
+  its peers cannot admit their frames until time synchronization corrects
+  it (ADRs 0007, 0010, 0023); its own frames remain admissible. Nothing
+  rebases a sequence automatically: a box cannot tell a behind clock from a
+  future reservation.
+- **USB/IP data plane.** Admission filters by unauthenticated IPv4 source
+  address and the payload is unencrypted (ADR 0024); the device-box units
+  and rules are bench-unverified.
 - **HDCP position is a well-supported reading, not a legal opinion**
   (ADR 0004); a commercial launch should get it reviewed.
 - **No real endpoint hardware has been touched.** Driver assumptions are

@@ -14,7 +14,15 @@ import pytest
 from yoke.core.types import Body, NodeState
 from yoke.drivers.base import Driver, DriverError
 from yoke.drivers.shellcmd import CommandResult, FakeRunner
-from yoke.drivers.usbip import UsbipAttachDriver, UsbipBindDriver
+from yoke.drivers.usbip import (
+    DAEMON_PROBE_INTERVAL,
+    DAEMON_RETRY_INTERVAL,
+    NftablesAdmission,
+    UsbipAttachDriver,
+    UsbipBindDriver,
+    apply_admission,
+    render_admission_ruleset,
+)
 
 Remote = tuple[str, int, str]
 MEDIA: Body = {"host": "192.168.7.10", "port": 3240, "busids": ["1-1", "1-1.2"]}
@@ -74,8 +82,9 @@ class UsbipTranscript:
             host, busid = args[2], args[4]
             if self.before_attach is not None:
                 journal = json.loads(self.before_attach.read_text())
-                assert {"host": host, "port": port, "busid": busid} in journal[
-                    "imports"
+                assert {"host": host, "port": port, "busid": busid} in [
+                    {k: r[k] for k in ("host", "port", "busid")}
+                    for r in journal["imports"]
                 ]
             if busid == self.fail_attach:
                 return CommandResult(1, "", "device busy")
@@ -124,13 +133,25 @@ def consumer(fake: UsbipTranscript, journal: Path | None = None) -> UsbipAttachD
     return UsbipAttachDriver(fake, timeout=7.0, ownership_file=journal)
 
 
-def producer(fake: UsbipTranscript) -> UsbipBindDriver:
+class FakeClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def producer(
+    fake: UsbipTranscript, clock: FakeClock | None = None, **options: object
+) -> UsbipBindDriver:
     return UsbipBindDriver(
         fake,
         host="192.168.7.10",
         busids=["1-1", "1-1.2"],
         timeout=7.0,
         export_status=fake.status,
+        clock=clock or FakeClock(),
+        **options,  # type: ignore[arg-type]
     )
 
 
@@ -368,7 +389,8 @@ def test_old_no_colon_port_output_and_lost_import_retry() -> None:
 
 def test_producer_bind_idempotence_and_actual_readiness() -> None:
     fake = UsbipTranscript()
-    driver = producer(fake)
+    clock = FakeClock()
+    driver = producer(fake, clock)
     assert driver.describe() == MEDIA
     assert driver.poll().state is NodeState.ERROR  # physically present is insufficient
     driver.bind()
@@ -376,11 +398,16 @@ def test_producer_bind_idempotence_and_actual_readiness() -> None:
     assert len(fake.commands("bind")) == 2
     assert driver.poll().state is NodeState.ACTIVE
     fake.daemon_ready = False
+    # Unchanged sysfs exports: the daemon list is re-probed on its interval.
+    assert driver.poll().state is NodeState.ACTIVE
+    clock.now += DAEMON_PROBE_INTERVAL
     assert driver.poll().state is NodeState.ERROR
     fake.daemon_ready = True
     fake.hidden_exports.add("1-1")
+    clock.now += DAEMON_RETRY_INTERVAL
     assert driver.poll().state is NodeState.ERROR
     fake.bindings["1-1"] = 2  # current usbipd deliberately omits in-use devices
+    clock.now += DAEMON_RETRY_INTERVAL
     assert driver.poll().state is NodeState.ACTIVE
     driver.unbind()
     driver.unbind()
@@ -617,7 +644,7 @@ def test_record_failure_preserves_recovery_barrier_without_unsafe_detach(
     assert len(fake.imports) == 1  # kernel attached before the CLI record failed
     assert not fake.commands("detach")
     saved = json.loads(journal.read_text())
-    assert saved["schema"] == 2
+    assert saved["schema"] == 3
     assert saved["recovery"][0]["local_ports"] == [0]
     restarted = consumer(fake, journal)
     assert restarted.poll().state is NodeState.ERROR
@@ -723,3 +750,394 @@ def test_recovery_port_reused_by_foreign_device_is_not_detached(tmp_path: Path) 
     assert fake.imports == {0: ("foreign", 3240, "9-1")}
     assert not fake.commands("detach")
     assert json.loads(journal.read_text())["imports"] == []
+
+
+# -- ADR 0024: recovery attribution baseline ---------------------------------
+
+
+def test_vanished_import_beside_preexisting_unknown_port_can_reattach(
+    tmp_path: Path,
+) -> None:
+    """Field wedge: an owned import vanishes (unplug, TCP reset) while an
+    unrelated record-less port exists. The old port is not attributed."""
+    fake = UsbipTranscript()
+    fake.imports[9] = ("other", 3240, "9-1")
+    fake.unknown_ports.add(9)
+    journal = tmp_path / "owned.json"
+    driver = consumer(fake, journal)
+    driver.attach("prod-a", ONE)
+    assert driver.poll().state is NodeState.ACTIVE
+    saved = json.loads(journal.read_text())
+    assert saved["imports"][0]["unknown_before"] == [9]
+    owned_port = next(p for p, r in fake.imports.items() if r[2] == "1-1")
+    fake.imports.pop(owned_port)
+    status = driver.poll()
+    assert status.state is NodeState.ERROR
+    assert "RECOVERY_REQUIRED" not in status.detail  # retryable, not a wedge
+    # The core's retry re-attaches, also after a restart from the journal.
+    restarted = consumer(fake, journal)
+    restarted.attach("prod-a", ONE)
+    assert restarted.poll().state is NodeState.ACTIVE
+    assert fake.imports[9] == ("other", 3240, "9-1")
+    assert all(c[-1] != "9" for c in fake.commands("detach"))
+
+
+def test_recordless_port_appearing_after_last_sighting_still_blocks(
+    tmp_path: Path,
+) -> None:
+    # A record-less port newer than the owned import's last sighting may be
+    # that import (e.g. its connection record was removed): stay conservative.
+    fake = UsbipTranscript()
+    journal = tmp_path / "owned.json"
+    driver = consumer(fake, journal)
+    driver.attach("prod-a", ONE)
+    assert driver.poll().state is NodeState.ACTIVE
+    owned_port = next(iter(fake.imports))
+    fake.unknown_ports.add(owned_port)  # record lost, import still present
+    status = driver.poll()
+    assert status.state is NodeState.ERROR
+    assert "RECOVERY_REQUIRED" in status.detail
+    with pytest.raises(DriverError, match="RECOVERY_REQUIRED"):
+        driver.attach("prod-a", ONE)
+    assert not fake.commands("detach")
+
+
+def test_legacy_journal_without_baseline_keeps_conservative_attribution(
+    tmp_path: Path,
+) -> None:
+    fake = UsbipTranscript()
+    fake.imports[9] = ("other", 3240, "9-1")
+    fake.unknown_ports.add(9)
+    journal = tmp_path / "owned.json"
+    journal.write_text(
+        json.dumps(
+            {
+                "schema": 2,
+                "imports": [{"host": "192.168.7.10", "port": 3240, "busid": "1-1"}],
+                "recovery": [],
+            }
+        )
+    )
+    journal.chmod(0o600)
+    driver = consumer(fake, journal)
+    assert "RECOVERY_REQUIRED" in driver.poll().detail
+    assert json.loads(journal.read_text())["schema"] == 3
+
+
+def test_baseline_is_persisted_only_when_it_changes(tmp_path: Path) -> None:
+    fake = UsbipTranscript()
+    journal = tmp_path / "owned.json"
+    driver = consumer(fake, journal)
+    driver.attach("prod-a", ONE)
+    driver.poll()
+    first = journal.stat().st_ino
+    for _ in range(5):
+        driver.poll()
+    assert journal.stat().st_ino == first  # no rewrite per poll
+    fake.imports[9] = ("other", 3240, "9-1")
+    fake.unknown_ports.add(9)
+    driver.poll()
+    assert journal.stat().st_ino != first
+    assert json.loads(journal.read_text())["imports"][0]["unknown_before"] == [9]
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        {"host": "h", "port": 3240, "busid": "1-1", "unknown_before": "x"},
+        {"host": "h", "port": 3240, "busid": "1-1", "unknown_before": [-1]},
+        {"host": "h", "port": 3240, "busid": "1-1", "extra": []},
+    ],
+)
+def test_invalid_baseline_records_are_rejected(
+    tmp_path: Path, record: dict[str, object]
+) -> None:
+    journal = tmp_path / "owned.json"
+    journal.write_text(json.dumps({"schema": 3, "imports": [record], "recovery": []}))
+    journal.chmod(0o600)
+    fake = UsbipTranscript()
+    with pytest.raises(DriverError, match="unusable"):
+        consumer(fake, journal).detach()
+
+
+# -- ADR 0023: wire detail keeps the cause ----------------------------------
+
+
+def test_command_failure_detail_leads_with_cause() -> None:
+    fake = UsbipTranscript()
+    fake.fail_attach = "1-1"
+    with pytest.raises(DriverError) as error:
+        consumer(fake).attach("prod-a", ONE)
+    detail = str(error.value)
+    assert detail.startswith("usbip attach failed rc=1: device busy")
+    assert detail.encode()[:128].decode(errors="ignore").count("device busy") == 1
+    assert "[usbip --tcp-port 3240 attach -r 192.168.7.10 -b 1-1]" in detail
+
+
+# -- ADR 0024: readiness probe schedule (finding 8) ---------------------------
+
+
+def test_producer_daemon_probe_schedule() -> None:
+    fake = UsbipTranscript()
+    fake.bindings = {"1-1": 1, "1-1.2": 1}
+    clock = FakeClock()
+    driver = producer(fake, clock)
+
+    def probes() -> int:
+        return len(fake.commands("list"))
+
+    for second in range(60):
+        clock.now = float(second)
+        assert driver.poll().state is NodeState.ACTIVE
+    # One probe at start and one per interval, instead of one per poll.
+    assert probes() == 1 + int(59 // DAEMON_PROBE_INTERVAL)
+    before = probes()
+    fake.bindings["1-1"] = 2  # a consumer imported it: sysfs export state changed
+    driver.poll()
+    assert probes() == before + 1
+    fake.daemon_ready = False
+    clock.now += DAEMON_PROBE_INTERVAL
+    assert driver.poll().state is NodeState.ERROR
+    failed_at = probes()
+    clock.now += DAEMON_RETRY_INTERVAL / 2
+    driver.poll()
+    assert probes() == failed_at  # no hammering a dead daemon every poll
+    fake.daemon_ready = True
+    clock.now += DAEMON_RETRY_INTERVAL
+    assert driver.poll().state is NodeState.ACTIVE
+
+
+# -- ADR 0024: external bindings and data-plane admission ----------------------
+
+
+def test_external_bindings_never_run_usbip_bind_or_unbind() -> None:
+    fake = UsbipTranscript()
+    driver = producer(fake, bindings="external")
+    driver.bind()
+    status = driver.poll()
+    assert status.state is NodeState.ERROR
+    assert "yoke-usbip-bind@BUSID.service" in status.detail
+    fake.bindings = {"1-1": 1, "1-1.2": 1}  # udev-provisioned as root
+    assert driver.poll().state is NodeState.ACTIVE
+    driver.unbind()
+    assert not fake.commands("bind") and not fake.commands("unbind")
+    assert fake.bindings == {"1-1": 1, "1-1.2": 1}
+
+
+def test_unknown_bindings_mode_is_rejected() -> None:
+    with pytest.raises(DriverError, match="agent or external"):
+        producer(UsbipTranscript(), bindings="sometimes")
+
+
+def admission(tmp_path: Path) -> NftablesAdmission:
+    (tmp_path / "run-yoke").mkdir(exist_ok=True)
+    (tmp_path / "run-admission").mkdir(exist_ok=True)
+    return NftablesAdmission(
+        port=3240,
+        request_path=tmp_path / "run-yoke" / "usbip-admission.json",
+        status_path=tmp_path / "run-admission" / "status.json",
+    )
+
+
+def helper(tmp_path: Path, runner: FakeRunner | None = None) -> int:
+    nft = runner or FakeRunner([(("nft",), CommandResult(0, "", ""))])
+    return apply_admission(
+        request=tmp_path / "run-yoke" / "usbip-admission.json",
+        status=tmp_path / "run-admission" / "status.json",
+        port=3240,
+        runner=nft,
+    )
+
+
+def test_admission_request_status_and_readiness(tmp_path: Path) -> None:
+    fake = UsbipTranscript()
+    fake.bindings = {"1-1": 1, "1-1.2": 1}
+    backend = admission(tmp_path)
+    driver = producer(fake, admission=backend)
+    assert driver.poll().state is NodeState.PENDING  # nothing requested yet
+    driver.admit((("desk-usb", "10.20.30.3"),))
+    request = json.loads((tmp_path / "run-yoke" / "usbip-admission.json").read_text())
+    assert request == {
+        "schema": 1,
+        "generation": 1,
+        "port": 3240,
+        "allow": ["10.20.30.3"],
+        "peers": {"desk-usb": "10.20.30.3"},
+    }
+    status = driver.poll()
+    assert status.state is NodeState.PENDING
+    assert "not reported" in status.detail
+    assert helper(tmp_path) == 0
+    status = driver.poll()
+    assert status.state is NodeState.ACTIVE
+    assert "admission 1 consumer address(es)" in status.detail
+    # A newer request is pending until the helper applies that exact list.
+    driver.admit((("desk-usb", "10.20.30.4"),))
+    assert driver.poll().state is NodeState.PENDING
+    assert helper(tmp_path) == 0
+    assert driver.poll().state is NodeState.ACTIVE
+    # Orderly stop closes the port to new sessions.
+    driver.unbind()
+    assert (
+        json.loads((tmp_path / "run-yoke" / "usbip-admission.json").read_text())[
+            "allow"
+        ]
+        == []
+    )
+
+
+def test_admission_never_widens_for_unusable_addresses(tmp_path: Path) -> None:
+    backend = admission(tmp_path)
+    backend.apply(
+        (
+            ("a", "127.0.0.1"),
+            ("b", "fe80::1"),
+            ("c", "239.1.1.1"),
+            ("d", "not-an-ip"),
+            ("e", "10.0.0.7"),
+        )
+    )
+    request = json.loads((tmp_path / "run-yoke" / "usbip-admission.json").read_text())
+    assert request["allow"] == ["10.0.0.7"]
+    assert request["peers"] == {"e": "10.0.0.7"}
+
+
+def test_admission_helper_failure_is_producer_error(tmp_path: Path) -> None:
+    fake = UsbipTranscript()
+    fake.bindings = {"1-1": 1, "1-1.2": 1}
+    backend = admission(tmp_path)
+    driver = producer(fake, admission=backend)
+    driver.admit((("desk-usb", "10.20.30.3"),))
+    failing = FakeRunner([(("nft",), CommandResult(1, "", "Operation not permitted"))])
+    assert helper(tmp_path, failing) == 1
+    status = driver.poll()
+    assert status.state is NodeState.ERROR
+    assert "Operation not permitted" in status.detail
+
+
+def test_admission_requires_ipv4_producer_host() -> None:
+    with pytest.raises(DriverError, match="IPv4"):
+        UsbipBindDriver(
+            UsbipTranscript(),
+            host="usb-box.local",
+            busids=["1-1"],
+            admission=NftablesAdmission(port=3240),
+        )
+
+
+def test_rendered_admission_ruleset_is_fixed_and_minimal() -> None:
+    assert render_admission_ruleset(3240, ["10.0.0.9", "10.0.0.3", "10.0.0.9"]) == (
+        "add table inet yoke_usbip\n"
+        "delete table inet yoke_usbip\n"
+        "table inet yoke_usbip {\n"
+        "\tset consumers4 {\n"
+        "\t\ttype ipv4_addr\n"
+        "\t\telements = { 10.0.0.3, 10.0.0.9 }\n"
+        "\t}\n"
+        "\tchain input {\n"
+        "\t\ttype filter hook input priority filter; policy accept;\n"
+        "\t\ttcp dport 3240 ct state established,related accept\n"
+        '\t\ttcp dport 3240 iifname "lo" accept\n'
+        "\t\ttcp dport 3240 ip saddr @consumers4 accept\n"
+        "\t\ttcp dport 3240 drop\n"
+        "\t}\n"
+        "}\n"
+    )
+    assert "elements" not in render_admission_ruleset(3240, [])
+    with pytest.raises(ValueError):
+        render_admission_ruleset(3240, ["10.0.0.1; flush ruleset"])
+
+
+@pytest.mark.parametrize(
+    "request_data",
+    [
+        {"schema": 1, "generation": 1, "port": 22, "allow": [], "peers": {}},
+        {"schema": 2, "generation": 1, "port": 3240, "allow": [], "peers": {}},
+        {"schema": 1, "generation": -1, "port": 3240, "allow": [], "peers": {}},
+        {"schema": 1, "generation": 1, "port": 3240, "allow": ["::1"], "peers": {}},
+        {
+            "schema": 1,
+            "generation": 1,
+            "port": 3240,
+            "allow": ["10.0.0.1", "10.0.0.1"],
+            "peers": {},
+        },
+        {
+            "schema": 1,
+            "generation": 1,
+            "port": 3240,
+            "allow": [f"10.0.0.{i}" for i in range(1, 18)],
+            "peers": {},
+        },
+        {
+            "schema": 1,
+            "generation": 1,
+            "port": 3240,
+            "allow": [],
+            "peers": {"x": "10.0.0.1"},
+        },
+        {"schema": 1, "generation": 1, "port": 3240, "allow": []},
+    ],
+)
+def test_helper_fails_closed_on_invalid_request(
+    tmp_path: Path, request_data: dict[str, object]
+) -> None:
+    admission(tmp_path)
+    request = tmp_path / "run-yoke" / "usbip-admission.json"
+    request.write_text(json.dumps(request_data))
+    runner = FakeRunner([(("nft",), CommandResult(0, "", ""))])
+    assert helper(tmp_path, runner) == 1
+    status = json.loads((tmp_path / "run-admission" / "status.json").read_text())
+    assert status["applied"] is False
+    assert status["allow"] == []
+    ruleset = (tmp_path / "run-admission" / "status.json.nft").read_text()
+    assert "elements" not in ruleset  # the closed table was still loaded
+    assert runner.calls[0][:2] == ("nft", "-f")
+
+
+def test_helper_without_request_installs_closed_table(tmp_path: Path) -> None:
+    admission(tmp_path)
+    assert helper(tmp_path) == 0
+    status = json.loads((tmp_path / "run-admission" / "status.json").read_text())
+    assert status == {
+        "schema": 1,
+        "generation": 0,
+        "port": 3240,
+        "allow": [],
+        "applied": True,
+    }
+    assert (tmp_path / "run-admission" / "status.json").stat().st_mode & 0o777 == 0o644
+
+
+def test_helper_refuses_symlinked_request(tmp_path: Path) -> None:
+    admission(tmp_path)
+    target = tmp_path / "elsewhere.json"
+    target.write_text("{}")
+    (tmp_path / "run-yoke" / "usbip-admission.json").symlink_to(target)
+    assert helper(tmp_path) == 1
+
+
+def test_unapplied_admission_request_is_rewritten_to_retrigger_helper(
+    tmp_path: Path,
+) -> None:
+    clock = FakeClock()
+    (tmp_path / "run-yoke").mkdir()
+    (tmp_path / "run-admission").mkdir()
+    request = tmp_path / "run-yoke" / "usbip-admission.json"
+    backend = NftablesAdmission(
+        port=3240,
+        request_path=request,
+        status_path=tmp_path / "run-admission" / "status.json",
+        clock=clock,
+    )
+    backend.apply((("desk-usb", "10.20.30.3"),))
+    assert helper(tmp_path) == 0
+    backend.apply((("desk-usb", "10.20.30.4"),))  # helper trigger "lost"
+    assert backend.status()[0] is NodeState.PENDING
+    assert json.loads(request.read_text())["generation"] == 2
+    clock.now += 5.0
+    assert backend.status()[0] is NodeState.PENDING
+    rewritten = json.loads(request.read_text())
+    assert rewritten["generation"] == 3 and rewritten["allow"] == ["10.20.30.4"]
+    assert helper(tmp_path) == 0
+    assert backend.status() == (None, "; admission 1 consumer address(es)")

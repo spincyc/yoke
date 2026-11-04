@@ -6,7 +6,8 @@ Example::
     role = "consumer"          # producer | consumer
     kind = "hdmi"              # hdmi | usb
     name = "Den TV"
-    psk_file = "/etc/yoke/psk"           # omit for open mode (labs only)
+    psk_file = "/etc/yoke/psk"           # required unless open_mode = true
+    # open_mode = true                   # explicit unauthenticated lab mode
     state_file = "/var/lib/yoke/state.json"
     group = "239.121.111.107"            # optional override
     port = 9753                          # optional override
@@ -39,6 +40,9 @@ from yoke.net.mcast import validate_multicast
 
 DEFAULT_PSK_PATH = Path("/etc/yoke/psk")
 OPEN_MODE_WARNING = "warning: no PSK; open mode is UNAUTHENTICATED (labs only)"
+#: Minimum site key length (ADR 0023). The recommended provisioning is 32
+#: random bytes written as 64 hexadecimal characters.
+MIN_PSK_BYTES = 32
 
 
 class ConfigError(ValueError):
@@ -55,6 +59,7 @@ class AgentConfig:
     interface: str = "0.0.0.0"
     driver: Body = field(default_factory=dict)
     allow_new_state: bool = False
+    open_mode: bool = False
 
 
 def read_psk(path: Path) -> bytes:
@@ -81,6 +86,11 @@ def read_psk(path: Path) -> bytes:
     psk = raw[:-1] if raw.endswith(b"\n") else raw
     if not psk:
         raise ValueError("PSK is empty")
+    if len(psk) < MIN_PSK_BYTES:
+        raise ValueError(
+            f"PSK is {len(psk)} bytes; at least {MIN_PSK_BYTES} are required "
+            "(provision 32 random bytes as 64 hex characters)"
+        )
     return psk
 
 
@@ -138,13 +148,26 @@ def load(path: Path) -> AgentConfig:
 
     state_file = Path(_require_str(data, "state_file", path))
 
+    open_mode = data.get("open_mode", False)
+    if type(open_mode) is not bool:
+        raise ConfigError(f"{path}: 'open_mode' must be true or false")
     psk = b""
     if "psk_file" in data:
+        if open_mode:
+            raise ConfigError(
+                f"{path}: psk_file and open_mode = true are contradictory"
+            )
         psk_path = Path(_require_str(data, "psk_file", path))
         try:
             psk = read_psk(psk_path)
         except (OSError, ValueError) as exc:
             raise ConfigError(f"{path}: psk_file {psk_path}: {exc}") from exc
+    elif not open_mode:
+        # Unauthenticated operation is never a default (ADR 0023).
+        raise ConfigError(
+            f"{path}: psk_file is required; set open_mode = true only for an "
+            "isolated unauthenticated lab"
+        )
 
     group = data.get("group", CONTROL_GROUP)
     port = data.get("port", CONTROL_PORT)
@@ -168,4 +191,5 @@ def load(path: Path) -> AgentConfig:
         port=port,
         interface=interface,
         driver=dict(driver),
+        open_mode=open_mode,
     )

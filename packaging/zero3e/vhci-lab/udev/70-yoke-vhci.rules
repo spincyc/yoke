@@ -1,0 +1,4 @@
+# Let the unprivileged yoke agent import/detach through vhci-hcd (ADR 0024).
+# sysfs attributes accept chgrp/chmod; nothing else on the controller changes.
+# ⚠ bench-unverified.
+ACTION=="add", SUBSYSTEM=="platform", KERNEL=="vhci_hcd.*", RUN+="/bin/chgrp yoke /sys%p/attach /sys%p/detach", RUN+="/bin/chmod g+w /sys%p/attach /sys%p/detach"

@@ -2,10 +2,17 @@
 # create the yoke account, configure /etc/yoke, and commission state once.
 # Install this unit and yoke-update-recover.service, then:
 #   systemctl enable --now yoked
+#
+# The agent itself never needs privileges. USB/IP endpoints use root-owned
+# single-purpose units and drop-ins from packaging/zero3e/ (ADR 0024); never
+# add capabilities or User=root here.
 [Unit]
 Description=yoke endpoint agent
 Requires=yoke-update-recover.service
-After=network.target yoke-update-recover.service
+# Ordered after time synchronization when a site enables a time-wait unit,
+# but never dependent on it: an RTC-less box with no NTP still starts, and
+# admission recovers when the clock is stepped later (ADR 0023).
+After=network.target yoke-update-recover.service time-sync.target
 
 [Service]
 Type=notify
@@ -18,10 +25,12 @@ ExecStart=/opt/yoke/current/venv/bin/python -m yoke.cli agent --config /etc/yoke
 Restart=always
 RestartSec=2
 # Crash-only by design: state persists before acks; convergence is
-# re-established from the network on every start.
+# re-established from the network on every start. Logs go to the journal
+# with priorities; set Environment=YOKE_LOG_LEVEL=debug to troubleshoot.
 StateDirectory=yoke
 StateDirectoryMode=0700
 NoNewPrivileges=true
+CapabilityBoundingSet=
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true

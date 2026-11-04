@@ -1,0 +1,22 @@
+# Bind the USB device at bus position %i to usbip-host so it can be
+# exported (ADR 0024). Started by 70-yoke-usbip-bind.rules when that bus
+# position appears, including at boot (coldplug) and after a replug. The
+# agent runs with `bindings = "external"` and never binds or unbinds.
+# ⚠ bench-unverified: that writing the usb/usbip-host driver attributes as
+# uid 0 needs no capabilities on the ZERO 3E kernel.
+[Unit]
+Description=Bind USB %i to usbip-host for yoke
+After=systemd-modules-load.service
+
+[Service]
+Type=oneshot
+# Already bound (e.g. a repeated udev event): nothing to do.
+ExecCondition=/bin/sh -c '[ "$$(basename "$$(readlink /sys/bus/usb/devices/%i/driver 2>/dev/null)")" != usbip-host ]'
+ExecStart=/usr/sbin/usbip bind -b %i
+CapabilityBoundingSet=
+NoNewPrivileges=true
+ProtectHome=true
+PrivateTmp=true
+PrivateNetwork=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_NETLINK

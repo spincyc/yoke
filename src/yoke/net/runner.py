@@ -23,22 +23,25 @@ import contextlib
 import hashlib
 import logging
 import math
+import os
 import signal
 import socket
 import sys
 import time
 from collections import deque
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from functools import partial
 from pathlib import Path
-from typing import Protocol, assert_never
+from typing import Protocol, TextIO, assert_never
 
 from yoke import statefile
 from yoke.config import AgentConfig, ConfigError
 from yoke.core import frames
 from yoke.core.frames import EncodeError, FrameDrop
-from yoke.core.node import Node
+from yoke.core.node import Node, rebase_bound
 from yoke.core.types import (
+    NS_PER_S,
+    Admission,
     AttachMedia,
     DetachMedia,
     DriverStatus,
@@ -58,6 +61,72 @@ from yoke.net.notify import SystemdNotifier
 from yoke.statefile import StateError
 
 _log = logging.getLogger("yoke.agent")
+_LEVELS = {
+    "debug": logging.DEBUG,
+    "info": logging.INFO,
+    "warning": logging.WARNING,
+    "error": logging.ERROR,
+}
+# sd-daemon(3) priority prefixes, parsed by journald on service stderr.
+_JOURNAL_PRIORITY = {
+    logging.DEBUG: 7,
+    logging.INFO: 6,
+    logging.WARNING: 4,
+    logging.ERROR: 3,
+    logging.CRITICAL: 2,
+}
+
+
+class _JournalFormatter(logging.Formatter):
+    """``<priority>logger: message``; journald adds time and unit."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        priority = _JOURNAL_PRIORITY.get(record.levelno, 6)
+        return f"<{priority}>{record.name}: {super().format(record)}"
+
+
+class _StderrHandler(logging.StreamHandler[TextIO]):
+    """Write to the *current* ``sys.stderr`` (or a fixed test stream)."""
+
+    def __init__(self, stream: TextIO | None) -> None:
+        super().__init__(stream or sys.stderr)
+        self._fixed = stream is not None
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if not self._fixed:
+            self.stream = sys.stderr
+        super().emit(record)
+
+
+def configure_logging(
+    stream: TextIO | None = None, *, environ: Mapping[str, str] | None = None
+) -> logging.Handler:
+    """Install the agent's one stderr handler on the ``yoke`` logger.
+
+    Under systemd (``JOURNAL_STREAM`` set) lines carry journald priority
+    prefixes; elsewhere they carry a timestamp and level. ``YOKE_LOG_LEVEL``
+    (debug, info, warning, error) overrides the default ``info``. Repeated
+    calls replace the previous handler instead of duplicating output;
+    propagation is left alone so embedding applications keep their own.
+    """
+    env = os.environ if environ is None else environ
+    handler = _StderrHandler(stream)
+    if env.get("JOURNAL_STREAM"):
+        handler.setFormatter(_JournalFormatter("%(message)s"))
+    else:
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+        )
+    handler.set_name("yoke-agent")
+    logger = logging.getLogger("yoke")
+    for existing in list(logger.handlers):
+        if existing.get_name() == "yoke-agent":
+            logger.removeHandler(existing)
+    logger.addHandler(handler)
+    level = env.get("YOKE_LOG_LEVEL", "info").lower()
+    logger.setLevel(_LEVELS.get(level, logging.INFO))
+    return handler
+
 
 #: Cap on one timer-loop sleep so a changed ``next_deadline()`` (new peer,
 #: rescheduled retry) is noticed promptly even mid-wait.
@@ -206,6 +275,19 @@ class AgentRunner:
         async with self._core_lock:
             await self._execute(call(self._clock()))
 
+    async def _apply_wall(
+        self, call: Callable[..., Iterable[Effect]], *args: object, **kwargs: object
+    ) -> None:
+        """Feed a core input with monotonic time and a fresh wall reading.
+
+        Wall time is re-read for every input (ADR 0023); it bounds future
+        sequences only, never a timer.
+        """
+        async with self._core_lock:
+            await self._execute(
+                call(*args, self._clock(), wall=self._wall_clock(), **kwargs)
+            )
+
     # -- effect execution ----------------------------------------------------
 
     async def execute(self, effects: Iterable[Effect]) -> None:
@@ -241,9 +323,30 @@ class AgentRunner:
             elif isinstance(effect, (AttachMedia, DetachMedia)):
                 self._queue_driver(effect)
             elif isinstance(effect, Log):
-                _log.info("%s", effect.message)
+                _log.log(_LEVELS.get(effect.level, logging.INFO), "%s", effect.message)
+            elif isinstance(effect, Admission):
+                self._queue_admission(effect)
             else:
                 assert_never(effect)
+
+    def _queue_admission(self, effect: Admission) -> None:
+        """Hand the complete admission set to the driver, in issue order."""
+        hook = getattr(self._driver, "admit", None)
+        if hook is None or self._closing:
+            return
+        self._driver_executor.submit(partial(self._admit, hook, effect.peers))
+
+    @staticmethod
+    def _admit(
+        hook: Callable[[tuple[tuple[str, str], ...]], None],
+        peers: tuple[tuple[str, str], ...],
+    ) -> None:
+        # Failures are the driver's status to report on its next poll; the
+        # worker must not die, and the log keeps the full cause.
+        try:
+            hook(peers)
+        except Exception:
+            _log.exception("data-plane admission update failed")
 
     def _send_raw(self, raw: bytes) -> None:
         try:
@@ -381,7 +484,7 @@ class AgentRunner:
         muted = False
         while True:
             try:
-                raw, _addr = await self._recv()
+                raw, addr = await self._recv()
             except OSError as exc:
                 if not muted:
                     _log.warning(
@@ -391,18 +494,24 @@ class AgentRunner:
                 await asyncio.sleep(min(self._max_sleep, 0.5))
                 continue
             muted = False
+            source = addr[0] if isinstance(addr, tuple) and addr else None
             try:
                 frame = frames.decode(raw, self._psk)
             except FrameDrop as drop:
                 await self._apply(partial(self._node.on_drop, drop.reason))
             else:
-                await self._apply(partial(self._node.on_frame, frame, raw))
+                await self._apply_wall(
+                    self._node.on_frame,
+                    frame,
+                    raw,
+                    source=source if isinstance(source, str) else None,
+                )
 
     async def _timer_loop(self) -> None:
         while True:
             delay = self._node.next_deadline() - self._clock()
             await asyncio.sleep(min(max(delay, 0.0), self._max_sleep))
-            await self._apply(self._node.poll)
+            await self._apply_wall(self._node.poll)
 
     async def _driver_poll_loop(self) -> None:
         while True:
@@ -510,6 +619,7 @@ async def _run_agent_locked(cfg: AgentConfig, notifier: SystemdNotifier) -> None
                 wall_time=time.time(),
                 media=media,
                 seed=_stable_seed(cfg.node.node_id),
+                admission=callable(getattr(driver, "admit", None)),
             )
         except ValueError as exc:
             raise ConfigError(f"agent initialization: {exc}") from exc
@@ -559,8 +669,39 @@ async def _run_agent_locked(cfg: AgentConfig, notifier: SystemdNotifier) -> None
         await close_task
 
 
+def rebase_sequence(
+    cfg: AgentConfig,
+    *,
+    wall_clock: Callable[[], float] = time.time,
+    save_state: SaveStateFn = statefile.save,
+) -> str:
+    """Explicit recovery from a persisted future reservation (ADR 0023).
+
+    Holds the state lease, so it refuses while the agent runs. Refuses
+    unless the saved bound is beyond the future-admission margin of the
+    current clock; then saves that margin as the new bound with the pairing
+    unchanged. The operator asserts the clock is correct: a box cannot tell
+    a behind clock from a future reservation by itself.
+    """
+    with statefile.lock(cfg.state_file):
+        state = statefile.load(cfg.state_file)
+        wall = wall_clock()
+        bound = rebase_bound(wall)
+        if state.seq <= bound:
+            raise StateError(
+                f"{cfg.state_file}: durable sequence bound {state.seq} is "
+                f"admissible at wall time {int(wall)}; nothing to rebase"
+            )
+        save_state(cfg.state_file, PersistedState(seq=bound, pairing=state.pairing))
+    return (
+        f"rebased durable sequence bound from {state.seq} to {bound} "
+        f"({(state.seq - bound) // NS_PER_S}s); pairing unchanged"
+    )
+
+
 def run_agent(cfg: AgentConfig) -> int:
     """Blocking entry point for the ``yoke agent`` subcommand."""
+    configure_logging()
     # Graceful shutdown (the bye) already ran inside the loop.
     with contextlib.suppress(KeyboardInterrupt, asyncio.CancelledError):
         asyncio.run(run_agent_async(cfg))

@@ -130,7 +130,9 @@ class Monitor:
                 except TimeoutError:
                     continue
                 assert self._collector is not None
-                self._collector.observe(raw, time.monotonic())
+                # Re-read wall time per datagram: a clock stepped by time
+                # sync must not keep rejecting peers as future (ADR 0023).
+                self._collector.observe(raw, time.monotonic(), wall=time.time())
         except Exception as exc:
             self._error = exc
             self._stop.set()

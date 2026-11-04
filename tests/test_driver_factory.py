@@ -155,3 +155,43 @@ def test_build_driver_unknown_type() -> None:
 def test_build_driver_missing_type() -> None:
     with pytest.raises(ConfigError, match=r"driver\.type"):
         build_driver(make_cfg(Role.CONSUMER, {}))
+
+
+def test_build_driver_usbip_producer_zero3e_options() -> None:
+    # ADR 0024: root-provisioned bindings and nftables admission are opt-in.
+    table: Body = {
+        "type": "usbip",
+        "host": "10.0.0.9",
+        "port": 3240,
+        "busids": ["1-1"],
+        "bindings": "external",
+        "admission": "nftables",
+        "admission_request": "/run/yoke/req.json",
+        "admission_status": "/run/yoke-admission/st.json",
+    }
+    driver = build_driver(make_cfg(Role.PRODUCER, table, kind=Kind.USB))
+    assert isinstance(driver, UsbipBindDriver)
+    assert callable(driver.admit)
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        {"bindings": "root"},
+        {"admission": "iptables"},
+        {"admission_request": "relative.json"},
+        {"admission": "nftables", "host": "usb-box.local"},
+    ],
+)
+def test_build_driver_usbip_producer_rejects_bad_zero3e_options(
+    invalid: Body,
+) -> None:
+    table: Body = {
+        "type": "usbip",
+        "host": "10.0.0.9",
+        "port": 3240,
+        "busids": ["1-1"],
+        **invalid,
+    }
+    with pytest.raises(ConfigError):
+        build_driver(make_cfg(Role.PRODUCER, table, kind=Kind.USB))

@@ -43,10 +43,16 @@ class TelemetryCollector:
         self._now = now
         self._counters: dict[str, _Counters] = {}
 
-    def observe(self, raw: bytes, now: float) -> list[SnoopRecord]:
-        """Judge a datagram, counting only accepted announced-device traffic."""
+    def observe(
+        self, raw: bytes, now: float, *, wall: float | None = None
+    ) -> list[SnoopRecord]:
+        """Judge a datagram, counting only accepted announced-device traffic.
+
+        ``wall`` is the receiver's current wall clock for the future-sequence
+        bound (ADR 0023); timers and ages use monotonic ``now`` only.
+        """
         self._advance(now)
-        records = self._snooper.observe(raw, now)
+        records = self._snooper.observe(raw, now, wall=wall)
         for record in records:
             frame = record.frame
             if record.verdict != "ok" or frame is None:

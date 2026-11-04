@@ -10,16 +10,19 @@ from __future__ import annotations
 import pytest
 
 from yoke.core.frames import decode, encode
-from yoke.core.node import Node
+from yoke.core.node import Node, rebase_bound, restart_floor
 from yoke.core.types import (
     ANN_INTERVAL,
     ANN_JITTER,
     INTENT_CACHE_TTL,
     MAX_SEQUENCE,
     PEER_TIMEOUT,
+    SEQ_FLOOR_JUMP_S,
+    SEQ_FUTURE_MARGIN_S,
     SEQUENCE_RESERVATION,
     SUPPRESSION_MAX,
     SUPPRESSION_MIN,
+    Admission,
     AttachMedia,
     Body,
     DetachMedia,
@@ -149,6 +152,8 @@ class Loop:
         media: Body | None = None,
         seed: int = 0,
         now: float = T0,
+        wall_time: float | None = None,
+        admission: bool = False,
     ) -> None:
         self.node = Node(
             NodeConfig(node_id=node_id, role=role, kind=kind, name="n"),
@@ -156,15 +161,25 @@ class Loop:
             now=now,
             media=media,
             seed=seed,
+            wall_time=wall_time,
+            admission=admission,
         )
         self.now = now
         self._seqs: dict[str, int] = {}
+        self.logs: list[Log] = []
         self.start_fx = self.complete(self.node.start(now))
 
     def complete(self, effects: list[Effect]) -> list[Effect]:
-        """Model successful durable storage, preserving effect-order assertions."""
+        """Model successful durable storage, preserving effect-order assertions.
+
+        Local diagnostics (ADR 0023) are collected in :attr:`logs` so that
+        protocol effect-order assertions stay exact.
+        """
         result: list[Effect] = []
         for effect in effects:
+            if isinstance(effect, Log):
+                self.logs.append(effect)
+                continue
             result.append(effect)
             if isinstance(effect, Persist):
                 result.extend(
@@ -181,20 +196,24 @@ class Loop:
         body: Body,
         *,
         seq: int | None = None,
+        wall: float | None = None,
+        source: str | None = None,
     ) -> list[Effect]:
         if seq is None:
             seq = self._seqs.get(origin, 0) + 1
         self._seqs[origin] = max(self._seqs.get(origin, 0), seq)
         frame, raw = build_frame(frame_type, origin, seq, body)
-        return self.complete(self.node.on_frame(frame, raw, self.now))
+        return self.complete(
+            self.node.on_frame(frame, raw, self.now, wall=wall, source=source)
+        )
 
     def feed_pair(self, frame: Frame, raw: bytes) -> list[Effect]:
         return self.complete(self.node.on_frame(frame, raw, self.now))
 
-    def poll_at(self, t: float) -> list[Effect]:
+    def poll_at(self, t: float, *, wall: float | None = None) -> list[Effect]:
         assert t >= self.now, "time must not go backwards"
         self.now = t
-        return self.complete(self.node.poll(t))
+        return self.complete(self.node.poll(t, wall=wall))
 
 
 def paired(loop: Loop, producer: str = "prod-1", version: Version = (1, "cli")) -> None:
@@ -236,10 +255,20 @@ def test_start_effect_order_and_shapes() -> None:
     }
 
 
-def test_seq_floor_uses_now_over_stale_persisted_seq() -> None:
-    loop = Loop(state=PersistedState(seq=10))
+def test_seq_floor_uses_now_without_a_durable_bound() -> None:
+    # First commissioning has only the wall clock (ADR 0007, 0023).
+    loop = Loop(state=PersistedState(seq=0))
     started = sends(loop.start_fx, FrameType.EVT)[0]
     assert started.seq == SEQ0 + 1
+
+
+def test_seq_floor_wall_advance_is_capped_past_durable_bound() -> None:
+    # ADR 0023: the wall clock may drag a nonzero durable bound forward by
+    # at most SEQ_FLOOR_JUMP_S; the durable bound alone prevents reuse.
+    loop = Loop(state=PersistedState(seq=10))
+    started = sends(loop.start_fx, FrameType.EVT)[0]
+    assert started.seq == 10 + SEQ_FLOOR_JUMP_S * 1_000_000_000 + 1
+    assert any("advanced by the 60s cap" in log.message for log in loop.logs)
 
 
 def test_seq_floor_uses_persisted_seq_when_higher() -> None:
@@ -994,7 +1023,7 @@ def test_start_save_failure_emits_no_frames_or_driver_commands() -> None:
     node = Node(
         NodeConfig("node-1", Role.CONSUMER, Kind.USB), state=PersistedState(), now=T0
     )
-    effects = node.start(T0)
+    effects = [e for e in node.start(T0) if not isinstance(e, Log)]
     assert len(effects) == 1 and isinstance(effects[0], Persist)
     failed = node.on_persist_result(effects[0].request_id, False, T0)
     assert all(isinstance(effect, Log) for effect in failed)
@@ -1300,3 +1329,278 @@ def test_invalid_producer_payload_is_not_retained_for_relay() -> None:
         {"op": "pair", "consumer": "con-1", "producer": [], "version": [1, "cli"]},
     )
     assert not loop.node._intent_cache
+
+
+# -- ADR 0023: wall clock re-read for admission; timers stay monotonic --------
+
+NS = 1_000_000_000
+HOURS_2 = 7200.0
+
+
+def test_admission_follows_supplied_wall_clock_step_without_restart() -> None:
+    """Boot before NTP: the box's clock is 2 h behind its correct peers."""
+    loop = Loop(wall_time=T0 - HOURS_2)
+    peer_seq = int(T0) * NS + 10
+    loop.feed(FrameType.ANN, "prod-1", producer_ann(), seq=peer_seq, wall=T0 - HOURS_2)
+    assert "prod-1" not in loop.node.peers
+    assert loop.node._drops["stale"] == 1
+    assert any("this clock is behind" in log.message for log in loop.logs)
+    deadline = loop.node.next_deadline()
+    # NTP steps the clock forward: the next frame is admitted, no restart.
+    loop.feed(FrameType.ANN, "prod-1", producer_ann(), seq=peer_seq + 1, wall=T0)
+    assert "prod-1" in loop.node.peers
+    assert loop.node.next_deadline() == deadline  # wall never moves timers
+
+
+def test_wall_step_backward_never_expires_peers_or_moves_retries() -> None:
+    loop = Loop()
+    paired(loop)
+    loop.node.on_driver_status(DriverStatus(NodeState.ERROR, "boom"), loop.now)
+    retry_at = loop.node._retry_at
+    assert retry_at is not None
+    # The clock steps back three hours on a poll: no peer loss, same retry.
+    fx = loop.poll_at(T0 + 0.5, wall=T0 - 3 * 3600)
+    assert "peer-lost" not in evts(fx)
+    assert loop.node._retry_at == retry_at
+
+
+def test_last_supplied_wall_reading_persists_between_inputs() -> None:
+    loop = Loop(wall_time=T0 - HOURS_2)
+    loop.poll_at(T0 + 1.0, wall=T0 + 1.0)  # time sync seen on a timer tick
+    loop.now = T0 + 2.0
+    loop.feed(FrameType.ANN, "prod-1", producer_ann(), seq=int(T0 + 2) * NS)
+    assert "prod-1" in loop.node.peers
+
+
+def test_future_drop_diagnostic_is_rate_limited() -> None:
+    loop = Loop(wall_time=T0 - HOURS_2)
+    for offset in range(3):
+        loop.feed(
+            FrameType.ANN,
+            "prod-1",
+            producer_ann(),
+            seq=int(T0) * NS + offset + 1,
+            wall=T0 - HOURS_2,
+        )
+    future = [log for log in loop.logs if "ahead of local wall clock" in log.message]
+    assert len(future) == 1 and future[0].level == "warning"
+    assert loop.node._drops["stale"] == 3
+
+
+# -- ADR 0023: bounded restart floor and explicit rebase ----------------------
+
+
+def test_far_future_boot_cannot_persist_a_muting_reservation() -> None:
+    saved = int(T0) * NS + 4096
+    far_future = T0 + 10 * 365 * 86400
+    loop = Loop(state=PersistedState(seq=saved), wall_time=far_future)
+    first = sends(loop.start_fx, FrameType.EVT)[0].seq
+    assert first == saved + SEQ_FLOOR_JUMP_S * NS + 1
+    reserved = next(e.state.seq for e in loop.start_fx if isinstance(e, Persist))
+    # Every peer with a correct clock still admits it, before and after a
+    # restart once the clock is corrected.
+    assert reserved <= (int(T0) + SEQ_FUTURE_MARGIN_S) * NS
+    assert restart_floor(reserved, T0) == reserved
+
+
+def test_restart_floor_rules() -> None:
+    assert restart_floor(0, T0) == int(T0) * NS  # commissioning: wall only
+    behind = int(T0) * NS
+    assert restart_floor(behind, T0 - 100) == behind  # clock behind the bound
+    assert restart_floor(int(T0) * NS, T0 + 30) == int(T0 + 30) * NS
+    assert restart_floor(int(T0) * NS, T0 + 3600) == int(T0 + 60) * NS
+
+
+def test_durable_bound_ahead_of_clock_warns_with_defined_recovery() -> None:
+    saved = int(T0 + 5 * 3600) * NS
+    loop = Loop(state=PersistedState(seq=saved), wall_time=T0)
+    warnings = [log for log in loop.logs if log.level == "warning"]
+    assert any("--rebase-sequence" in log.message for log in warnings)
+    assert sends(loop.start_fx, FrameType.EVT)[0].seq == saved + 1  # never reused
+
+
+def test_own_sequence_beyond_admission_bound_warns_hourly() -> None:
+    loop = Loop(state=PersistedState(seq=int(T0 + 5 * 3600) * NS), wall_time=T0)
+    loop.logs.clear()
+    loop.poll_at(T0 + 1, wall=T0 + 1)
+    loop.poll_at(T0 + 2, wall=T0 + 2)
+    own = [log for log in loop.logs if "own sequence" in log.message]
+    assert len(own) == 1
+    loop.poll_at(T0 + 3602, wall=T0 + 3602)
+    assert len([log for log in loop.logs if "own sequence" in log.message]) == 2
+    # Once the clock catches up past the bound, the warning stops.
+    loop.logs.clear()
+    loop.poll_at(T0 + 15000, wall=T0 + 15000)
+    assert not [log for log in loop.logs if "own sequence" in log.message]
+
+
+def test_rebase_bound_is_the_admission_margin() -> None:
+    assert rebase_bound(T0 + 0.9) == (int(T0) + SEQ_FUTURE_MARGIN_S) * NS
+
+
+# -- ADR 0023: producer readiness edge retries immediately --------------------
+
+
+def test_producer_error_to_active_triggers_immediate_reattach() -> None:
+    loop = Loop(kind=Kind.USB)
+    loop.feed(FrameType.ANN, "prod-1", producer_ann(USB_MEDIA, kind="usb"))
+    loop.feed(FrameType.INT, "cli", pair_body("node-1", "prod-1", (1, "cli")))
+    # Repeated failures push backoff toward the 30 s cap while the producer
+    # keeps announcing that its device is unplugged.
+    for _ in range(5):
+        loop.node.on_driver_status(DriverStatus(NodeState.ERROR, "gone"), loop.now)
+        retry_at = loop.node._retry_at
+        assert retry_at is not None
+        loop.now = retry_at - 0.1
+        loop.feed(
+            FrameType.ANN, "prod-1", producer_ann(USB_MEDIA, kind="usb", state="error")
+        )
+        loop.poll_at(retry_at)
+    assert loop.node._backoff >= 16
+    loop.feed(
+        FrameType.ANN,
+        "prod-1",
+        producer_ann(USB_MEDIA, kind="usb", state="error", err="unplugged"),
+    )
+    fx = loop.feed(
+        FrameType.ANN, "prod-1", producer_ann(USB_MEDIA, kind="usb", state="active")
+    )
+    assert attaches(fx) == [AttachMedia("prod-1", USB_MEDIA)]
+    assert "driver-retry" in evts(fx)
+    assert loop.node._backoff == 2.0  # reset to base, doubled by the attempt
+
+
+def test_producer_active_edge_is_ignored_when_consumer_is_active() -> None:
+    loop = Loop(kind=Kind.USB)
+    loop.feed(FrameType.ANN, "prod-1", producer_ann(USB_MEDIA, kind="usb"))
+    loop.feed(FrameType.INT, "cli", pair_body("node-1", "prod-1", (1, "cli")))
+    loop.node.on_driver_status(DriverStatus(NodeState.ACTIVE), loop.now)
+    loop.feed(
+        FrameType.ANN, "prod-1", producer_ann(USB_MEDIA, kind="usb", state="error")
+    )
+    fx = loop.feed(
+        FrameType.ANN, "prod-1", producer_ann(USB_MEDIA, kind="usb", state="active")
+    )
+    assert attaches(fx) == []
+
+
+# -- ADR 0024: producer data-plane admission ---------------------------------
+
+
+def admissions(fx: list[Effect]) -> list[Admission]:
+    return [e for e in fx if isinstance(e, Admission)]
+
+
+def usb_producer(**kwargs: object) -> Loop:
+    return Loop(
+        node_id="prod-1",
+        role=Role.PRODUCER,
+        kind=Kind.USB,
+        media=USB_MEDIA,
+        admission=True,
+        **kwargs,  # type: ignore[arg-type]
+    )
+
+
+def claim(version: Version = (1, "cli"), producer: str | None = "prod-1") -> Body:
+    return consumer_ann(version, producer, kind="usb")
+
+
+def test_producer_starts_with_empty_admission() -> None:
+    loop = usb_producer()
+    assert admissions(loop.start_fx) == [Admission(())]
+
+
+def test_admission_needs_two_consecutive_frames_from_one_source() -> None:
+    loop = usb_producer()
+    assert (
+        admissions(loop.feed(FrameType.ANN, "desk", claim(), source="10.0.0.5")) == []
+    )
+    fx = loop.feed(FrameType.ANN, "desk", claim(), source="10.0.0.5")
+    assert admissions(fx) == [Admission((("desk", "10.0.0.5"),))]
+    # A single frame from elsewhere (e.g. a lucky spoof) changes nothing.
+    assert (
+        admissions(loop.feed(FrameType.ANN, "desk", claim(), source="10.6.6.6")) == []
+    )
+    assert (
+        admissions(loop.feed(FrameType.ANN, "desk", claim(), source="10.0.0.5")) == []
+    )
+    assert (
+        admissions(loop.feed(FrameType.ANN, "desk", claim(), source="10.6.6.6")) == []
+    )
+    # A real address change confirms on the second consecutive frame.
+    loop.feed(FrameType.ANN, "desk", claim(), source="10.0.0.9")
+    fx = loop.feed(FrameType.ANN, "desk", claim(), source="10.0.0.9")
+    assert admissions(fx) == [Admission((("desk", "10.0.0.9"),))]
+
+
+def test_admission_follows_claims_loss_and_bye() -> None:
+    loop = usb_producer()
+    loop.feed(FrameType.ANN, "desk", claim(), source="10.0.0.5")
+    loop.feed(FrameType.ANN, "desk", claim(), source="10.0.0.5")
+    # Re-paired elsewhere: no longer admitted.
+    fx = loop.feed(
+        FrameType.ANN, "desk", claim((2, "cli"), "prod-2"), source="10.0.0.5"
+    )
+    assert admissions(fx) == [Admission(())]
+    fx = loop.feed(FrameType.ANN, "desk", claim((3, "cli")), source="10.0.0.5")
+    assert admissions(fx) == [Admission((("desk", "10.0.0.5"),))]
+    # Peer timeout revokes; return restores.
+    fx = loop.poll_at(T0 + PEER_TIMEOUT + 1)
+    assert admissions(fx) == [Admission(())]
+    fx = loop.feed(FrameType.ANN, "desk", claim((3, "cli")), source="10.0.0.5")
+    assert admissions(fx) == [Admission((("desk", "10.0.0.5"),))]
+    fx = loop.feed(FrameType.BYE, "desk", {}, source="10.0.0.5")
+    assert admissions(fx) == [Admission(())]
+
+
+def test_admission_ignores_wrong_kind_other_producers_and_non_ipv4() -> None:
+    loop = usb_producer()
+    for _ in range(2):
+        loop.feed(
+            FrameType.ANN,
+            "hdmi-tv",
+            consumer_ann((1, "c"), "prod-1"),
+            source="10.0.0.7",
+        )
+        loop.feed(FrameType.ANN, "other", claim(producer="prod-2"), source="10.0.0.8")
+        loop.feed(FrameType.ANN, "v6", claim(), source="fe80::1")
+    assert loop.node._admitted == ()
+
+
+def test_replayed_frame_from_new_source_never_confirms_an_address() -> None:
+    loop = usb_producer()
+    frame, raw = build_frame(FrameType.ANN, "desk", 1, claim())
+    loop.feed_pair(frame, raw)  # direct from the consumer (no source known)
+    loop.complete(loop.node.on_frame(frame, raw, loop.now, source="10.6.6.6"))
+    loop.complete(loop.node.on_frame(frame, raw, loop.now, source="10.6.6.6"))
+    assert loop.node._admitted == ()  # dup copies are dropped before binding
+
+
+def test_consumers_never_emit_admission() -> None:
+    loop = Loop(admission=True)
+    assert admissions(loop.start_fx) == []
+
+
+# -- ADR 0023: local logs carry full detail; the wire stays bounded ------------
+
+
+def test_driver_detail_is_logged_in_full_once_and_bounded_on_wire() -> None:
+    loop = Loop()
+    paired(loop)
+    detail = "usbip attach failed rc=1: " + "x" * 300
+    fx = loop.node.on_driver_status(DriverStatus(NodeState.ERROR, detail), loop.now)
+    logs = [e for e in fx if isinstance(e, Log)]
+    assert logs == [Log(f"driver error: {detail}", "warning")]
+    assert len(evt_detail(fx, "driver-error")["detail"].encode()) <= 128
+    again = loop.node.on_driver_status(DriverStatus(NodeState.ERROR, detail), loop.now)
+    assert not [e for e in again if isinstance(e, Log)]
+
+
+def test_pairing_commit_and_peer_loss_are_logged() -> None:
+    loop = Loop()
+    paired(loop)
+    assert any("pairing committed: producer=prod-1" in log.message for log in loop.logs)
+    loop.poll_at(T0 + PEER_TIMEOUT + 1)
+    lost = [log for log in loop.logs if log.message.startswith("peer prod-1 lost")]
+    assert lost and lost[0].level == "warning"

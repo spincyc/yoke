@@ -618,3 +618,16 @@ def test_future_sequence_ceiling_advances_from_injected_wall_origin() -> None:
     for seq, expected in ((ceiling, "ok"), (ceiling + 1, "stale")):
         snooper = Snooper(PSK, now=T0, wall_time=TS)
         assert one(snooper, ann_producer(seq=seq), T0 + elapsed).verdict == expected
+
+
+def test_observer_rereads_wall_clock_per_datagram() -> None:
+    """ADR 0023: an observer started before NTP recovers when the clock steps."""
+    from yoke.core.types import NS_PER_S
+
+    snooper = Snooper(PSK, now=T0, wall_time=TS - 7200)
+    early = ann_producer(seq=int(TS) * NS_PER_S + 1)
+    assert snooper.observe(early, T0, wall=TS - 7200)[0].verdict == "stale"
+    assert not snooper.nodes
+    later = ann_producer(seq=int(TS) * NS_PER_S + 2)
+    assert snooper.observe(later, T0 + 1, wall=TS + 1)[0].verdict == "ok"
+    assert "cam-1" in snooper.nodes

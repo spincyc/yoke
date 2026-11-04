@@ -14,9 +14,11 @@ import os
 import re
 import stat
 import tempfile
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 from yoke.core.types import Body, DriverStatus, NodeState
 from yoke.drivers.base import DriverError
@@ -92,6 +94,16 @@ def _timeout(value: float) -> float:
     if not valid:
         raise DriverError("usbip timeout must be finite and positive")
     return value
+
+
+def _port_ids(value: object) -> set[int]:
+    if (
+        not isinstance(value, list)
+        or len(value) > _MAX_DEVICES
+        or not all(type(p) is int and 0 <= p <= 65535 for p in value)
+    ):
+        raise ValueError("invalid local port identities")
+    return set(value)
 
 
 def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -174,11 +186,22 @@ def _parse_port_output(output: str) -> list[_ImportedPort]:
     return records
 
 
+def _label(argv: list[str]) -> str:
+    """``usbip <verb>`` without option values, for a short error prefix."""
+    args = argv[1:]
+    if args[:1] == ["--tcp-port"]:
+        args = args[2:]
+    return " ".join([argv[0], *args[:1]])
+
+
 def _run(runner: CommandRunner, argv: list[str], timeout: float) -> str:
     result = runner.run(argv, timeout=timeout)
     if result.returncode:
+        # Cause first, command last: wire detail is truncated to 128 bytes,
+        # while the local log keeps the full text (ADR 0023).
+        cause = result.stderr.strip() or "(no stderr)"
         raise DriverError(
-            f"{' '.join(argv)} failed rc={result.returncode}: {result.stderr.strip()}"
+            f"{_label(argv)} failed rc={result.returncode}: {cause} [{' '.join(argv)}]"
         )
     if len(result.stdout) > _MAX_OUTPUT:
         raise DriverError(f"oversize {argv[0]} output")
@@ -206,6 +229,9 @@ class UsbipAttachDriver:
         self._loaded = False
         self._owned: set[_Remote] = set()
         self._recovery: dict[_Remote, set[int]] = {}
+        # Record-less ports already present when each owned import was last
+        # seen with its connection record (ADR 0024). Absent: legacy journal.
+        self._baseline: dict[_Remote, set[int]] = {}
         self._wanted: set[_Remote] | None = None
         self._error: str | None = None
 
@@ -238,7 +264,7 @@ class UsbipAttachDriver:
                 if (
                     not isinstance(data, dict)
                     or type(data["schema"]) is not int
-                    or data["schema"] not in (1, 2)
+                    or data["schema"] not in (1, 2, 3)
                     or set(data)
                     != (
                         {"schema", "imports"}
@@ -251,20 +277,25 @@ class UsbipAttachDriver:
                 if not isinstance(imports, list) or len(imports) > _MAX_DEVICES:
                     raise ValueError("invalid ownership imports")
                 owned = set()
+                baseline: dict[_Remote, set[int]] = {}
+                fields = {"host", "port", "busid"}
                 for record in imports:
-                    if not isinstance(record, dict) or set(record) != {
-                        "host",
-                        "port",
-                        "busid",
-                    }:
-                        raise ValueError("invalid ownership record")
-                    owned.add(
-                        _Remote(
-                            _host(record["host"]),
-                            _port(record["port"]),
-                            _busids([record["busid"]])[0],
+                    if not isinstance(record, dict) or (
+                        set(record) != fields
+                        and (
+                            data["schema"] < 3
+                            or set(record) != fields | {"unknown_before"}
                         )
+                    ):
+                        raise ValueError("invalid ownership record")
+                    owned_remote = _Remote(
+                        _host(record["host"]),
+                        _port(record["port"]),
+                        _busids([record["busid"]])[0],
                     )
+                    owned.add(owned_remote)
+                    if "unknown_before" in record:
+                        baseline[owned_remote] = _port_ids(record["unknown_before"])
                 if len(owned) != len(imports):
                     raise ValueError("duplicate ownership imports")
                 recovery: dict[_Remote, set[int]] = {}
@@ -299,6 +330,7 @@ class UsbipAttachDriver:
                     recovery[remote] = set(candidates)
                 self._owned = owned
                 self._recovery = recovery
+                self._baseline = baseline
             except (OSError, ValueError, TypeError, KeyError, RecursionError) as exc:
                 raise DriverError(
                     f"usbip ownership journal is unusable: {exc}"
@@ -308,11 +340,19 @@ class UsbipAttachDriver:
         self._loaded = True
 
     def _save(
-        self, owned: set[_Remote], recovery: dict[_Remote, set[int]] | None = None
+        self,
+        owned: set[_Remote],
+        recovery: dict[_Remote, set[int]] | None = None,
+        baseline: dict[_Remote, set[int]] | None = None,
     ) -> None:
         recovery = {
             r: set(ids)
             for r, ids in (self._recovery if recovery is None else recovery).items()
+            if r in owned
+        }
+        baseline = {
+            r: set(ids)
+            for r, ids in (self._baseline if baseline is None else baseline).items()
             if r in owned
         }
         path = self._ownership_file
@@ -326,9 +366,14 @@ class UsbipAttachDriver:
                     prefix=f".{path.name}.", dir=path.parent
                 )
                 data = {
-                    "schema": 2,
+                    "schema": 3,
                     "imports": [
                         {"host": r.host, "port": r.port, "busid": r.busid}
+                        | (
+                            {"unknown_before": sorted(baseline[r])}
+                            if r in baseline
+                            else {}
+                        )
                         for r in sorted(owned)
                     ],
                     "recovery": [
@@ -359,23 +404,42 @@ class UsbipAttachDriver:
                     Path(temporary).unlink(missing_ok=True)
         self._owned = set(owned)
         self._recovery = recovery
+        self._baseline = baseline
 
     def _refresh_recovery(self, ports: list[_ImportedPort]) -> None:
-        """Resolve recorded port disappearance, never infer an unknown owner."""
+        """Resolve recorded port disappearance, never infer an unknown owner.
+
+        A missing owned import can only occupy a record-less port that was
+        absent when the import was last seen with its record (ADR 0024);
+        older record-less ports are unrelated and never block re-attach.
+        """
         known = {p.remote for p in ports if p.remote is not None}
         unknown = {p.port for p in ports if p.remote is None}
         owned = set(self._owned)
         recovery = {r: set(ids) for r, ids in self._recovery.items()}
+        baseline = {r: set(ids) for r, ids in self._baseline.items()}
         for remote, candidates in tuple(recovery.items()):
             if not candidates & unknown:
                 del recovery[remote]
                 if remote not in known:
                     owned.discard(remote)
+        for remote in owned & known:
+            baseline[remote] = set(unknown)
         for remote in owned - known:
-            if unknown and remote not in recovery:
-                recovery[remote] = set(unknown)
-        if owned != self._owned or recovery != self._recovery:
-            self._save(owned, recovery)
+            if remote in recovery:
+                continue
+            # Legacy journals carry no baseline: keep ADR 0014's
+            # conservative attribution until the import is seen again.
+            candidates = unknown - baseline.get(remote, set())
+            if candidates:
+                recovery[remote] = candidates
+        baseline = {r: ids for r, ids in baseline.items() if r in owned}
+        if (
+            owned != self._owned
+            or recovery != self._recovery
+            or baseline != self._baseline
+        ):
+            self._save(owned, recovery, baseline)
 
     def _recovery_error(self) -> DriverError:
         ports = sorted({p for ids in self._recovery.values() for p in ids})
@@ -440,7 +504,8 @@ class UsbipAttachDriver:
         created: set[_Remote] = set()
         try:
             for remote in sorted(wanted):
-                matches = [p for p in self._ports() if p.remote == remote]
+                current = self._ports()
+                matches = [p for p in current if p.remote == remote]
                 if matches:
                     if remote not in self._owned:
                         raise DriverError(
@@ -449,8 +514,14 @@ class UsbipAttachDriver:
                     if all(p.active for p in matches):
                         continue
                     self._remove({remote})
+                    current = self._ports()
                 created.add(remote)
-                self._save(self._owned | {remote})  # durable intent before side effect
+                # Durable intent before the side effect, with the record-less
+                # ports that already exist and so cannot be this import.
+                before = {p.port for p in current if p.remote is None}
+                self._save(
+                    self._owned | {remote}, baseline={**self._baseline, remote: before}
+                )
                 _run(
                     self._runner,
                     [
@@ -544,13 +615,323 @@ class UsbipAttachDriver:
         return None
 
 
+# --- producer data-plane admission (ADR 0024) --------------------------------
+
+#: Agent-written request (its runtime directory) and helper-written status
+#: (a root-owned runtime directory, so the agent cannot plant a symlink).
+DEFAULT_ADMISSION_REQUEST = Path("/run/yoke/usbip-admission.json")
+DEFAULT_ADMISSION_STATUS = Path("/run/yoke-admission/status.json")
+ADMISSION_TABLE = "yoke_usbip"
+MAX_ADMITTED = 16
+_MAX_ADMISSION_FILE = 4096
+#: Producer readiness probes (finding 8): sysfs every poll; the daemon's
+#: device list on change, after failure, and otherwise at most this often.
+DAEMON_PROBE_INTERVAL = 30.0
+DAEMON_RETRY_INTERVAL = 5.0
+#: A request the helper has not applied after this long is written again, so
+#: a path-unit trigger lost while the helper was running cannot wedge it.
+ADMISSION_REREQUEST = 5.0
+
+Peers = tuple[tuple[str, str], ...]
+
+
+def _admissible_ipv4(value: object) -> str:
+    """A unicast IPv4 literal that may be allowlisted (never loopback)."""
+    if not isinstance(value, str):
+        raise ValueError(f"admission address must be a string: {value!r}")
+    try:
+        address = ipaddress.IPv4Address(value)
+    except ValueError as exc:
+        raise ValueError(f"admission address is not IPv4: {value!r}") from exc
+    if (
+        address.is_multicast
+        or address.is_unspecified
+        or address.is_loopback
+        or address.is_reserved
+        or address == ipaddress.IPv4Address("255.255.255.255")
+    ):
+        raise ValueError(f"admission address is not a unicast host: {value}")
+    return str(address)
+
+
+def _read_private_json(path: Path, what: str) -> object:
+    """Bounded JSON from a regular file opened without following symlinks."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError(f"{what} must be a regular file")
+        with os.fdopen(fd, "rb", closefd=False) as stream:
+            raw = stream.read(_MAX_ADMISSION_FILE + 1)
+    finally:
+        os.close(fd)
+    if len(raw) > _MAX_ADMISSION_FILE:
+        raise ValueError(f"{what} is oversized")
+    return json.loads(raw, object_pairs_hook=_unique_object)
+
+
+def _write_atomic(path: Path, data: object, mode: int) -> None:
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        os.fchmod(fd, mode)
+        with os.fdopen(fd, "w") as stream:
+            json.dump(data, stream, sort_keys=True, separators=(",", ":"))
+        os.replace(temporary, path)
+        temporary = ""
+    finally:
+        if temporary:
+            Path(temporary).unlink(missing_ok=True)
+
+
+def render_admission_ruleset(port: int, allow: Sequence[str]) -> str:
+    """The one fixed nftables table the root helper loads (ADR 0024).
+
+    Only new TCP connections to the USB/IP port are filtered. The script
+    recreates the table atomically in one ``nft -f`` transaction. The real
+    kernel effect is ⚠ bench-unverified.
+    """
+    port = _port(port)
+    addresses = sorted({_admissible_ipv4(a) for a in allow})
+    if len(addresses) > MAX_ADMITTED:
+        raise ValueError("too many admitted addresses")
+    elements = f"\t\telements = {{ {', '.join(addresses)} }}\n" if addresses else ""
+    return (
+        f"add table inet {ADMISSION_TABLE}\n"
+        f"delete table inet {ADMISSION_TABLE}\n"
+        f"table inet {ADMISSION_TABLE} {{\n"
+        "\tset consumers4 {\n"
+        "\t\ttype ipv4_addr\n"
+        f"{elements}"
+        "\t}\n"
+        "\tchain input {\n"
+        "\t\ttype filter hook input priority filter; policy accept;\n"
+        f"\t\ttcp dport {port} ct state established,related accept\n"
+        f'\t\ttcp dport {port} iifname "lo" accept\n'
+        f"\t\ttcp dport {port} ip saddr @consumers4 accept\n"
+        f"\t\ttcp dport {port} drop\n"
+        "\t}\n"
+        "}\n"
+    )
+
+
+def read_admission_request(path: Path, *, port: int) -> tuple[int, list[str]]:
+    """Validate an agent-written request at the privilege boundary.
+
+    An absent request means the empty allowlist (closed port). The port
+    must equal the helper's own configured port: the agent cannot choose
+    which port is filtered.
+    """
+    try:
+        data = _read_private_json(path, "admission request")
+    except FileNotFoundError:
+        return 0, []
+    if not isinstance(data, dict) or set(data) != {
+        "schema",
+        "generation",
+        "port",
+        "allow",
+        "peers",
+    }:
+        raise ValueError("admission request has unexpected fields")
+    generation = data["generation"]
+    if data["schema"] != 1 or type(data["schema"]) is not int:
+        raise ValueError("unknown admission request schema")
+    if type(generation) is not int or not 0 <= generation < 2**63:
+        raise ValueError("invalid admission generation")
+    if type(data["port"]) is not int or data["port"] != port:
+        raise ValueError(f"admission request port must be {port}")
+    allow = data["allow"]
+    if not isinstance(allow, list) or len(allow) > MAX_ADMITTED:
+        raise ValueError("invalid admission allow list")
+    addresses = [_admissible_ipv4(a) for a in allow]
+    if len(set(addresses)) != len(addresses):
+        raise ValueError("duplicate admission addresses")
+    peers = data["peers"]
+    if (
+        not isinstance(peers, dict)
+        or len(peers) > MAX_ADMITTED
+        or not all(isinstance(k, str) and len(k) <= 32 for k in peers)
+        or not all(isinstance(v, str) and v in addresses for v in peers.values())
+    ):
+        raise ValueError("invalid admission peer labels")
+    return generation, sorted(addresses)
+
+
+def apply_admission(
+    *,
+    request: Path,
+    status: Path,
+    port: int,
+    runner: CommandRunner,
+    nft: str = "nft",
+    timeout: float = 10.0,
+) -> int:
+    """Root helper body: validate, render, load, then report (exit status).
+
+    An invalid request fails closed: the empty allowlist is loaded and the
+    failure is reported, so the producer shows ``error``.
+    """
+    port = _port(port)
+    generation = 0
+    allow: list[str] = []
+    error: str | None = None
+    try:
+        generation, allow = read_admission_request(request, port=port)
+    except (OSError, ValueError, RecursionError) as exc:
+        error = f"rejected admission request: {exc}"
+    ruleset = status.with_name(status.name + ".nft")
+    try:
+        status.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+        text = render_admission_ruleset(port, allow)
+        fd, temporary = tempfile.mkstemp(prefix=".ruleset.", dir=status.parent)
+        try:
+            with os.fdopen(fd, "w") as stream:
+                stream.write(text)
+            os.replace(temporary, ruleset)
+            temporary = ""
+        finally:
+            if temporary:
+                Path(temporary).unlink(missing_ok=True)
+        _run(runner, [nft, "-f", str(ruleset)], _timeout(timeout))
+    except (OSError, ValueError, DriverError) as exc:
+        error = f"{error}; " if error else ""
+        error += f"nftables load failed: {exc}"
+        allow = []
+    report: dict[str, object] = {
+        "schema": 1,
+        "generation": generation,
+        "port": port,
+        "allow": allow,
+        "applied": error is None,
+    }
+    if error is not None:
+        report["error"] = error[:512]
+    try:
+        _write_atomic(status, report, 0o644)
+    except OSError:
+        return 1
+    return 0 if error is None else 1
+
+
+class NoAdmission:
+    """Legacy behavior: the USB/IP port stays open to the LAN."""
+
+    enforcing = False
+
+    def apply(self, peers: Peers) -> None:
+        """Nothing to enforce."""
+
+    def status(self) -> tuple[NodeState | None, str]:
+        return None, ""
+
+
+class NftablesAdmission:
+    """Request allowlists from the root helper; report what it applied.
+
+    The agent writes only a validated data request into its own runtime
+    directory; the helper owns the firewall and writes a status file in a
+    root-owned directory. Readiness compares the applied allowlist with the
+    latest request, so a stale status from an earlier process never counts.
+    """
+
+    enforcing = True
+
+    def __init__(
+        self,
+        *,
+        port: int,
+        request_path: Path = DEFAULT_ADMISSION_REQUEST,
+        status_path: Path = DEFAULT_ADMISSION_STATUS,
+        clock: Callable[[], float] = time.monotonic,
+        rerequest_after: float = ADMISSION_REREQUEST,
+    ) -> None:
+        self._port = _port(port)
+        self._request_path = request_path
+        self._status_path = status_path
+        self._clock = clock
+        self._rerequest_after = _timeout(rerequest_after)
+        self._generation = 0
+        self._requested: list[str] | None = None
+        self._labels: dict[str, str] = {}
+        self._requested_at = 0.0
+        self._error: str | None = None
+
+    def apply(self, peers: Peers) -> None:
+        labels: dict[str, str] = {}
+        for consumer, address in peers:
+            try:
+                labels[consumer] = _admissible_ipv4(address)
+            except ValueError:
+                continue  # never widen admission for an unusable address
+            if len(labels) == MAX_ADMITTED:
+                break
+        self._write(sorted(set(labels.values())), labels)
+
+    def _write(self, allow: list[str], labels: dict[str, str]) -> None:
+        self._generation += 1
+        request = {
+            "schema": 1,
+            "generation": self._generation,
+            "port": self._port,
+            "allow": allow,
+            "peers": labels,
+        }
+        try:
+            _write_atomic(self._request_path, request, 0o644)
+        except OSError as exc:
+            self._error = f"admission request write failed: {exc}"
+            raise DriverError(self._error) from exc
+        self._error = None
+        self._requested = allow
+        self._labels = labels
+        self._requested_at = self._clock()
+
+    def status(self) -> tuple[NodeState | None, str]:
+        if self._error is not None:
+            return NodeState.ERROR, self._error
+        if self._requested is None:
+            return NodeState.PENDING, "admission allowlist not yet requested"
+        try:
+            data = _read_private_json(self._status_path, "admission status")
+        except FileNotFoundError:
+            return NodeState.PENDING, "admission helper has not reported"
+        except (OSError, ValueError, RecursionError) as exc:
+            return NodeState.ERROR, f"admission status unreadable: {exc}"
+        if not isinstance(data, dict):
+            return NodeState.ERROR, "admission status unreadable"
+        if data.get("applied") is not True:
+            return NodeState.ERROR, f"admission helper failed: {data.get('error')}"
+        if data.get("port") != self._port or data.get("allow") != self._requested:
+            if self._clock() - self._requested_at >= self._rerequest_after:
+                try:
+                    self._write(self._requested, self._labels)
+                except DriverError as exc:
+                    return NodeState.ERROR, str(exc)
+            return (
+                NodeState.PENDING,
+                f"admission allowlist {self._requested} not yet applied",
+            )
+        return None, f"; admission {len(self._requested)} consumer address(es)"
+
+
+class UsbipAdmission(Protocol):
+    enforcing: bool
+
+    def apply(self, peers: Peers) -> None: ...
+
+    def status(self) -> tuple[NodeState | None, str]: ...
+
+
 class UsbipBindDriver:
-    """Idempotently bind explicitly configured exports and prove readiness.
+    """Prove export readiness for explicitly configured devices.
 
     ``export_status`` returns 0 for an absent/unbound device, 1 for available and
     2 for in-use usbip-host exports; other states raise DriverError. The
     default probe reads Linux sysfs; tests inject deterministic alternatives.
     usbipd is independently provisioned, never started implicitly here.
+    With ``bindings="external"`` binding belongs to root provisioning (udev
+    and ``yoke-usbip-bind@.service``) and this driver never runs ``usbip
+    bind``/``unbind`` (ADR 0024). ``admission`` restricts new data sessions to
+    the consumers the control plane admitted.
     """
 
     def __init__(
@@ -563,16 +944,39 @@ class UsbipBindDriver:
         timeout: float = 10.0,
         export_status: Callable[[str], int] | None = None,
         sysfs_root: Path = Path("/sys/bus/usb/devices"),
+        bindings: str = "agent",
+        admission: UsbipAdmission | None = None,
+        clock: Callable[[], float] = time.monotonic,
+        daemon_probe_interval: float = DAEMON_PROBE_INTERVAL,
+        daemon_retry_interval: float = DAEMON_RETRY_INTERVAL,
     ) -> None:
         self._host, self._port, self._busids = _validate_media(
             {"host": host, "port": port, "busids": list(busids)}
         )
+        if bindings not in ("agent", "external"):
+            raise DriverError(f"usbip bindings must be agent or external: {bindings!r}")
+        self._admission: UsbipAdmission = admission or NoAdmission()
+        if self._admission.enforcing:
+            try:
+                ipaddress.IPv4Address(self._host)
+            except ValueError as exc:
+                raise DriverError(
+                    "usbip admission requires an IPv4 literal host"
+                ) from exc
+        self._manage_bindings = bindings == "agent"
         self._runner = runner
         self._timeout = _timeout(timeout)
         self._sysfs_root = sysfs_root
         self._status = export_status or self._sysfs_status
         self._exporting = False
         self._owned_bindings: set[str] = set()
+        self._clock = clock
+        self._probe_interval = _timeout(daemon_probe_interval)
+        self._retry_interval = _timeout(daemon_retry_interval)
+        self._probe_due = -math.inf
+        self._probe_ok = False
+        self._probed_status: dict[str, int] | None = None
+        self._exported: set[str] = set()
 
     def _sysfs_status(self, busid: str) -> int:
         device = self._sysfs_root / busid
@@ -596,8 +1000,14 @@ class UsbipBindDriver:
     def detach(self) -> None:
         """Consumers detach; producers retain configured exports."""
 
+    def admit(self, peers: Peers) -> None:
+        """Replace the data-plane admission set (ADR 0024)."""
+        self._admission.apply(peers)
+
     def bind(self) -> None:
         self._exporting = True
+        if not self._manage_bindings:
+            return
         created: list[str] = []
         try:
             for busid in self._busids:
@@ -624,6 +1034,11 @@ class UsbipBindDriver:
     def unbind(self) -> None:
         self._exporting = False
         errors: list[str] = []
+        try:
+            # Orderly stop closes the data plane to new sessions.
+            self._admission.apply(())
+        except DriverError as exc:
+            errors.append(str(exc))
         for busid in sorted(self._owned_bindings):
             try:
                 if self._status(busid):
@@ -634,35 +1049,72 @@ class UsbipBindDriver:
         if errors:
             raise DriverError("; ".join(errors))
 
+    def _probe_daemon(self, status: dict[str, int]) -> None:
+        """Ask usbipd for its export list only when the answer may differ."""
+        now = self._clock()
+        if now < self._probe_due and (
+            not self._probe_ok or status == self._probed_status
+        ):
+            return
+        try:
+            output = _run(
+                self._runner,
+                [USBIP, "--tcp-port", str(self._port), "list", "-r", "127.0.0.1"],
+                self._timeout,
+            )
+        except DriverError:
+            self._probe_ok = False
+            self._probe_due = now + self._retry_interval
+            raise
+        self._exported = {
+            m[1] for line in output.splitlines() if (m := _EXPORT_RE.match(line))
+        }
+        self._probed_status = dict(status)
+        missing = [b for b, v in status.items() if v == 1 and b not in self._exported]
+        self._probe_ok = not missing
+        self._probe_due = now + (
+            self._probe_interval if self._probe_ok else self._retry_interval
+        )
+
     def poll(self) -> DriverStatus:
         try:
             status = {busid: self._status(busid) for busid in self._busids}
-            if self._exporting and any(value == 0 for value in status.values()):
+            if (
+                self._manage_bindings
+                and self._exporting
+                and any(value == 0 for value in status.values())
+            ):
                 # Startup failures and unplug/replug need repair even though
                 # the producer core never emits consumer AttachMedia effects.
                 self.bind()
                 status = {busid: self._status(busid) for busid in self._busids}
             unbound = [b for b, value in status.items() if not value]
             if unbound:
+                hint = (
+                    ""
+                    if self._manage_bindings
+                    else "; bindings are provisioned by yoke-usbip-bind@BUSID.service"
+                )
                 raise DriverError(
                     f"usbip devices not bound to usbip-host: {', '.join(unbound)}"
+                    + hint
                 )
-            output = _run(
-                self._runner,
-                [USBIP, "--tcp-port", str(self._port), "list", "-r", "127.0.0.1"],
-                self._timeout,
-            )
-            exported = {
-                m[1] for line in output.splitlines() if (m := _EXPORT_RE.match(line))
-            }
+            self._probe_daemon(status)
             missing = [
-                b for b, value in status.items() if value == 1 and b not in exported
+                b
+                for b, value in status.items()
+                if value == 1 and b not in self._exported
             ]
             if missing:
                 raise DriverError(
                     f"usbipd is not advertising bound devices: {', '.join(missing)}"
                 )
-            return DriverStatus(NodeState.ACTIVE, f"{len(status)} device(s) exported")
+            admission_state, note = self._admission.status()
+            if admission_state is not None:
+                return DriverStatus(admission_state, note)
+            return DriverStatus(
+                NodeState.ACTIVE, f"{len(status)} device(s) exported{note}"
+            )
         except DriverError as exc:
             return DriverStatus(NodeState.ERROR, str(exc))
 

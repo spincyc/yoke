@@ -12,6 +12,13 @@ seed. Nothing here reads wall time or opens a socket.
 Partition semantics: while a partition is active, only ids listed in
 some group can communicate, and only within their own group. List every
 node (and pseudo-origin such as ``cli-sim``) that should stay reachable.
+
+Clocks (ADR 0023): the virtual clock is true time and every node's
+monotonic clock. Each node also has a wall-clock skew, which can be set at
+boot and stepped at any moment (time sync, bad RTC); the node receives
+``now + skew`` as its wall reading with every input. Each sender has a
+transport address so producer data-plane admission (ADR 0024) can be
+simulated, including injected spoofed or replayed datagrams.
 """
 
 from __future__ import annotations
@@ -25,6 +32,7 @@ from dataclasses import dataclass, field
 from yoke.core.frames import FrameDrop, decode, encode
 from yoke.core.node import Node
 from yoke.core.types import (
+    Admission,
     AttachMedia,
     Body,
     DetachMedia,
@@ -91,6 +99,11 @@ class SimNode:
     seed: int
     offline: bool = False
     delivered: list[tuple[float, bytes]] = field(default_factory=list)
+    wall_skew: float = 0.0
+    address: str = ""
+    admission: bool = False
+    admitted: tuple[tuple[str, str], ...] | None = None
+    logs: list[Log] = field(default_factory=list)
 
 
 _QueueItem = tuple[float, int, str, bytes, str]  # (time, tie, dst, raw, src)
@@ -116,6 +129,7 @@ class SimNet:
         self._cli_seq: dict[str, int] = {}
         self._observed: dict[str, int] = {}
         self._media_n = 0
+        self._addresses: dict[str, str] = {"cli-sim": "10.0.0.250"}
 
     # -- topology ------------------------------------------------------------
 
@@ -127,6 +141,10 @@ class SimNet:
         *,
         seed: int | None = None,
         media: Body | None = None,
+        wall_skew: float = 0.0,
+        admission: bool = False,
+        address: str | None = None,
+        state: PersistedState | None = None,
     ) -> SimNode:
         if seed is None:
             seed = self._seed * 7919 + len(self._order) + 1
@@ -134,14 +152,27 @@ class SimNet:
             media = self._default_media(kind)
         driver = SimDriver(media=media if role is Role.PRODUCER else None)
         config = NodeConfig(node_id=node_id, role=role, kind=kind, name=node_id)
+        stored = state or PersistedState()
         node = Node(
             config,
-            state=PersistedState(),
+            state=PersistedState(seq=stored.seq, pairing=stored.pairing),
             now=self.now,
             media=driver.describe(),
             seed=seed,
+            wall_time=self.now + wall_skew,
+            admission=admission,
         )
-        sn = SimNode(node_id, config, node, driver, PersistedState(), seed)
+        sn = SimNode(
+            node_id,
+            config,
+            node,
+            driver,
+            PersistedState(seq=stored.seq, pairing=stored.pairing),
+            seed,
+            wall_skew=wall_skew,
+            address=address or f"10.0.1.{len(self._order) + 1}",
+            admission=admission,
+        )
         self.nodes[node_id] = sn
         self._order.append(node_id)
         self._trace(f"boot {node_id} role={role.value} kind={kind.value}")
@@ -192,10 +223,13 @@ class SimNet:
         *,
         lose_state: bool = False,
         at: float | None = None,
+        wall_skew: float | None = None,
     ) -> SimNode:
         if at is not None:
             self.run_until(at)
         sn = self.nodes[node_id]
+        if wall_skew is not None:
+            sn.wall_skew = wall_skew
         self._queue = [item for item in self._queue if item[2] != node_id]
         heapq.heapify(self._queue)
         if lose_state:
@@ -209,9 +243,12 @@ class SimNet:
             now=self.now,
             media=sn.driver.describe(),
             seed=sn.seed,
+            wall_time=self.wall_of(node_id),
+            admission=sn.admission,
         )
+        sn.admitted = None
         sn.offline = False
-        self._trace(f"reboot {node_id} lose_state={lose_state}")
+        self._trace(f"reboot {node_id} lose_state={lose_state} skew={sn.wall_skew}")
         self._process(sn, sn.node.start(self.now), self.now)
         return sn
 
@@ -248,10 +285,53 @@ class SimNet:
         self._broadcast(raw, origin)
         return version, raw
 
-    def inject_raw(self, raw: bytes, sender: str = "attacker") -> None:
-        """Put an arbitrary datagram on the bus (forgeries, replays)."""
+    def inject_raw(
+        self, raw: bytes, sender: str = "attacker", *, address: str | None = None
+    ) -> None:
+        """Put an arbitrary datagram on the bus (forgeries, replays).
+
+        ``address`` is the transport source the receivers see; an attacker
+        may claim any address.
+        """
+        if address is not None:
+            self._addresses[sender] = address
         self._trace(f"inject from {sender} ({len(raw)}B)")
         self._broadcast(raw, sender)
+
+    # -- clocks, driver health and the simulated data plane ------------------
+
+    def wall_of(self, node_id: str) -> float:
+        """The wall clock ``node_id`` reads now (true time plus its skew)."""
+        return self.now + self.nodes[node_id].wall_skew
+
+    def step_clock(self, node_id: str, delta: float) -> None:
+        """Step one node's wall clock (NTP correction, bad RTC, operator)."""
+        self.nodes[node_id].wall_skew += delta
+        self._trace(f"clock {node_id} step {delta:+.0f}s")
+
+    def driver_status(self, node_id: str, status: DriverStatus) -> None:
+        """Report backend health from outside a command (e.g. a replug)."""
+        sn = self.nodes[node_id]
+        sn.driver.set_status(status)
+        self._process(sn, sn.node.on_driver_status(status, self.now), self.now)
+
+    def address_of(self, sender: str) -> str | None:
+        if sender in self.nodes:
+            return self.nodes[sender].address
+        return self._addresses.get(sender)
+
+    def data_plane_admits(self, producer: str, address: str) -> bool:
+        """Model the producer's admission firewall for new TCP sessions.
+
+        The real nftables effect is ⚠ bench-unverified; this models the
+        rendered rules: loopback and allowlisted IPv4 sources only.
+        """
+        sn = self.nodes[producer]
+        if not sn.admission:
+            return True  # legacy: data plane open to the LAN
+        if address.startswith("127."):
+            return True
+        return any(addr == address for _, addr in sn.admitted or ())
 
     # -- clock ---------------------------------------------------------------
 
@@ -272,12 +352,14 @@ class SimNet:
                 break
             self.now = max(self.now, nxt)
             if tq <= tn:
-                _t, _tie, dst, raw, _src = heapq.heappop(self._queue)
-                self._deliver(dst, raw, self.now)
+                _t, _tie, dst, raw, src = heapq.heappop(self._queue)
+                self._deliver(dst, raw, self.now, src)
             else:
                 assert due is not None
                 sn = self.nodes[due]
-                self._process(sn, sn.node.poll(self.now), self.now)
+                self._process(
+                    sn, sn.node.poll(self.now, wall=self.wall_of(due)), self.now
+                )
         self.now = max(self.now, t)
 
     def run(self, seconds: float) -> None:
@@ -398,9 +480,9 @@ class SimNet:
         while self._queue:
             if steps >= drain:
                 return False
-            t, _tie, dst, raw, _src = heapq.heappop(self._queue)
+            t, _tie, dst, raw, src = heapq.heappop(self._queue)
             self.now = max(self.now, t)
-            self._deliver(dst, raw, self.now)
+            self._deliver(dst, raw, self.now, src)
             steps += 1
         for sn in self.nodes.values():
             if sn.offline:
@@ -492,7 +574,7 @@ class SimNet:
         self._tie += 1
         heapq.heappush(self._queue, (self.now + delay, self._tie, dst, raw, src))
 
-    def _deliver(self, dst: str, raw: bytes, now: float) -> None:
+    def _deliver(self, dst: str, raw: bytes, now: float, src: str = "") -> None:
         sn = self.nodes[dst]
         if sn.offline:
             return
@@ -503,14 +585,22 @@ class SimNet:
             self._process(sn, sn.node.on_drop(drop.reason, now), now)
             return
         sn.delivered.append((now, raw))
-        self._process(sn, sn.node.on_frame(frame, raw, now), now)
+        effects = sn.node.on_frame(
+            frame, raw, now, wall=self.wall_of(dst), source=self.address_of(src)
+        )
+        self._process(sn, effects, now)
 
     def _process(self, sn: SimNode, effects: list[Effect], now: float) -> None:
         status: DriverStatus | None = None
         for effect in effects:
             if isinstance(effect, SendFrame):
                 raw = encode(
-                    effect.type, sn.node_id, effect.seq, now, effect.body, self.psk
+                    effect.type,
+                    sn.node_id,
+                    effect.seq,
+                    now + sn.wall_skew,
+                    effect.body,
+                    self.psk,
                 )
                 self._broadcast(raw, sn.node_id)
             elif isinstance(effect, SendRaw):
@@ -527,7 +617,11 @@ class SimNet:
             elif isinstance(effect, DetachMedia):
                 status = self._drive(sn, None, now)
             elif isinstance(effect, Log):
+                sn.logs.append(effect)
                 self._trace(f"{sn.node_id} log: {effect.message}")
+            elif isinstance(effect, Admission):
+                sn.admitted = effect.peers
+                self._trace(f"{sn.node_id} admission {list(effect.peers)}")
         if status is not None:
             self._process(sn, sn.node.on_driver_status(status, now), now)
 

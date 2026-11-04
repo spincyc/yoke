@@ -1,0 +1,379 @@
+{
+  "schema": 1,
+  "description": "YWP/1 authentication conformance vectors (doc/design/PROTOCOL.md, Authentication). Keys are hex-encoded PSK bytes; 'open' is the empty PSK. 'datagram' is the exact UTF-8 payload. 'expect' is 'accept' or the drop counter slug. For keyed accepts, 'signed_message' is the exact message whose HMAC-SHA256 hex digest is the frame's sig and 'path' says which receiver rule matches: 'transmitted' (datagram with the top-level sig member excised) or 'legacy-canonical' (canonical re-serialization without sig). 'frame' is the decoded envelope. Vectors marked 'reference' are byte-identical to the reference encoder's output. Replay checks are out of scope.",
+  "keys": {
+    "site": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "other": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+    "open": ""
+  },
+  "vectors": [
+    {
+      "name": "reference-ann",
+      "key": "site",
+      "datagram": "{\"body\":{\"err\":null,\"kind\":\"hdmi\",\"media\":{\"group\":\"239.10.0.1\",\"port\":5004},\"name\":\"rack encoder café 山\",\"pairing\":null,\"role\":\"producer\",\"state\":\"active\"},\"id\":\"rack-1\",\"seq\":1793000000000000001,\"sig\":\"876d0e6391e98ee4012d9e3b36174303b47f5d8b971f854867514b896fb27442\",\"t\":\"ann\",\"ts\":1793000000.25,\"v\":1}",
+      "expect": "accept",
+      "frame": {
+        "t": "ann",
+        "id": "rack-1",
+        "seq": 1793000000000000001,
+        "ts": 1793000000.25,
+        "body": {
+          "err": null,
+          "kind": "hdmi",
+          "media": {
+            "group": "239.10.0.1",
+            "port": 5004
+          },
+          "name": "rack encoder café 山",
+          "pairing": null,
+          "role": "producer",
+          "state": "active"
+        }
+      },
+      "signed_message": "{\"body\":{\"err\":null,\"kind\":\"hdmi\",\"media\":{\"group\":\"239.10.0.1\",\"port\":5004},\"name\":\"rack encoder café 山\",\"pairing\":null,\"role\":\"producer\",\"state\":\"active\"},\"id\":\"rack-1\",\"seq\":1793000000000000001,\"t\":\"ann\",\"ts\":1793000000.25,\"v\":1}",
+      "path": "transmitted",
+      "reference": true,
+      "note": "Reference sender output (canonical JSON, sig in sorted position). Excision equals the canonical re-serialization, so both rules agree."
+    },
+    {
+      "name": "reference-int",
+      "key": "site",
+      "datagram": "{\"body\":{\"consumer\":\"desk-a\",\"op\":\"pair\",\"producer\":\"rack-1\",\"version\":[3,\"cli-7\"]},\"id\":\"rack-1\",\"seq\":1793000000000000002,\"sig\":\"16a1a16272562369450c8d1c740b3bb46f9957f536cb54a59a0346e23a7272fa\",\"t\":\"int\",\"ts\":1793000000.5,\"v\":1}",
+      "expect": "accept",
+      "frame": {
+        "t": "int",
+        "id": "rack-1",
+        "seq": 1793000000000000002,
+        "ts": 1793000000.5,
+        "body": {
+          "consumer": "desk-a",
+          "op": "pair",
+          "producer": "rack-1",
+          "version": [
+            3,
+            "cli-7"
+          ]
+        }
+      },
+      "signed_message": "{\"body\":{\"consumer\":\"desk-a\",\"op\":\"pair\",\"producer\":\"rack-1\",\"version\":[3,\"cli-7\"]},\"id\":\"rack-1\",\"seq\":1793000000000000002,\"t\":\"int\",\"ts\":1793000000.5,\"v\":1}",
+      "path": "transmitted",
+      "reference": true,
+      "note": "Reference sender output (canonical JSON, sig in sorted position). Excision equals the canonical re-serialization, so both rules agree."
+    },
+    {
+      "name": "reference-ack",
+      "key": "site",
+      "datagram": "{\"body\":{\"applied\":true,\"reason\":\"applied\",\"version\":[3,\"cli-7\"]},\"id\":\"rack-1\",\"seq\":1793000000000000003,\"sig\":\"64d762a2d688e94c14657bbe45f44f59a36fce224ef2e0ceed3e8f6c4e58b677\",\"t\":\"ack\",\"ts\":1793000000.75,\"v\":1}",
+      "expect": "accept",
+      "frame": {
+        "t": "ack",
+        "id": "rack-1",
+        "seq": 1793000000000000003,
+        "ts": 1793000000.75,
+        "body": {
+          "applied": true,
+          "reason": "applied",
+          "version": [
+            3,
+            "cli-7"
+          ]
+        }
+      },
+      "signed_message": "{\"body\":{\"applied\":true,\"reason\":\"applied\",\"version\":[3,\"cli-7\"]},\"id\":\"rack-1\",\"seq\":1793000000000000003,\"t\":\"ack\",\"ts\":1793000000.75,\"v\":1}",
+      "path": "transmitted",
+      "reference": true,
+      "note": "Reference sender output (canonical JSON, sig in sorted position). Excision equals the canonical re-serialization, so both rules agree."
+    },
+    {
+      "name": "reference-evt",
+      "key": "site",
+      "datagram": "{\"body\":{\"detail\":{\"auth\":2,\"malformed\":1,\"oversize\":0,\"stale\":0,\"version\":0},\"event\":\"rx-drop\"},\"id\":\"rack-1\",\"seq\":1793000000000000004,\"sig\":\"5984cdd1279380b1de8526bbb0c6766ed1d8167fa6dd3504cdc99bdb0832482e\",\"t\":\"evt\",\"ts\":1793000001.0,\"v\":1}",
+      "expect": "accept",
+      "frame": {
+        "t": "evt",
+        "id": "rack-1",
+        "seq": 1793000000000000004,
+        "ts": 1793000001.0,
+        "body": {
+          "detail": {
+            "auth": 2,
+            "malformed": 1,
+            "oversize": 0,
+            "stale": 0,
+            "version": 0
+          },
+          "event": "rx-drop"
+        }
+      },
+      "signed_message": "{\"body\":{\"detail\":{\"auth\":2,\"malformed\":1,\"oversize\":0,\"stale\":0,\"version\":0},\"event\":\"rx-drop\"},\"id\":\"rack-1\",\"seq\":1793000000000000004,\"t\":\"evt\",\"ts\":1793000001.0,\"v\":1}",
+      "path": "transmitted",
+      "reference": true,
+      "note": "Reference sender output (canonical JSON, sig in sorted position). Excision equals the canonical re-serialization, so both rules agree."
+    },
+    {
+      "name": "reference-bye",
+      "key": "site",
+      "datagram": "{\"body\":{},\"id\":\"rack-1\",\"seq\":1793000000000000005,\"sig\":\"66dfe1bf7ae30bfb07b8db7ab0b70ea235b5032e725f2a6cadfafe93e0d14a3a\",\"t\":\"bye\",\"ts\":1793000001.5,\"v\":1}",
+      "expect": "accept",
+      "frame": {
+        "t": "bye",
+        "id": "rack-1",
+        "seq": 1793000000000000005,
+        "ts": 1793000001.5,
+        "body": {}
+      },
+      "signed_message": "{\"body\":{},\"id\":\"rack-1\",\"seq\":1793000000000000005,\"t\":\"bye\",\"ts\":1793000001.5,\"v\":1}",
+      "path": "transmitted",
+      "reference": true,
+      "note": "Reference sender output (canonical JSON, sig in sorted position). Excision equals the canonical re-serialization, so both rules agree."
+    },
+    {
+      "name": "reference-bye-open",
+      "key": "open",
+      "datagram": "{\"body\":{},\"id\":\"rack-1\",\"seq\":1793000000000000006,\"sig\":\"\",\"t\":\"bye\",\"ts\":1793000002.0,\"v\":1}",
+      "expect": "accept",
+      "frame": {
+        "t": "bye",
+        "id": "rack-1",
+        "seq": 1793000000000000006,
+        "ts": 1793000002.0,
+        "body": {}
+      },
+      "signed_message": null,
+      "path": null,
+      "reference": true,
+      "note": "Open mode (empty PSK): sig is the empty string; no HMAC is computed."
+    },
+    {
+      "name": "thirdparty-printf-ts",
+      "key": "site",
+      "datagram": "{\"body\":{},\"id\":\"thirdparty\",\"seq\":1793000000000000007,\"sig\":\"740c6bf2a77fe13754ac6a3f314bda80804e8ddffa92730d7c1c966b0bbfa770\",\"t\":\"bye\",\"ts\":1793000000.0999999,\"v\":1}",
+      "expect": "accept",
+      "frame": {
+        "t": "bye",
+        "id": "thirdparty",
+        "seq": 1793000000000000007,
+        "ts": 1793000000.1,
+        "body": {}
+      },
+      "signed_message": "{\"body\":{},\"id\":\"thirdparty\",\"seq\":1793000000000000007,\"t\":\"bye\",\"ts\":1793000000.0999999,\"v\":1}",
+      "path": "transmitted",
+      "note": "Sorted, compact, but ts formatted with C %.17g (1793000000.0999999) rather than the shortest round-trip form. Legacy canonical re-serialization would not match."
+    },
+    {
+      "name": "thirdparty-escaped-unicode",
+      "key": "site",
+      "datagram": "{\"body\":{\"err\":null,\"kind\":\"usb\",\"media\":null,\"name\":\"caf\\u00e9 \\u5c71\",\"pairing\":null,\"role\":\"producer\",\"state\":\"idle\"},\"id\":\"thirdparty\",\"seq\":1793000000000000008,\"sig\":\"40a8b4b9f9f4d02308ff5f7fb60030f575215f10cc8e2b24f1b44480d176e9ac\",\"t\":\"ann\",\"ts\":1793000002.5,\"v\":1}",
+      "expect": "accept",
+      "frame": {
+        "t": "ann",
+        "id": "thirdparty",
+        "seq": 1793000000000000008,
+        "ts": 1793000002.5,
+        "body": {
+          "err": null,
+          "kind": "usb",
+          "media": null,
+          "name": "café 山",
+          "pairing": null,
+          "role": "producer",
+          "state": "idle"
+        }
+      },
+      "signed_message": "{\"body\":{\"err\":null,\"kind\":\"usb\",\"media\":null,\"name\":\"caf\\u00e9 \\u5c71\",\"pairing\":null,\"role\":\"producer\",\"state\":\"idle\"},\"id\":\"thirdparty\",\"seq\":1793000000000000008,\"t\":\"ann\",\"ts\":1793000002.5,\"v\":1}",
+      "path": "transmitted",
+      "note": "String escaped with \\uXXXX (ASCII-only output) instead of raw UTF-8."
+    },
+    {
+      "name": "thirdparty-whitespace-sig-first",
+      "key": "site",
+      "datagram": "{\r\n  \"sig\" : \"3cfcfcbf8fbcd5b506c1c557b343ff3a56ad6060b8eadf1f78ecfaae4f48205e\",\r\n  \"v\" : 1,\r\n  \"t\" : \"bye\",\r\n  \"id\" : \"thirdparty\",\r\n  \"seq\" : 1793000000000000009,\r\n  \"ts\" : 1793000003,\r\n  \"body\" : { }\r\n}\r\n",
+      "expect": "accept",
+      "frame": {
+        "t": "bye",
+        "id": "thirdparty",
+        "seq": 1793000000000000009,
+        "ts": 1793000003.0,
+        "body": {}
+      },
+      "signed_message": "{\r\n  \r\n  \"v\" : 1,\r\n  \"t\" : \"bye\",\r\n  \"id\" : \"thirdparty\",\r\n  \"seq\" : 1793000000000000009,\r\n  \"ts\" : 1793000003,\r\n  \"body\" : { }\r\n}\r\n",
+      "path": "transmitted",
+      "note": "Pretty-printed, unsorted members, sig first. Excision removes from the sig key's opening quote through its following comma; the whitespace after that comma is kept."
+    },
+    {
+      "name": "thirdparty-whitespace-sig-last",
+      "key": "site",
+      "datagram": "{ \"body\": {}, \"ts\": 1793000003.5, \"seq\": 1793000000000000010, \"id\": \"thirdparty\", \"t\": \"bye\", \"v\": 1, \"sig\": \"721dca2e8c85db2fc8da20391be3f757973841c4f289c099f860c69897e33efd\" }",
+      "expect": "accept",
+      "frame": {
+        "t": "bye",
+        "id": "thirdparty",
+        "seq": 1793000000000000010,
+        "ts": 1793000003.5,
+        "body": {}
+      },
+      "signed_message": "{ \"body\": {}, \"ts\": 1793000003.5, \"seq\": 1793000000000000010, \"id\": \"thirdparty\", \"t\": \"bye\", \"v\": 1 }",
+      "path": "transmitted",
+      "note": "Unsorted members with sig last. Excision removes from the preceding comma through the closing quote of the sig value; trailing whitespace is kept."
+    },
+    {
+      "name": "thirdparty-escaped-sig-key",
+      "key": "site",
+      "datagram": "{\"body\":{},\"id\":\"thirdparty\",\"seq\":1793000000000000011,\"\\u0073ig\":\"abcaf2eecd60b3c24527c55f3559c20452839df7f473d2a1a45734bb55b1e24d\",\"t\":\"bye\",\"ts\":1793000004,\"v\":1}",
+      "expect": "accept",
+      "frame": {
+        "t": "bye",
+        "id": "thirdparty",
+        "seq": 1793000000000000011,
+        "ts": 1793000004.0,
+        "body": {}
+      },
+      "signed_message": "{\"body\":{},\"id\":\"thirdparty\",\"seq\":1793000000000000011,\"t\":\"bye\",\"ts\":1793000004,\"v\":1}",
+      "path": "transmitted",
+      "note": "The sig key written as \"\\u0073ig\" is the sig member: keys compare after JSON unescaping."
+    },
+    {
+      "name": "thirdparty-nested-sig-keys",
+      "key": "site",
+      "datagram": "{\"body\":{\"detail\":{\"sig\":\"inner\"},\"event\":\"started\",\"sig\":\"x\"},\"id\":\"thirdparty\",\"seq\":1793000000000000012,\"sig\":\"5b65446a9e0a7ad3f1a94d010618cbe9ee9faafb1d163b964c24dfc4144db8a6\",\"t\":\"evt\",\"ts\":1793000004.5,\"v\":1}",
+      "expect": "accept",
+      "frame": {
+        "t": "evt",
+        "id": "thirdparty",
+        "seq": 1793000000000000012,
+        "ts": 1793000004.5,
+        "body": {
+          "detail": {
+            "sig": "inner"
+          },
+          "event": "started",
+          "sig": "x"
+        }
+      },
+      "signed_message": "{\"body\":{\"detail\":{\"sig\":\"inner\"},\"event\":\"started\",\"sig\":\"x\"},\"id\":\"thirdparty\",\"seq\":1793000000000000012,\"t\":\"evt\",\"ts\":1793000004.5,\"v\":1}",
+      "path": "transmitted",
+      "note": "Only the top-level sig member is excised; sig keys inside body are signed content."
+    },
+    {
+      "name": "legacy-canonical-over-noncanonical-bytes",
+      "key": "site",
+      "datagram": "{\n \"ts\": 1793000000.75,\n \"body\": {\n  \"applied\": true,\n  \"reason\": \"applied\",\n  \"version\": [\n   3,\n   \"cli-7\"\n  ]\n },\n \"sig\": \"64d762a2d688e94c14657bbe45f44f59a36fce224ef2e0ceed3e8f6c4e58b677\",\n \"seq\": 1793000000000000003,\n \"id\": \"rack-1\",\n \"t\": \"ack\",\n \"v\": 1\n}",
+      "expect": "accept",
+      "frame": {
+        "t": "ack",
+        "id": "rack-1",
+        "seq": 1793000000000000003,
+        "ts": 1793000000.75,
+        "body": {
+          "applied": true,
+          "reason": "applied",
+          "version": [
+            3,
+            "cli-7"
+          ]
+        }
+      },
+      "signed_message": "{\"body\":{\"applied\":true,\"reason\":\"applied\",\"version\":[3,\"cli-7\"]},\"id\":\"rack-1\",\"seq\":1793000000000000003,\"t\":\"ack\",\"ts\":1793000000.75,\"v\":1}",
+      "path": "legacy-canonical",
+      "note": "Bytes are re-serialized (indented, unsorted) but sig was computed over the canonical re-serialization of the content. Accepted for compatibility (legacy rule)."
+    },
+    {
+      "name": "tampered-body-byte",
+      "key": "site",
+      "datagram": "{\r\n  \"sig\" : \"3cfcfcbf8fbcd5b506c1c557b343ff3a56ad6060b8eadf1f78ecfaae4f48205e\",\r\n  \"v\" : 1,\r\n  \"t\" : \"evt\",\r\n  \"id\" : \"thirdparty\",\r\n  \"seq\" : 1793000000000000009,\r\n  \"ts\" : 1793000003,\r\n  \"body\" : { }\r\n}\r\n",
+      "expect": "auth",
+      "note": "One significant byte changed after signing."
+    },
+    {
+      "name": "tampered-insignificant-whitespace",
+      "key": "site",
+      "datagram": "{\r\n  \"sig\" : \"3cfcfcbf8fbcd5b506c1c557b343ff3a56ad6060b8eadf1f78ecfaae4f48205e\",\r\n  \"v\" :\t1,\r\n  \"t\" : \"bye\",\r\n  \"id\" : \"thirdparty\",\r\n  \"seq\" : 1793000000000000009,\r\n  \"ts\" : 1793000003,\r\n  \"body\" : { }\r\n}\r\n",
+      "expect": "auth",
+      "note": "Whitespace outside the sig member changed (content identical): the signature binds the transmitted bytes, and they are not canonical, so neither rule matches."
+    },
+    {
+      "name": "tampered-escape-case",
+      "key": "site",
+      "datagram": "{\"body\":{\"err\":null,\"kind\":\"usb\",\"media\":null,\"name\":\"caf\\u00E9 \\u5c71\",\"pairing\":null,\"role\":\"producer\",\"state\":\"idle\"},\"id\":\"thirdparty\",\"seq\":1793000000000000008,\"sig\":\"40a8b4b9f9f4d02308ff5f7fb60030f575215f10cc8e2b24f1b44480d176e9ac\",\"t\":\"ann\",\"ts\":1793000002.5,\"v\":1}",
+      "expect": "auth",
+      "note": "Content-preserving re-escaping of a frame signed over its own bytes."
+    },
+    {
+      "name": "sig-over-other-bytes",
+      "key": "site",
+      "datagram": "{\"body\":{},\"id\":\"thirdparty\",\"seq\":1793000000000000013,\"sig\":\"9cbd033ea3aa4f44aeaef2c08f916ec1b213d07a7254e6380f34075e70b3b025\",\"t\":\"bye\",\"ts\":1793000005,\"v\":1}",
+      "expect": "auth",
+      "note": "sig is a valid HMAC, but over different bytes (an extra space)."
+    },
+    {
+      "name": "wrong-key",
+      "key": "site",
+      "datagram": "{\"body\":{},\"id\":\"thirdparty\",\"seq\":1793000000000000013,\"sig\":\"91a3cf11bdf84d0c65943b6d925a6c460d4dc6c6f5aa40a1f271a97de21e0bd9\",\"t\":\"bye\",\"ts\":1793000005,\"v\":1}",
+      "expect": "auth",
+      "note": "Signed over its own bytes with the 'other' key."
+    },
+    {
+      "name": "uppercase-hex-sig",
+      "key": "site",
+      "datagram": "{\"body\":{},\"id\":\"thirdparty\",\"seq\":1793000000000000013,\"sig\":\"74CD960336097D8FFF3A0269ECB7DAD1B6349212BF905E4B218D692178B2D8F8\",\"t\":\"bye\",\"ts\":1793000005,\"v\":1}",
+      "expect": "auth",
+      "note": "sig must match ^([0-9a-f]{64})?$; checked before any compare."
+    },
+    {
+      "name": "unsigned-on-keyed-receiver",
+      "key": "site",
+      "datagram": "{\"body\":{},\"id\":\"rack-1\",\"seq\":1793000000000000006,\"sig\":\"\",\"t\":\"bye\",\"ts\":1793000002.0,\"v\":1}",
+      "expect": "auth",
+      "note": "An open-mode frame (sig \"\") on a keyed receiver."
+    },
+    {
+      "name": "signed-on-open-receiver",
+      "key": "open",
+      "datagram": "{\"body\":{},\"id\":\"rack-1\",\"seq\":1793000000000000005,\"sig\":\"66dfe1bf7ae30bfb07b8db7ab0b70ea235b5032e725f2a6cadfafe93e0d14a3a\",\"t\":\"bye\",\"ts\":1793000001.5,\"v\":1}",
+      "expect": "auth",
+      "note": "An open receiver requires sig == \"\"."
+    },
+    {
+      "name": "sig-moved-into-body",
+      "key": "site",
+      "datagram": "{\"body\":{\"sig\":\"66dfe1bf7ae30bfb07b8db7ab0b70ea235b5032e725f2a6cadfafe93e0d14a3a\"},\"id\":\"rack-1\",\"seq\":1793000000000000005,\"sig\":\"\",\"t\":\"bye\",\"ts\":1793000001.5,\"v\":1}",
+      "expect": "auth",
+      "note": "A valid signature relocated into body is not the sig member."
+    },
+    {
+      "name": "nested-sig-excised-instead",
+      "key": "site",
+      "datagram": "{\"body\":{\"detail\":{\"sig\":\"inner\"},\"event\":\"started\",\"sig\":\"x\"},\"id\":\"thirdparty\",\"seq\":1793000000000000014,\"sig\":\"12b0e5c23cc851d559571cedcf26285291754e2a86c22689f52a031cce3bc5ea\",\"t\":\"evt\",\"ts\":1793000005.5,\"v\":1}",
+      "expect": "auth",
+      "note": "sig computed over the bytes with a NESTED sig member removed; only the top-level one is excised."
+    },
+    {
+      "name": "duplicate-key",
+      "key": "open",
+      "datagram": "{\"v\":1,\"v\":1,\"t\":\"bye\",\"id\":\"thirdparty\",\"seq\":1793000000000000015,\"ts\":0,\"body\":{},\"sig\":\"\"}",
+      "expect": "malformed",
+      "note": "Duplicate object keys are rejected before authentication."
+    },
+    {
+      "name": "nan-constant",
+      "key": "open",
+      "datagram": "{\"v\":1,\"t\":\"bye\",\"id\":\"thirdparty\",\"seq\":1793000000000000016,\"ts\":NaN,\"body\":{},\"sig\":\"\"}",
+      "expect": "malformed",
+      "note": "NaN/Infinity are not JSON."
+    },
+    {
+      "name": "oversize",
+      "key": "open",
+      "datagram": "{\"body\":{\"detail\":{\"pad\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"event\":\"started\"},\"id\":\"thirdparty\",\"seq\":1793000000000000017,\"sig\":\"\",\"t\":\"evt\",\"ts\":0,\"v\":1}",
+      "expect": "oversize",
+      "note": "Datagrams over 1200 bytes are dropped before parsing."
+    },
+    {
+      "name": "unknown-envelope-field",
+      "key": "open",
+      "datagram": "{\"body\":{},\"hop\":1,\"id\":\"thirdparty\",\"seq\":1793000000000000018,\"sig\":\"\",\"t\":\"bye\",\"ts\":0,\"v\":1}",
+      "expect": "malformed",
+      "note": "The envelope key set is exact."
+    }
+  ]
+}
