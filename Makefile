@@ -12,7 +12,7 @@ export TMPDIR := $(abspath .scratch/tmp)
 export PLAYWRIGHT_BROWSERS_PATH := $(abspath .scratch/cache/playwright)
 
 .PHONY: venv lint type test verify docs docs-serve browser-install verify-browser simulate \
-	benchmark-control benchmark-media benchmark-telemetry verify-firmware verify-net \
+	benchmark-control benchmark-media benchmark-telemetry benchmark-usb verify-firmware verify-net \
 	media-send media-recv clean
 
 ROLE ?= recv
@@ -86,6 +86,12 @@ benchmark-media: venv
 
 benchmark-telemetry: venv
 	$(BIN)/python benchmarks/telemetry.py --nodes $(NODES) --repeat $(REPEAT)
+
+# Simulated, software-only USB data-path numbers (ADR 0022); add
+# USB_BENCH_OPTIONS=--markdown for a table or --quick for a smoke run.
+USB_BENCH_OPTIONS ?=
+benchmark-usb: venv
+	$(BIN)/python benchmarks/usb_datapath.py $(USB_BENCH_OPTIONS)
 
 # First pass make verify, then use one command on each host. Multicast sends
 # to GROUP; set INTERFACE to each host's local IPv4 address. For unicast use
