@@ -572,8 +572,14 @@ async def test_failed_prevalidation_keeps_old_health_stale_and_retries(
         await eventually(lambda: driver.poll_count >= polls + 3)
         assert h.node.node_state is NodeState.ERROR
         assert driver.attached_media == (None if replace_producer else PROD_MEDIA)
+        errors = h.events().count("driver-error")
         h.clock.advance(1.1)
-        await eventually(lambda: driver.attempts >= 3)
+        # Wait for the retry's failure to reach the core, not merely for the
+        # worker to enter attach(): the next backoff deadline is measured from
+        # when the core processes that failure. Advancing the fake clock
+        # before then would push the deadline past the next advance.
+        await eventually(lambda: h.events().count("driver-error") > errors)
+        assert driver.attempts >= 3
         assert h.node.node_state is NodeState.ERROR
         driver.reject_new = False
         h.clock.advance(2.1)
