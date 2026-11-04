@@ -19,6 +19,7 @@ description and the consumer’s role.
 | `igmp` | HDMI consumer | Holds multicast group membership for an external renderer | Membership was joined |
 | `stream` | HDMI consumer | Supervises an external GStreamer receiver process | The worker is running |
 | `usbip` | USB producer and consumer | Exports local devices or imports remote devices into Linux | Backend export/import checks passed |
+| `usb-gadget` | USB consumer (computer-side box) | Supervises the separate gadget worker that presents the producer's device through the OTG port | The worker and the UDC both report `configured` |
 
 `active` is backend-specific evidence. None of these adapters independently
 proves a working physical display or a successful USB application.
@@ -45,10 +46,18 @@ imports exported devices into the **consumer host’s Linux USB stack**.
 It requires Linux USB/IP tooling, kernel support, and narrowly scoped
 device privileges. The Linux kernel carries the USB payload.
 
-A physical USB output that presents the imported device to a separate
-computer is required by the selected hardware design. Its device/gadget
-bridge is unimplemented. The computer-side Yoke box remains part of the
-product even though that firmware work is unfinished.
+This Linux import path is a reference and bench mode. The product's
+computer-side box uses the `usb-gadget` driver instead: a separate worker
+imports the device with a userspace USB/IP client and presents it to the
+user's computer through the OTG port with Raw Gadget. See the
+[computer-side example](../../../examples/agent-consumer-usb-gadget.toml),
+the [USB data path](../../../doc/design/USB-DATAPATH.md) and ADRs
+[0021](../../../doc/decisions/0021-userspace-usbip-client-and-raw-gadget-presentation.md)
+and [0022](../../../doc/decisions/0022-gadget-worker-process-and-metadata-driver.md).
+It passes a pure-software end-to-end simulation; it has not run on
+hardware. Device-box privileges and data-plane admission are in
+`packaging/zero3e/` and
+[ADR 0024](../../../doc/decisions/0024-usbip-data-plane-admission-and-device-box-privileges.md).
 YWP/1 stores a route per consumer and has no distributed source-owner
 transaction. USB/IP refuses simultaneous device attachment, and the
 reference driver reconciles its locally owned imports. Plan a single

@@ -1,0 +1,19 @@
+# Computer-side yoke box: present the paired producer's USB device to the
+# user's computer through this box's OTG port (ADRs 0021/0022). The payload
+# runs in the separate yoke-gadget worker; this agent only supervises it.
+node_id = "desk-usb"
+role = "consumer"
+kind = "usb"
+name = "Desk USB drop"
+psk_file = "/etc/yoke/psk"
+state_file = "/var/lib/yoke/state.json"
+# The control-VLAN IPv4 address; producers admit USB/IP sessions only from
+# the address this agent announces from (ADR 0024).
+# interface = "10.20.30.2"
+
+[driver]
+type = "usb-gadget"
+udc = "fcc00000.usb"
+# socket = "/run/yoke-gadget/control.sock"
+# busid = "1-1"   # required when the producer advertises several devices
+# source = "10.20.30.2"   # defaults to the agent's interface address

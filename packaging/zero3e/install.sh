@@ -148,6 +148,18 @@ device)
 		mv -f "$config.tmp" "$config"
 	fi
 	;;
+computer)
+	if [ -z "$root" ]; then
+		getent passwd yoke-gadget >/dev/null ||
+			useradd --system --gid yoke --no-create-home \
+				--shell /usr/sbin/nologin yoke-gadget
+	fi
+	put "$repo/examples/yoke-gadget.service" "$units/yoke-gadget.service" 0644
+	put "$here/computer/udev/70-yoke-raw-gadget.rules" \
+		/etc/udev/rules.d/70-yoke-raw-gadget.rules 0644
+	put "$here/computer/modules-load.d/yoke-raw-gadget.conf" \
+		/etc/modules-load.d/yoke-raw-gadget.conf 0644
+	;;
 vhci-lab)
 	put "$here/vhci-lab/yoked.service.d/20-usbip-vhci.conf" \
 		"$units/yoked.service.d/20-usbip-vhci.conf" 0644
@@ -172,8 +184,10 @@ device)
 	echo "     systemctl restart systemd-modules-load && udevadm trigger --subsystem-match=usb --action=add"
 	;;
 computer)
-	echo "  2. write /etc/yoke/agent.toml for the consumer; the USB gadget worker"
-	echo "     and its unit are installed separately (not by this script)"
+	echo "  2. unbind any ADB/NCM configfs gadget from fcc00000.usb, then"
+	echo "     systemctl restart systemd-modules-load && udevadm trigger --subsystem-match=misc"
+	echo "     write /etc/yoke/agent.toml from examples/agent-consumer-usb-gadget.toml"
+	echo "     systemctl enable --now yoke-gadget.service"
 	;;
 vhci-lab)
 	echo "  2. systemd-tmpfiles --create yoke-vhci.conf; modprobe vhci-hcd; write"

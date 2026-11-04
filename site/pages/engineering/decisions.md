@@ -28,6 +28,10 @@ is normative for control behavior.
 | [0018 — Operator-controlled Linux release updates over Ethernet](../../../doc/decisions/0018-linux-operator-release-updates.md) |  |
 | [0019 — ESP32 local Ethernet firmware updates](../../../doc/decisions/0019-esp32-local-ethernet-firmware-updates.md) |  |
 | [ADR 0020](../../../doc/decisions/0020-optional-read-only-telemetry.md) | Optional read-only telemetry and terminal monitoring |
+| [0021 — Userspace USB/IP client with gadget presentation](../../../doc/decisions/0021-userspace-usbip-client-and-raw-gadget-presentation.md) | computer-side USB data path |
+| [0022 — Gadget worker process, metadata driver and simulation evidence](../../../doc/decisions/0022-gadget-worker-process-and-metadata-driver.md) |  |
+| [0023 — Clock-robust admission, bounded sequence floor and transmitted-byte authentication](../../../doc/decisions/0023-clock-robust-admission-and-transmitted-byte-authentication.md) |  |
+| [0024 — USB/IP data-plane admission and ZERO 3E device-box privileges](../../../doc/decisions/0024-usbip-data-plane-admission-and-device-box-privileges.md) |  |
 
 Protocol behavior changes require updating the normative protocol and
 recording the decision before implementation. See

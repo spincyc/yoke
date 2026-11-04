@@ -1,0 +1,2 @@
+# Only the gadget worker may open Raw Gadget (ADR 0022). ⚠ bench-unverified.
+KERNEL=="raw-gadget", SUBSYSTEM=="misc", OWNER="yoke-gadget", GROUP="yoke", MODE="0600"

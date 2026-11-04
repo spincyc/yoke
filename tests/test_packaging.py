@@ -203,15 +203,41 @@ def test_invalid_arguments_stage_nothing(tmp_path: Path, args: list[str]) -> Non
     assert not any(tmp_path.iterdir())
 
 
-def test_computer_role_installs_only_the_unprivileged_agent(tmp_path: Path) -> None:
+def test_computer_role_installs_agent_and_unprivileged_gadget_worker(
+    tmp_path: Path,
+) -> None:
     assert install(tmp_path, "computer").returncode == 0
     files = sorted(
         p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*") if p.is_file()
     )
     assert files == [
+        "etc/modules-load.d/yoke-raw-gadget.conf",
+        f"{UNITS}/yoke-gadget.service",
         f"{UNITS}/yoke-update-recover.service",
         f"{UNITS}/yoked.service",
+        "etc/udev/rules.d/70-yoke-raw-gadget.rules",
     ]
+    modules = (tmp_path / "etc/modules-load.d/yoke-raw-gadget.conf").read_text()
+    assert "raw_gadget" in modules.split()
+    rules = (tmp_path / "etc/udev/rules.d/70-yoke-raw-gadget.rules").read_text()
+    assert 'KERNEL=="raw-gadget"' in rules and 'OWNER="yoke-gadget"' in rules
+    assert 'MODE="0600"' in rules
+    worker = directives(tmp_path / UNITS / "yoke-gadget.service")
+    assert worker["Service.User"] == ["yoke-gadget"]
+    assert worker["Service.CapabilityBoundingSet"] == [""]
+    assert worker["Service.DeviceAllow"] == ["/dev/raw-gadget rw"]
+    # The agent stays unchanged: no gadget privileges leak into yoked.
+    agent = (tmp_path / UNITS / "yoked.service").read_text()
+    assert "raw-gadget" not in agent
+
+
+def test_computer_example_config_selects_the_gadget_driver() -> None:
+    config = tomllib.loads(
+        (ROOT / "examples" / "agent-consumer-usb-gadget.toml").read_text()
+    )
+    assert config["role"] == "consumer" and config["kind"] == "usb"
+    assert config["driver"]["type"] == "usb-gadget"
+    assert config["driver"]["udc"] == "fcc00000.usb"
 
 
 def test_vhci_lab_writes_record_and_sysfs_access_together(tmp_path: Path) -> None:
