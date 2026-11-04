@@ -37,7 +37,7 @@ from yoke.usb.control import ControlClient, ControlError, Route, Target
 from yoke.usb.policy import ProxyPolicy
 from yoke.usb.proxy import Proxy, TeardownError
 from yoke.usb.session import open_session
-from yoke.usb.worker import ControlServer, Worker
+from yoke.usb.worker import BuildTicket, ControlServer, Worker
 
 MEDIA: Body = {"host": "192.168.7.10", "port": 3240, "busids": ["1-1"]}
 
@@ -95,8 +95,9 @@ def sim_factory(
 ) -> Callable[[Target], Proxy]:
     transport = Transport()
 
-    def factory(target: Target) -> Proxy:
+    def factory(target: Target, ticket: BuildTicket) -> Proxy:
         stream = transport.connect(usbipd)
+        ticket.register(stream)
         return open_session(
             stream, target.busid, kernel.backend(), ProxyPolicy(stop_timeout=1.0)
         )
@@ -275,7 +276,7 @@ def test_worker_restart_is_detected_by_generation(bench: Bench) -> None:
     bench.driver.attach("prod-usb", MEDIA)
     bench.wait_state(NodeState.PENDING)
     bench.worker.shutdown()
-    replacement = Worker(lambda t: (_ for _ in ()).throw(OSError("down")), udc="u")
+    replacement = Worker(lambda t, k: (_ for _ in ()).throw(OSError("down")), udc="u")
     bench.server.worker = replacement
     status = bench.driver.poll()
     assert status.state is NodeState.ERROR and "route lost" in status.detail

@@ -73,7 +73,7 @@ def enumeration(policy: ProxyPolicy, latency: float) -> dict[str, Any]:
             "enumeration_ms": round(elapsed * 1000, 2),
             "worst_request_ms": round(worst * 1000, 2),
             "forwarded_requests": rig.proxy.counters.forwarded,
-            "deadline_violations": len(rig.host.violations),
+            "deadline_violations": len(rig.host.deadline_misses),
         }
     finally:
         rig.close()

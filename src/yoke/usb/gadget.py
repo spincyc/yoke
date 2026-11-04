@@ -70,6 +70,14 @@ class GadgetInterruptedError(GadgetError):
     """A blocking call was cancelled by :meth:`GadgetBackend.interrupt`."""
 
 
+class GadgetHaltClearedError(GadgetError):
+    """A started request was returned with EPIPE: the host cleared the halt.
+
+    dwc3 answers CLEAR_FEATURE(ENDPOINT_HALT) itself and gives back started
+    requests with -EPIPE; for the proxy this is the only sign of that request.
+    """
+
+
 class GadgetShutdownError(GadgetError):
     """The transfer was cancelled by bus reset, disconnect or endpoint disable."""
 

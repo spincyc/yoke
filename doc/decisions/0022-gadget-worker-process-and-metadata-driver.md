@@ -80,3 +80,18 @@ The proxy needs `/dev/raw-gadget` and an outbound TCP connection.
   agent's `ProtectSystem=strict` permits writes only under `/var/lib/yoke`.
   A privileged writer in a user-owned directory needs extra care against
   link attacks. Rejected in favor of a socket.
+
+## Amendment (2026-11-04, cold review)
+
+- **Builds outside the route lock.** The worker builds sessions without
+  holding its route lock. A route change aborts a build in progress by
+  shutting down its socket, which also aborts a connect, so `apply()` stays
+  well inside the agent's 10 s acknowledgment timeout.
+- **Fence check.** A build whose generation was superseded is stopped
+  before the new generation is acknowledged, so the fence holds.
+- **Exact generation.** The driver adopts a route only when the worker
+  acknowledges exactly the generation it sent.
+- **Reconnect backoff** is capped at 2 s, so a usbipd restart recovers in
+  about 1.6 s in the VM test. An unsupported device is retried every 30 s.
+- **Idempotent stop.** `Proxy.stop()` is idempotent and serialized. Each
+  blocked thread gets its own join deadline.

@@ -195,7 +195,7 @@ def test_start_requires_a_sigusr1_handler() -> None:
     kernel = FakeRawGadgetKernel()
     backend = rg.RawGadgetBackend(
         kernel.name,
-        kernel.name,
+        driver_name=kernel.gadget_name,
         opener=kernel.open,
         ioctl=kernel.ioctl,
         closer=kernel.close,
@@ -212,7 +212,10 @@ def test_start_requires_a_sigusr1_handler() -> None:
 
 def test_open_failures_are_gadget_errors() -> None:
     backend = rg.RawGadgetBackend(
-        "udc", "udc", path="/dev/missing-raw-gadget", require_signal_handler=False
+        "udc",
+        driver_name="udc",
+        path="/dev/missing-raw-gadget",
+        require_signal_handler=False,
     )
     with pytest.raises(GadgetError):
         backend.start(Speed.HIGH)

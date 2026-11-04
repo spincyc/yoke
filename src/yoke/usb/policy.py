@@ -20,8 +20,10 @@ from yoke.usb.descriptors import Presentation, UdcBudget
 class ProxyPolicy:
     """Tunables. Defaults favor exact USB semantics over throughput.
 
-    ``out_window`` > 1 pipelines OUT transfers but a remote STALL is then
-    reported one transfer late (the UDC has already acknowledged the data).
+    A remote OUT STALL always reaches the computer on its *next* OUT
+    transaction, because the UDC acknowledged the refused packet when a read
+    was queued. ``out_window`` > 1 pipelines OUT and delays that STALL by up
+    to the window, dropping data the UDC already acknowledged.
     ``power_ma`` is the box's declared draw (⚠ unmeasured; at most 500).
     """
 

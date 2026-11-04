@@ -23,7 +23,13 @@ from collections.abc import Callable
 from types import FrameType
 
 from yoke.usb import control
-from yoke.usb.client import ImportRejectedError, UsbipError
+from yoke.usb.client import (
+    ByteStream,
+    ConnectionLostError,
+    ImportRejectedError,
+    UsbipError,
+    abort_stream,
+)
 from yoke.usb.control import ControlError, Route, Target, WorkerStatus
 from yoke.usb.descriptors import DescriptorError, UdcBudget, UnsupportedError
 from yoke.usb.gadget import GadgetError
@@ -32,7 +38,6 @@ from yoke.usb.proxy import Proxy, TeardownError
 from yoke.usb.usbip import ProtocolError
 
 LOG = logging.getLogger("yoke.usb.worker")
-SessionFactory = Callable[[Target], Proxy]
 RETRYABLE = (
     OSError,
     UsbipError,
@@ -43,8 +48,48 @@ RETRYABLE = (
 )
 
 
+class BuildTicket:
+    """Lets a route change abort a session that is still being built.
+
+    Factories register each socket as soon as it exists; :meth:`abort`
+    shuts them down, which also aborts a connect in progress, so the
+    import and descriptor fetch fail fast instead of running to their
+    timeouts while the agent waits for an acknowledgment.
+    """
+
+    def __init__(self, generation: int) -> None:
+        self.generation = generation
+        self.aborted = False
+        self._lock = threading.Lock()
+        self._streams: list[ByteStream] = []
+
+    def register(self, stream: ByteStream) -> None:
+        with self._lock:
+            self._streams.append(stream)
+            aborted = self.aborted
+        if aborted:
+            abort_stream(stream)
+            raise ConnectionLostError("route changed during session setup")
+
+    def abort(self) -> None:
+        with self._lock:
+            self.aborted = True
+            streams = list(self._streams)
+        for stream in streams:
+            abort_stream(stream)
+
+
+SessionFactory = Callable[[Target, BuildTicket], Proxy]
+
+
 class Worker:
-    """Follow routes; keep at most one proxy session alive."""
+    """Follow routes; keep at most one proxy session alive.
+
+    Sessions are built outside the route lock, so :meth:`apply` never waits
+    for a slow import: it aborts the build and then waits only for that
+    build's (bounded) cleanup. A generation is adopted only after every older
+    session is confirmed stopped.
+    """
 
     def __init__(
         self,
@@ -52,7 +97,9 @@ class Worker:
         *,
         udc: str = "",
         retry_min: float = 0.25,
-        retry_max: float = 10.0,
+        retry_max: float = 2.0,
+        retry_rejected: float = 30.0,
+        build_wait: float = 6.0,
         clock: Callable[[], float] = time.time,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -60,14 +107,19 @@ class Worker:
         self._udc = udc
         self._retry_min = retry_min
         self._retry_max = retry_max
+        self._retry_rejected = retry_rejected
+        self._build_wait = build_wait
         self._clock = clock
         self._monotonic = monotonic
-        self._op = threading.Lock()  # serializes route changes and attempts
-        self._state_lock = threading.Lock()
+        self._apply_lock = threading.Lock()  # serializes route changes
+        self._lock = threading.Lock()  # guards the fields below; never held long
+        self._idle = threading.Condition(self._lock)
         self._wake = threading.Event()
         self._generation = 0
         self._target: Target | None = None
         self._proxy: Proxy | None = None
+        self._building: BuildTicket | None = None
+        self._changing = False
         self._state = "idle"
         self._detail = ""
         self._backoff = retry_min
@@ -78,12 +130,12 @@ class Worker:
     # --- status ----------------------------------------------------------
 
     def _set(self, state: str, detail: str = "") -> None:
-        with self._state_lock:
+        with self._lock:
             self._state = state
             self._detail = detail[:500]
 
     def status(self) -> WorkerStatus:
-        with self._state_lock:
+        with self._lock:
             snapshot = dict(self._last)
             state, detail = self._state, self._detail
             generation, target = self._generation, self._target
@@ -108,92 +160,142 @@ class Worker:
 
     # --- route changes ------------------------------------------------------
 
-    def _teardown(self) -> None:
-        proxy = self._proxy
-        if proxy is None:
-            return
+    def _stop(self, proxy: Proxy) -> bool:
+        """Stop ``proxy``; on unconfirmed teardown keep it and report error."""
         try:
             proxy.stop()
         except TeardownError as exc:
             self._set("error", str(exc))
-            raise
-        self._proxy = None
-        with self._state_lock:
-            self._last = {}
+            return False
+        with self._lock:
+            if self._proxy is proxy:
+                self._proxy = None
+                self._last = {}
+        return True
 
     def apply(self, route: Route) -> WorkerStatus:
         """Adopt ``route`` after confirmed teardown of any older session."""
-        with self._op:
-            if route.generation <= self._generation:
-                return self.status()  # idempotent repeat or stale
-            try:
-                self._teardown()
-            except TeardownError:
+        with self._apply_lock:
+            with self._lock:
+                if route.generation <= self._generation:
+                    return self.status_locked()
+                self._changing = True
+                if self._building is not None:
+                    self._building.abort()
+                deadline = self._monotonic() + self._build_wait
+                while self._building is not None:
+                    remaining = deadline - self._monotonic()
+                    if remaining <= 0:
+                        self._changing = False
+                        self._state, self._detail = (
+                            "error",
+                            "session build did not stop",
+                        )
+                        return self.status_locked()
+                    self._idle.wait(remaining)
+                proxy = self._proxy
+            if proxy is not None and not self._stop(proxy):
+                with self._lock:
+                    self._changing = False
                 return self.status()  # previous generation still owns the UDC
-            with self._state_lock:
+            with self._lock:
                 self._generation = route.generation
                 self._target = route.target
-            self._backoff = self._retry_min
-            self._next_attempt = 0.0
-            self._set("idle" if route.target is None else "connecting")
+                self._backoff = self._retry_min
+                self._next_attempt = 0.0
+                self._state = "idle" if route.target is None else "connecting"
+                self._detail = ""
+                self._changing = False
         self._wake.set()
         return self.status()
+
+    def status_locked(self) -> WorkerStatus:
+        """:meth:`status` for callers that hold the state lock."""
+        self._lock.release()
+        try:
+            return self.status()
+        finally:
+            self._lock.acquire()
 
     # --- supervision ------------------------------------------------------------
 
     def step(self) -> None:
         """One supervision pass: start, observe or restart the session."""
-        with self._op:
-            target = self._target
-            proxy = self._proxy
-            if target is None:
+        with self._lock:
+            if self._changing or self._target is None or self._building is not None:
                 return
-            if proxy is not None:
-                snapshot = proxy.snapshot()
-                with self._state_lock:
-                    self._last = snapshot
-                if proxy.ended.is_set():
-                    reason = proxy.end_reason or "ended"
-                    with contextlib.suppress(TeardownError):
-                        self._teardown()
-                    if self._proxy is None:
-                        self._reconnects += 1
-                        if proxy.rejected:
-                            self._schedule("rejected", proxy.rejected, slow=True)
-                        else:
-                            self._set("connecting", f"session ended: {reason}")
-                            self._next_attempt = self._monotonic() + self._retry_min
-                    return
-                state = str(snapshot.get("state", "presenting"))
-                if state not in control.STATES:
-                    state = "presenting"
-                if proxy.rejected:
-                    self._set("rejected", proxy.rejected)
-                else:
-                    self._set(state, str(snapshot.get("error") or ""))
+            target, generation, proxy = self._target, self._generation, self._proxy
+            if proxy is None and self._monotonic() < self._next_attempt:
                 return
-            if self._monotonic() < self._next_attempt:
+            ticket = None
+            if proxy is None:
+                ticket = self._building = BuildTicket(generation)
+        if proxy is not None:
+            self._observe(proxy)
+            return
+        assert ticket is not None
+        self._build(target, ticket)
+
+    def _observe(self, proxy: Proxy) -> None:
+        snapshot = proxy.snapshot()
+        with self._lock:
+            if self._proxy is not proxy:
                 return
-            try:
-                self._proxy = self._factory(target)
-            except UnsupportedError as exc:
-                self._schedule("rejected", f"unsupported device: {exc}", slow=True)
+            self._last = snapshot
+        if proxy.ended.is_set():
+            reason = proxy.end_reason or "ended"
+            if not self._stop(proxy):
                 return
-            except ImportRejectedError as exc:
-                self._schedule("connecting", str(exc))
-                return
-            except RETRYABLE as exc:
-                self._schedule("connecting", f"{type(exc).__name__}: {exc}")
-                return
-            self._backoff = self._retry_min
-            self._set("presenting")
+            self._reconnects += 1
+            if proxy.rejected:
+                self._schedule("rejected", proxy.rejected, slow=True)
+            else:
+                self._set("connecting", f"session ended: {reason}")
+                with self._lock:
+                    self._next_attempt = self._monotonic() + self._retry_min
+            return
+        state = str(snapshot.get("state", "presenting"))
+        if state not in control.STATES:
+            state = "presenting"
+        if proxy.rejected:
+            self._set("rejected", proxy.rejected)
+        else:
+            self._set(state, str(snapshot.get("error") or ""))
+
+    def _build(self, target: Target, ticket: BuildTicket) -> None:
+        proxy: Proxy | None = None
+        failure: tuple[str, str, bool] | None = None
+        try:
+            proxy = self._factory(target, ticket)
+        except UnsupportedError as exc:
+            failure = ("rejected", f"unsupported device: {exc}", True)
+        except ImportRejectedError as exc:
+            failure = ("connecting", str(exc), False)
+        except RETRYABLE as exc:
+            failure = ("connecting", f"{type(exc).__name__}: {exc}", False)
+        with self._lock:
+            stale = ticket.aborted or self._generation != ticket.generation
+        if stale and proxy is not None:
+            with contextlib.suppress(TeardownError):
+                proxy.stop()  # the route changed while it was being built
+            proxy = None
+        with self._lock:
+            self._building = None
+            if not stale and proxy is not None:
+                self._proxy = proxy
+                self._backoff = self._retry_min
+                self._state, self._detail = "presenting", ""
+            self._idle.notify_all()
+        if not stale and failure is not None:
+            self._schedule(failure[0], failure[1], slow=failure[2])
 
     def _schedule(self, state: str, detail: str, *, slow: bool = False) -> None:
         LOG.warning("session attempt failed: %s", detail)
-        self._set(state, detail)
-        delay = self._retry_max if slow else self._backoff
-        self._next_attempt = self._monotonic() + delay
-        self._backoff = min(self._backoff * 2, self._retry_max)
+        with self._lock:
+            self._state, self._detail = state, detail[:500]
+            delay = self._retry_rejected if slow else self._backoff
+            self._next_attempt = self._monotonic() + delay
+            self._backoff = min(self._backoff * 2, self._retry_max)
 
     def run(self, stop: threading.Event, interval: float = 0.1) -> None:
         while not stop.is_set():
@@ -202,10 +304,20 @@ class Worker:
             self._wake.clear()
 
     def shutdown(self) -> None:
-        with self._op:
-            self._teardown()
-            with self._state_lock:
-                self._target = None
+        """Stop the session for good; raise TeardownError if unconfirmed."""
+        with self._apply_lock:
+            with self._lock:
+                self._changing = True
+                if self._building is not None:
+                    self._building.abort()
+                deadline = self._monotonic() + self._build_wait
+                while self._building is not None and self._monotonic() < deadline:
+                    self._idle.wait(deadline - self._monotonic())
+                proxy, self._target = self._proxy, None
+            if proxy is not None:
+                proxy.stop()
+                with self._lock:
+                    self._proxy = None
             self._set("idle")
 
 
@@ -265,40 +377,63 @@ class ControlServer:
                 os.unlink(self.path)
 
 
-def connect_usbip(target: Target, *, timeout: float) -> socket.socket:
+def connect_usbip(
+    target: Target,
+    *,
+    timeout: float,
+    register: Callable[[socket.socket], None] | None = None,
+) -> socket.socket:
     """Open the USB/IP TCP connection the producer's admission will accept.
 
     IPv4 only, bound to ``target.source`` when set: the producer admits
     TCP 3240 only from the IPv4 address its consumer announces from (⚠).
-    Keepalive detects a powered-off peer within a few seconds.
+    ``register`` sees the socket before it connects, so a route change can
+    abort the connect. Keepalive detects a powered-off peer within seconds.
     """
     address = socket.getaddrinfo(
         target.host, target.port, socket.AF_INET, socket.SOCK_STREAM
     )[0][4]
-    sock = socket.create_connection(
-        (str(address[0]), int(address[1])),
-        timeout=timeout,
-        source_address=(target.source, 0) if target.source else None,
-    )
-    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-    for name, value in (("TCP_KEEPIDLE", 2), ("TCP_KEEPINTVL", 1), ("TCP_KEEPCNT", 3)):
-        option = getattr(socket, name, None)
-        if option is not None:
-            sock.setsockopt(socket.IPPROTO_TCP, option, value)
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        if register is not None:
+            register(sock)
+        if target.source:
+            sock.bind((target.source, 0))
+        sock.settimeout(timeout)
+        sock.connect((str(address[0]), int(address[1])))
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        for name, value in (
+            ("TCP_KEEPIDLE", 2),
+            ("TCP_KEEPINTVL", 1),
+            ("TCP_KEEPCNT", 3),
+        ):
+            option = getattr(socket, name, None)
+            if option is not None:
+                sock.setsockopt(socket.IPPROTO_TCP, option, value)
+    except BaseException:
+        sock.close()
+        raise
     return sock
 
 
 def production_factory(
-    udc: str, policy: ProxyPolicy, *, device_path: str = "/dev/raw-gadget"
+    udc: str,
+    policy: ProxyPolicy,
+    *,
+    device_path: str = "/dev/raw-gadget",
+    gadget_driver: str | None = None,
 ) -> SessionFactory:
     """Real TCP to the device-side usbipd, Raw Gadget on the local UDC (⚠)."""
     from yoke.usb.rawgadget import RawGadgetBackend
     from yoke.usb.session import open_session
 
-    def factory(target: Target) -> Proxy:
-        sock = connect_usbip(target, timeout=policy.import_timeout)
-        backend = RawGadgetBackend(udc, udc, path=device_path)
+    def factory(target: Target, ticket: BuildTicket) -> Proxy:
+        sock = connect_usbip(
+            target, timeout=min(policy.import_timeout, 3.0), register=ticket.register
+        )
+        backend = RawGadgetBackend(udc, driver_name=gadget_driver, path=device_path)
+        LOG.info("Raw Gadget on UDC %s as gadget %s", udc, backend.driver_name)
         return open_session(sock, target.busid, backend, policy, log=LOG.info)
 
     return factory
@@ -312,6 +447,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--udc", required=True, help="UDC name, e.g. fcc00000.usb")
     parser.add_argument("--socket", default=control.DEFAULT_SOCKET)
     parser.add_argument("--raw-gadget", default="/dev/raw-gadget")
+    parser.add_argument(
+        "--gadget-driver",
+        help="UDC gadget name for Raw Gadget INIT (default: inferred from "
+        "/sys/class/udc/UDC/device/driver; dwc3 -> dwc3-gadget)",
+    )
     parser.add_argument("--power-ma", type=int, default=500)
     parser.add_argument("--max-in-endpoints", type=int, default=7)
     parser.add_argument("--max-out-endpoints", type=int, default=7)
@@ -359,7 +499,13 @@ def main(argv: list[str] | None = None) -> int:
     signal.signal(signal.SIGTERM, terminate)
     signal.signal(signal.SIGINT, terminate)
     worker = Worker(
-        production_factory(args.udc, policy, device_path=args.raw_gadget), udc=args.udc
+        production_factory(
+            args.udc,
+            policy,
+            device_path=args.raw_gadget,
+            gadget_driver=args.gadget_driver,
+        ),
+        udc=args.udc,
     )
     server = None
     if args.target:

@@ -12,7 +12,7 @@ export TMPDIR := $(abspath .scratch/tmp)
 export PLAYWRIGHT_BROWSERS_PATH := $(abspath .scratch/cache/playwright)
 
 .PHONY: venv lint type test verify docs docs-serve browser-install verify-browser simulate \
-	benchmark-control benchmark-media benchmark-telemetry benchmark-usb verify-firmware firmware-bench verify-net \
+	benchmark-control benchmark-media benchmark-telemetry benchmark-usb verify-usb-kernel verify-firmware firmware-bench verify-net \
 	media-send media-recv clean
 
 ROLE ?= recv
@@ -101,6 +101,12 @@ benchmark-telemetry: venv
 USB_BENCH_OPTIONS ?=
 benchmark-usb: venv
 	$(BIN)/python benchmarks/usb_datapath.py $(USB_BENCH_OPTIONS)
+
+# Opt-in real-kernel loopback of the gadget worker under QEMU/KVM (no root):
+# dummy_hcd + usbip-host + Raw Gadget + usb-storage. Skips cleanly without
+# KVM, QEMU, the running kernel's image/modules or busybox.
+verify-usb-kernel: venv
+	$(BIN)/python tests/usbsim/kernel_vm/launch.py
 
 # First pass make verify, then use one command on each host. Multicast sends
 # to GROUP; set INTERFACE to each host's local IPv4 address. For unicast use
