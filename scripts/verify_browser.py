@@ -181,9 +181,12 @@ def check_search(page: Page, site: Path, base: str) -> None:
 
     # Search the actual published corpus: short acronyms must not match letters
     # inside "pair" or "wire", and current product scope should be easy to find.
+    # Since 2026-11-04 the IR endpoint design and its ADR are the most specific
+    # IR pages; the product overview and project status must stay near the top.
     infrared = results_for("IR")
+    assert "design/ir-endpoint.html" in infrared[:3], f"IR design ranking: {infrared}"
     assert "product.html" in infrared[:3], f"IR connections ranking: {infrared}"
-    assert "docs/project-status.html" in infrared[:5], f"IR status ranking: {infrared}"
+    assert "docs/project-status.html" in infrared[:8], f"IR status ranking: {infrared}"
     assert not {"guides/pairing.html", "design/protocol.html"}.intersection(infrared), (
         f"IR matched pair/wire substrings: {infrared}"
     )
