@@ -1,0 +1,73 @@
+{
+  "provenance": "Copied as data from spincyc/thermite at 1b78cff45be21b5a57bc5966fa80a20e04572f0c (files last changed in 74a49ab6b38235a4e2fca9ab34cbae7c6c8f1178): lib/oh_ir_sim.py (loopback iTach stand-in), lib/oh_integrations/globalcache_ir.py (profile code() rules and dry_packet()) and tests/test_access_deployment.py (verified profile code). Thermite is not imported or executed.",
+  "client": "openHAB Global Cache binding 5.2.3 as used by Thermite: fixed TCP 4998, a socket connection is ONLINE, periodic getversion, sendir with a per-key counter, completeir is a transport acknowledgement only",
+  "framing": {
+    "request_terminator": "\r",
+    "thermite_stand_in_response_terminator": "\r\n",
+    "itach_spec_response_terminator": "\r",
+    "thermite_stand_in_line_limit": 6200
+  },
+  "transcripts": [
+    {
+      "name": "binding connection probe",
+      "request": "getversion",
+      "thermite": "version,710-1001-05",
+      "expect": "identity"
+    },
+    {
+      "name": "verified profile key on connector 1 (test_access_deployment)",
+      "request": "sendir,1:1,1,38000,1,1,24,24",
+      "thermite": "completeir,1:1,1",
+      "expect": "completeir,1:1,1"
+    },
+    {
+      "name": "dry_packet() for connector 2, counter 1",
+      "request": "sendir,1:2,1,38000,1,1,24,24",
+      "thermite": "completeir,1:2,1",
+      "expect": "completeir,1:2,1"
+    },
+    {
+      "name": "dry_packet() counter upper bound on connector 3",
+      "request": "sendir,1:3,65535,38000,1,1,24,24",
+      "thermite": "completeir,1:3,65535",
+      "expect": "completeir,1:3,65535"
+    },
+    {
+      "name": "command the stand-in does not model",
+      "request": "getstate,1:1",
+      "thermite": "ERR_001",
+      "expect": "error"
+    },
+    {
+      "name": "connector outside the IP2IR module",
+      "request": "sendir,1:4,1,38000,1,1,24,24",
+      "thermite": "ERR_001",
+      "expect": "error"
+    },
+    {
+      "name": "counter outside 0..65535",
+      "request": "sendir,1:1,65536,38000,1,1,24,24",
+      "thermite": "ERR_001",
+      "expect": "error"
+    }
+  ],
+  "profile_rules": {
+    "frequency_hz": [15000, 500000],
+    "repeats": [1, 5],
+    "pairs": [1, 260],
+    "pulse": [1, 65535],
+    "offset": "odd, addresses an on pulse",
+    "bound": "sum(pulses) * repeats <= 2 * frequency (two seconds)",
+    "packet": "sendir,1:{connector},{counter},{code}\r"
+  },
+  "boundary_codes": [
+    "38000,1,1,24,24",
+    "15000,1,1,1,1",
+    "500000,5,1,1,1",
+    "38000,5,3,24,24,24,24",
+    "15000,1,1,15000,15000",
+    "38000,1,1,65535,1",
+    "40000,2,1,96,24,48,24,24,24,48,24,24,24,48,24,24,24,48,1000"
+  ],
+  "pairs_260": "38000,1,1,{pairs}"
+}

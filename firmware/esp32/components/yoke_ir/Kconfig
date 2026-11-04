@@ -1,0 +1,83 @@
+menu "Yoke IR endpoint (pins and polarity bench-unverified)"
+
+config YOKE_IR_API_DEFAULT
+    bool "Enable the unauthenticated iTach-subset API on TCP 4998 by default"
+    default n
+    help
+        Cleartext and unauthenticated by design (iTach compatibility). Off by
+        default; the NVS key yoke_ir/api (set over the mutual-TLS admin API)
+        overrides this default. Peers must share the Ethernet subnet unless
+        an explicit allowlist is configured.
+
+config YOKE_IR_LEARNING_DEFAULT
+    bool "Allow get_IRL learning by default"
+    default n
+    help
+        Requires YOKE_IR_LEARN_GPIO. NVS key yoke_ir/learn overrides.
+
+config YOKE_IR_OUTPUTS
+    int "IR outputs (connectors 1:1..1:N, one RMT TX channel each)"
+    range 1 4
+    default 1
+
+config YOKE_IR_GPIO_1
+    int "Connector 1:1 GPIO"
+    default 15
+
+config YOKE_IR_GPIO_2
+    int "Connector 1:2 GPIO"
+    depends on YOKE_IR_OUTPUTS > 1
+    default 16
+
+config YOKE_IR_GPIO_3
+    int "Connector 1:3 GPIO"
+    depends on YOKE_IR_OUTPUTS > 2
+    default 17
+
+config YOKE_IR_GPIO_4
+    int "Connector 1:4 GPIO"
+    depends on YOKE_IR_OUTPUTS > 3
+    default 18
+
+config YOKE_IR_INVERT
+    bool "Invert outputs (active-low emitter driver)"
+    default n
+
+config YOKE_IR_DUTY_PERCENT
+    int "Carrier duty cycle percent"
+    range 10 50
+    default 33
+
+config YOKE_IR_LEARN_GPIO
+    int "Learning sensor GPIO (-1: no learning hardware)"
+    range -1 48
+    default -1
+
+config YOKE_IR_MAX_CONNECTIONS
+    int "Concurrent TCP 4998 connections"
+    range 1 8
+    default 4
+
+config YOKE_IR_RATE_PER_S
+    int "Sustained command lines per second per connection"
+    range 1 1000
+    default 20
+
+config YOKE_IR_BURST
+    int "Command line burst per connection"
+    range 1 1000
+    default 40
+
+config YOKE_IR_MAX_FRAME_MS
+    int "Longest single IR frame (ms)"
+    range 100 4000
+    default 2000
+
+config YOKE_IR_SELFTEST_LOOPBACK
+    bool "Boot self-test loops RMT output 1:1 back through an RX channel"
+    default y
+    help
+        Emits three unmodulated pulses (40-120 us) on the 1:1 pin at boot.
+        Without a carrier no IR receiver decodes them.
+
+endmenu

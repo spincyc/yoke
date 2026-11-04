@@ -28,3 +28,27 @@ def test_verification_requires_complete_success(tmp_path: Path, outcome: str) ->
     else:
         with pytest.raises(RuntimeError):
             verifier["require_complete_report"](report)
+
+
+@pytest.mark.parametrize(
+    ("address", "ok"), [("0x4038523c", True), ("0x42001234", False), (None, False)]
+)
+def test_isr_encoder_must_link_into_iram(
+    tmp_path: Path, address: str | None, ok: bool
+) -> None:
+    """Finding 8: the RMT encoder must run while flash writes disable cache."""
+    verifier = runpy.run_path(str(ROOT / "firmware/esp32/verify.py"))
+    lines = []
+    for symbol in verifier["ISR_SYMBOLS"]:
+        if address is not None:
+            lines += [
+                f" .text.{symbol}",
+                f"                {address}       {symbol}",
+            ]
+    link_map = tmp_path / "app.map"
+    link_map.write_text("\n".join(lines) + "\n")
+    if ok:
+        verifier["require_iram"](link_map)
+    else:
+        with pytest.raises(RuntimeError):
+            verifier["require_iram"](link_map)

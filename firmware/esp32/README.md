@@ -1,14 +1,18 @@
-# W5500 Ethernet updater reference
+# ESP32-S3 IR endpoint (W5500 Ethernet)
 
-This ESP-IDF project provides authenticated firmware updates after an
-initial USB flash. IR routing is not implemented. Read the normative
-[protocol and security contract](../../doc/design/ESP32-UPDATES.md) before
-commissioning. Hardware checks remain **NOT RUN**.
+This ESP-IDF project is the Yoke IR endpoint. It drives IR output through
+the RMT peripheral behind an opt-in, LAN-scoped subset of the Global Caché
+iTach API on TCP 4998, and it accepts authenticated firmware updates after
+an initial USB flash. Read the normative
+[update contract](../../doc/design/ESP32-UPDATES.md) and
+[IR endpoint contract](../../doc/design/IR-ENDPOINT.md) before commissioning.
+Hardware checks remain **NOT RUN**; IR pins and polarity are ⚠ unverified.
 
 Use ESP-IDF **v5.5.6**, commit
 `880a203ae603d08a94d06aa01e0d6761958e5e9e`. The tested board configuration is
-ESP32-S3, 16 MiB flash, no PSRAM requirement, W5500 on SPI2. Pin defaults are
-isolated in `main/Kconfig.projbuild` and require physical bench validation.
+ESP32-S3, 16 MiB flash, no PSRAM requirement, W5500 on SPI2. Ethernet pin
+defaults are isolated in `main/Kconfig.projbuild` and IR pins in
+`components/yoke_ir/Kconfig`; all require physical bench validation.
 
 Run from the repository root. All tools, build output, generated configs,
 temporary data and private commissioning files below stay in `.scratch`.
@@ -54,6 +58,9 @@ Choose the actual USB serial device. Do not use `erase-flash`. The app flash
 command writes the bootloader, partition table, initial OTA metadata and app; the explicit
 trust write populates its dedicated partition. Never reflash partition
 geometry over an existing commissioned application with incompatible layout.
+Version 0.2.0 added `coredump`, `ircodes` and `spare` partitions after the
+app slots (offsets of `nvs`, `otatrust` and both slots are unchanged); a
+bench unit flashed with 0.1.0 must be reflashed over USB once.
 
 ```sh
 idf.py -C firmware/esp32 -B "$PWD/.scratch/esp32-ota/build" \
@@ -70,6 +77,20 @@ and boot/update errors. The first confirmed app is the rollback baseline.
 For each future build, set a visible new `PROJECT_VER` in `CMakeLists.txt`.
 Keep project name and partition geometry unchanged; distribute the **app
 binary only**, never the bootloader, merged flash image, or `trust.bin`.
+
+The IR API is off by default. Enable it (and optionally restrict peers
+further than the Ethernet subnet) over the same mutual-TLS API:
+
+```sh
+curl --fail-with-body --noproxy '*' --resolve ir-01.local:443:192.168.20.50 \
+  --cacert .scratch/esp32-ota/trust/ir-01/server.crt \
+  --cert .scratch/esp32-ota/trust/ir-01/client.crt \
+  --key .scratch/esp32-ota/trust/ir-01/client.key \
+  -H 'Content-Type: application/json' -X PUT \
+  --data '{"api": true, "allow": "192.168.20.0/24"}' \
+  https://ir-01.local/v1/ir/config
+printf 'getversion\r' | nc -q1 192.168.20.50 4998
+```
 
 The exact local client flow uses a chosen IP (replace `192.168.20.50` with
 the board's address). `--resolve` gives hostname verification without DNS.
@@ -95,14 +116,17 @@ curl --fail-with-body --max-time 130 --noproxy '*' \
   https://ir-01.local/v1/firmware
 ```
 
-A 202 response schedules reboot after two seconds. Re-run the same status
+A 202 response schedules reboot after two seconds, once the IR frame in
+flight (if any) has finished. Re-run the same status
 GET after reconnecting: check the running `version`, slot and `state`, and
 read `error`. If the connection is lost before a response, inspect status
 before repeating the upload. `pending-verify` is not success; `healthy`
 requires the running app's explicit local health confirmation.
 
-Rollback is automatic on crash/reset before health confirmation or after a
-60-second deadline. The previous confirmed app reports `rolled-back` and
+A new image confirms itself once it has an IP address, or after a 10 s
+window with the Ethernet link down (a cable-less bench boot), and only if the
+IR self-test passed. Rollback is automatic on crash/reset before health
+confirmation or after a 60-second deadline. The previous confirmed app reports `rolled-back` and
 the attempted version/digest. A power interruption before boot selection
 may instead report `activation-not-completed`; inspect the running version.
 To deliberately downgrade, upload an older compatible app through the same
@@ -114,10 +138,13 @@ uses the physical trust write only and must preserve application NVS.
 The explicit software verification command installs/reuses the pinned SDK,
 its official ESP32-S3 toolchain and Python constraints, and the repository's
 pinned pytest development dependencies under `.scratch/esp32-ota`. It builds
-host mbedTLS, requires the entire firmware suite with **zero skipped tests**,
-and builds the target image with the actual generated SDK TLS adapter. It
-checks the SDK commit, submodule hashes and clean tracked source before and
-afterward. No device is contacted or flashed, and nothing is uploaded.
+host mbedTLS, requires the entire firmware suite (`tests/firmware_ota` and
+`tests/firmware_ir`) with **zero skipped tests**, regenerates the SDK
+configuration from `sdkconfig.defaults`, and builds the target image with
+the actual generated SDK TLS adapter. It checks from the link map that the
+IR encoder is in IRAM, and checks the SDK commit, submodule hashes and clean
+tracked source before and afterward. No device is contacted or flashed, and
+nothing is uploaded.
 
 Developer prerequisites are Python 3.12+, git, bash, CMake, Ninja, a host C
 compiler and OpenSSL 3.0+. First use downloads developer tools and test
@@ -144,13 +171,19 @@ the pinned host library manually after SDK installation:
 cmake -S .scratch/esp32-ota/esp-idf/components/mbedtls/mbedtls \
   -B .scratch/esp32-ota/host-mbedtls -DENABLE_TESTING=OFF -DENABLE_PROGRAMS=OFF
 cmake --build .scratch/esp32-ota/host-mbedtls -j 8
-python -m pytest tests/firmware_ota -ra --basetemp=.scratch/esp32-ota/pytest
+python -m pytest tests/firmware_ota tests/firmware_ir -ra \
+  --basetemp=.scratch/esp32-ota/pytest
 ```
+
+`tests/firmware_ir` needs only a host C compiler: it runs the unchanged IR
+core behind real localhost TCP sockets with a simulated RMT channel. `make
+firmware-bench` prints the core's host-only CPU cost.
 
 The dedicated verifier fails on any skip, failed test, incomplete test report,
 or missing target adapter. Target compilation, the real-library tests, and the
 mocked upload/storage fault campaign are separate evidence. None proves
-physical W5500, PoE, flash power-loss behavior or ADC entropy quality; run
-the documented hardware acceptance checks before deployment. The reference
+physical W5500, PoE, IR emitter, carrier accuracy on silicon, flash
+power-loss behavior or ADC entropy quality; run the documented hardware
+acceptance checks before deployment. The reference
 app reserves the SAR ADC continuously for primary entropy; see the
 [application integration contract](../../doc/design/ESP32-UPDATES.md).

@@ -1,0 +1,6 @@
+# The RMT simple-encoder callback body runs from the TX ISR, which must keep
+# working while OTA flash writes disable the cache (CONFIG_RMT_TX_ISR_CACHE_SAFE).
+[mapping:yoke_ir]
+archive: libyoke_ir.a
+entries:
+    ir_encode (noflash)
