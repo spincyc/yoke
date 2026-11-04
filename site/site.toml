@@ -328,6 +328,26 @@ nav = "docs"
 parent = "engineering/research.html"
 
 [[pages]]
+source = "doc/research/CHIPSETS.md"
+output = "research/chipsets.html"
+title = "Chipset and power review"
+section = "Research"
+summary = "2026-11-04 evaluation of the ZERO 3E USB controller, board power path, PoE HAT and IR silicon, with alternatives and deciding bench tests."
+layout = "docs"
+nav = "docs"
+parent = "engineering/research.html"
+
+[[pages]]
+source = "doc/research/REVIEW-2026-11-04.md"
+output = "research/review-2026-11-04.html"
+title = "Cold review and dispositions"
+section = "Research"
+summary = "Findings from the 2026-11-04 independent reviews of USB, firmware, IR and housing, with what was fixed, accepted or left open."
+layout = "docs"
+nav = "docs"
+parent = "engineering/research.html"
+
+[[pages]]
 source = "CONTRIBUTING.md"
 output = "contributing.html"
 title = "Contributing"

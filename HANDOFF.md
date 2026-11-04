@@ -90,6 +90,7 @@ establishes hardware compatibility, throughput, or IR timing on silicon.
 | `doc/design/DEPLOYMENT.md`, `packaging/zero3e/` | Box install recipe |
 | `doc/design/IR-ENDPOINT.md`, `ESP32-UPDATES.md` | IR endpoint and its updater |
 | `doc/design/USB-HOUSING.md`, `hardware/usb-housing/r7/` | Enclosure revisions and R7 |
+| `doc/research/CHIPSETS.md`, `REVIEW-2026-11-04.md` | Chipset/power evidence and the dispositions of every review finding |
 
 The agent never receives media or USB payload, and the HDCP boundary in
 ADR 0011 is unchanged. For each new field failure, keep a deterministic

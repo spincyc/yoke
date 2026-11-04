@@ -10,6 +10,8 @@ been revalidated by publishing this site.
 | [Feasibility](../../../doc/research/FEASIBILITY.md) | Bandwidth budgets, 4K120-over-10GbE paths, and open implementation questions |
 | [Hardware survey](../../../doc/research/HARDWARE.md) | Commercial endpoints, bridge silicon, USB paths, and bench-unverified assumptions |
 | [Compression](../../../doc/research/COMPRESSION.md) | Codec trade-offs, bandwidth, and proposed operating points |
+| [Chipset and power review](../../../doc/research/CHIPSETS.md) | 2026-11-04: ZERO 3E USB controller, power path, PoE HAT, IR silicon and alternatives |
+| [Cold review and dispositions](../../../doc/research/REVIEW-2026-11-04.md) | 2026-11-04: review findings and what was fixed, accepted or left open |
 
 The selected [USB hardware design](../../../doc/design/USB-ENDPOINT.md)
 uses ZERO 3E boards and USB 2 first. The earlier [endpoint study](../../../doc/design/EDGE-DEVICES.md)
