@@ -155,10 +155,25 @@ class _Connection:
         address = cmd.ep | (0x80 if cmd.direction == usbip.DIR_IN else 0)
         kind = self.device.endpoint_type(address)
         if kind is None:
-            self.violation(
+            # stub_rx get_pipe() fails: the stub returns *without reading the
+            # OUT payload*, so those bytes are parsed as the next header and
+            # the connection desynchronizes (usually dropped as invalid).
+            server.violations.append(
                 f"CMD_SUBMIT to endpoint {address:#04x} not in configuration"
             )
             return
+        if kind == ch9.XFER_CONTROL:
+            setup = Setup.unpack(cmd.setup)
+            is_out = not setup.is_in or setup.length == 0
+            if is_out != (cmd.direction == usbip.DIR_OUT):
+                # usb_submit_urb(): dev_WARN_ONCE("BOGUS control dir ...")
+                server.violations.append(f"kernel WARN: BOGUS control dir {setup}")
+            if setup.length != cmd.transfer_buffer_length:
+                # usb_submit_urb() -> -EBADR; stub_rx treats a submit error
+                # as fatal and discards the connection.
+                server.violations.append(f"BOGUS control len {setup}")
+                self.close()
+                return
         data = b""
         if cmd.direction == usbip.DIR_OUT and cmd.transfer_buffer_length:
             buf = bytearray(cmd.transfer_buffer_length)
@@ -247,9 +262,22 @@ class _Connection:
         with self.lock:
             urb = self.pending.pop(cmd.unlink_seqnum, None)
         status = 0
+        mode = self.server.unlink_mode
         if urb is not None and self.device.cancel(urb):
-            status = -usbip.ECONNRESET
             self.server.stats.unlinked += 1
+            if mode == "late-submit":
+                # stub_tx_loop sends every queued RET_SUBMIT, then every
+                # RET_UNLINK: a URB that completed just after the RET_SUBMIT
+                # pass yields RET_UNLINK(0) followed by its RET_SUBMIT.
+                self.send(usbip.RetUnlink(cmd.seqnum, 0).pack())
+                self.send(usbip.RetSubmit(cmd.unlink_seqnum, 0, 0).pack())
+                return
+            if mode == "lost-completion":
+                # usb_unlink_urb() lost the race: stub_complete() reports the
+                # URB's own status (0) in RET_UNLINK and sends no RET_SUBMIT.
+                self.send(usbip.RetUnlink(cmd.seqnum, 0).pack())
+                return
+            status = -usbip.ECONNRESET
         elif urb is not None:
             # Completed concurrently: its RET_SUBMIT was suppressed by pop().
             status = -usbip.ECONNRESET
@@ -266,7 +294,11 @@ class FakeUsbipd:
         busnum: int = 1,
         service_delay: float = 0.0,
         reset_delay: float = 0.0,
+        unlink_mode: str = "cancel",
     ) -> None:
+        if unlink_mode not in ("cancel", "late-submit", "lost-completion"):
+            raise ValueError(f"unknown unlink mode {unlink_mode!r}")
+        self.unlink_mode = unlink_mode
         self.exports = {
             busid: Export(device, busnum, index + 2)
             for index, (busid, device) in enumerate(devices.items())

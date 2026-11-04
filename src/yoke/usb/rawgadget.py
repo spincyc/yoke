@@ -1,4 +1,4 @@
-"""Linux Raw Gadget backend (``/dev/raw-gadget``) via stdlib ``fcntl.ioctl``.
+"""Linux Raw Gadget backend (``/dev/raw-gadget``) via ctypes ``ioctl(2)``.
 
 ⚠ Bench-unverified. The kernel documents Raw Gadget as a debugging feature
 (Documentation/usb/raw-gadget.rst). Whether the Radxa ZERO 3E kernel builds
@@ -15,17 +15,24 @@ Every assumption is isolated in this module:
   until EP0_READ(0); for OUT requests with data the UDC completes the status
   stage itself once EP0_READ returns the data.
 * Cancellation: endpoint and event ioctls wait interruptibly, so a signal
-  aimed at the blocked thread returns EINTR. The worker must install a
-  SIGUSR1 handler first; :meth:`RawGadgetBackend.start` refuses otherwise,
-  because SIGUSR1's default action would terminate the process.
+  aimed at the blocked thread returns EINTR. The ioctl is issued through
+  ctypes (:class:`LibcIoctl`) because ``fcntl.ioctl`` retries EINTR. The
+  worker must install a SIGUSR1 handler first; :meth:`RawGadgetBackend.start`
+  refuses otherwise, because SIGUSR1's default action would terminate the
+  process.
+* Naming: ``usb_raw_init.driver_name`` is the controller's gadget name
+  (``dwc3-gadget``), not the UDC device name (:data:`GADGET_NAMES`).
+* dwc3 completes requests started on an endpoint with ``-EPIPE`` when the
+  host clears that endpoint's halt (``__dwc3_gadget_ep_set_halt``); the
+  proxy treats that as an observed host CLEAR_FEATURE.
 * Halting, disabling or clearing an endpoint fails while a request is queued
   on it; the proxy only does so from the endpoint's own pump thread.
 """
 
 from __future__ import annotations
 
+import ctypes
 import errno
-import fcntl
 import os
 import signal
 import struct
@@ -38,6 +45,7 @@ from yoke.usb.gadget import (
     EventType,
     GadgetError,
     GadgetEvent,
+    GadgetHaltClearedError,
     GadgetInterruptedError,
     GadgetShutdownError,
     UdcEndpoint,
@@ -196,58 +204,129 @@ def unpack_ep_info(buf: bytes | bytearray, count: int) -> list[UdcEndpoint]:
     return result
 
 
-IoctlFn = Callable[[int, int, "int | bytearray"], int]
+RawIoctl = Callable[[int, int, "int | bytearray"], int]
+"""``ioctl(2)`` with kernel conventions: a result >= 0 or ``-errno``.
+
+It must call the kernel exactly once: never raise for a failure and never
+retry. CPython's ``fcntl.ioctl`` retries EINTR whenever no Python-level
+signal handler raised (PEP 475), and off the main thread one never runs, so
+a blocked Raw Gadget call could not be cancelled through it. The dispatch
+in :meth:`RawGadgetBackend._call` turns ``-errno`` into exceptions and does
+not retry either; the simulated kernel is injected at this same layer.
+"""
+
+_LIBC: ctypes.CDLL | None = None
 
 
-def _default_ioctl(fd: int, request: int, arg: int | bytearray) -> int:
-    if isinstance(arg, int):
-        return fcntl.ioctl(fd, request, arg)
-    return int(fcntl.ioctl(fd, request, arg, True))
+def _libc() -> ctypes.CDLL:
+    global _LIBC
+    if _LIBC is None:
+        _LIBC = ctypes.CDLL(None, use_errno=True)
+    return _LIBC
+
+
+def errno_call(func: Callable[..., int], *args: object) -> int:
+    """Call a ctypes libc function once; return its result or ``-errno``.
+
+    ctypes releases the GIL for the call, and a signal handler installed
+    without SA_RESTART (Python's default) makes a blocked call return EINTR.
+    """
+    ctypes.set_errno(0)
+    result = int(func(*args))
+    return -(ctypes.get_errno() or errno.EIO) if result < 0 else result
+
+
+class LibcIoctl:
+    """The production :data:`RawIoctl`: libc ``ioctl`` through ctypes."""
+
+    def __init__(self) -> None:
+        function = _libc().ioctl
+        function.restype = ctypes.c_int
+        function.argtypes = [ctypes.c_int, ctypes.c_ulong, ctypes.c_void_p]
+        self._ioctl = function
+
+    def __call__(self, fd: int, request: int, arg: int | bytearray) -> int:
+        if isinstance(arg, int):
+            return errno_call(self._ioctl, fd, request, arg)
+        view = (ctypes.c_char * len(arg)).from_buffer(arg)
+        try:
+            return errno_call(self._ioctl, fd, request, ctypes.addressof(view))
+        finally:
+            del view  # release the buffer export before the caller resizes
 
 
 def _default_interrupt(thread_ident: int) -> None:
     signal.pthread_kill(thread_ident, signal.SIGUSR1)
 
 
-def _error(exc: OSError, what: str) -> GadgetError:
-    code = exc.errno or errno.EIO
+def _error(code: int, what: str) -> GadgetError:
+    code = code or errno.EIO
     message = f"raw-gadget {what}: {os.strerror(code)}"
     if code == errno.EINTR:
         return GadgetInterruptedError(code, message)
+    if code == errno.EPIPE:
+        return GadgetHaltClearedError(code, message)
     if code in (errno.ESHUTDOWN, errno.ECONNRESET, errno.ENODEV):
         return GadgetShutdownError(code, message)
     return GadgetError(code, message)
 
 
+GADGET_NAMES = {
+    "dwc3": "dwc3-gadget",
+    "dummy_udc": "dummy_udc",
+    "musb-hdrc": "musb-hdrc",
+}
+"""UDC platform driver -> ``usb_gadget.name`` that Raw Gadget compares
+``usb_raw_init.driver_name`` against (``raw_gadget.c`` gadget_bind). dwc2 and
+unknown drivers use the UDC device name. ⚠ Only dummy_udc is checked against
+a running kernel (tests/usbsim/kernel_vm); dwc3's name is from its source."""
+
+
+def gadget_driver_name(
+    device_name: str, udc_sysfs: Path = Path("/sys/class/udc")
+) -> str:
+    """Infer the gadget name from the UDC's bound platform driver."""
+    try:
+        driver = (udc_sysfs / device_name / "device" / "driver").resolve(strict=True)
+    except OSError:
+        return device_name
+    return GADGET_NAMES.get(driver.name, device_name)
+
+
 class RawGadgetBackend:
     """One Raw Gadget instance bound to one UDC.
 
-    ``driver_name``/``device_name`` identify the UDC; on dwc3 both are the
-    controller's platform name (``fcc00000.usb`` ⚠ on RK3566). Every OS
-    touchpoint is injectable so the simulated kernel in ``tests/usbsim`` runs
-    this exact code, including struct packing.
+    ``device_name`` is the UDC's name in ``/sys/class/udc`` (``fcc00000.usb``
+    ⚠ on RK3566). ``driver_name`` is the controller's *gadget* name, which
+    differs: dwc3 calls every gadget ``dwc3-gadget`` and dummy_hcd
+    ``dummy_udc``. When omitted it is inferred with :func:`gadget_driver_name`.
+    A wrong name makes RUN fail with EBUSY. Every OS touchpoint is injectable,
+    so the simulated kernel runs this exact code, including struct packing
+    and the no-retry dispatch.
     """
 
     def __init__(
         self,
-        driver_name: str,
         device_name: str,
         *,
+        driver_name: str | None = None,
         path: str = DEVICE_PATH,
         opener: Callable[[str, int], int] = os.open,
-        ioctl: IoctlFn = _default_ioctl,
+        ioctl: RawIoctl | None = None,
         closer: Callable[[int], None] = os.close,
         interrupter: Callable[[int], None] = _default_interrupt,
         read_text: Callable[[Path], str] = Path.read_text,
         udc_sysfs: Path = Path("/sys/class/udc"),
         require_signal_handler: bool = True,
     ) -> None:
+        if driver_name is None:
+            driver_name = gadget_driver_name(device_name, udc_sysfs)
         pack_init(driver_name, device_name, 0)  # validate names early
-        self._driver = driver_name
+        self.driver_name = driver_name
         self._device = device_name
         self._path = path
         self._open = opener
-        self._ioctl = ioctl
+        self._ioctl: RawIoctl = ioctl if ioctl is not None else LibcIoctl()
         self._close = closer
         self._interrupt = interrupter
         self._read_text = read_text
@@ -259,10 +338,10 @@ class RawGadgetBackend:
         fd = self._fd
         if fd is None:
             raise GadgetError(errno.EBADF, f"raw-gadget {what}: not started")
-        try:
-            return self._ioctl(fd, request, arg)
-        except OSError as exc:
-            raise _error(exc, what) from exc
+        result = self._ioctl(fd, request, arg)
+        if result < 0:
+            raise _error(-result, what)
+        return result
 
     def start(self, speed: Speed) -> None:
         if self._fd is not None:
@@ -276,14 +355,19 @@ class RawGadgetBackend:
         try:
             self._fd = self._open(self._path, os.O_RDWR)
         except OSError as exc:
-            raise _error(exc, f"open {self._path}") from exc
+            raise _error(exc.errno or errno.EIO, f"open {self._path}") from exc
         try:
             self._call(
                 USB_RAW_IOCTL_INIT,
-                pack_init(self._driver, self._device, int(speed)),
+                pack_init(self.driver_name, self._device, int(speed)),
                 "INIT",
             )
-            self._call(USB_RAW_IOCTL_RUN, 0, "RUN (is another gadget bound?)")
+            self._call(
+                USB_RAW_IOCTL_RUN,
+                0,
+                f"RUN on {self._device} as {self.driver_name} "
+                "(wrong gadget name, or another gadget bound?)",
+            )
         except GadgetError:
             self.close()
             raise

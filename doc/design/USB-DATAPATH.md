@@ -43,7 +43,7 @@ computer-side box: yoke.usb.worker ── Raw Gadget ── DWC3 OTG port ─ co
 | GET_CONFIGURATION / GET_INTERFACE / GET_STATUS | Local; status reports bus power and no remote wakeup |
 | CLEAR/SET_FEATURE(ENDPOINT_HALT) | Normally answered by the UDC ⚠; if delegated, forwarded |
 | SET_FEATURE(REMOTE_WAKEUP), SYNCH_FRAME, SET_DESCRIPTOR | STALL (not advertised / no isochronous) |
-| Class and vendor requests | Forwarded. IN data or STALL is returned. OUT data is acknowledged by the UDC when it arrives, so a later remote STALL is only counted (`late_out_stalls`) |
+| Class and vendor requests | Forwarded. IN data or STALL is returned. For OUT requests *with data* the UDC completes the status stage when the data arrives, so a remote STALL reaches the computer as success and is only counted (`late_out_stalls`; see the class table under Limits) |
 
 ## Data transfers
 
@@ -66,14 +66,37 @@ computer-side box: yoke.usb.worker ── Raw Gadget ── DWC3 OTG port ─ co
   - data-out commands size the next OUT reads to the data length.
 
   This keeps BOT fast while every other protocol stays packet-exact.
-- **Stall.** The pump writes any partial data, unlinks later URBs, halts
-  the gadget endpoint, then sends CLEAR_FEATURE(ENDPOINT_HALT) to the
-  remote; the stub calls `usb_clear_halt`. Transfers resume once the
-  computer clears its halt. Transaction errors (`-EPROTO`, `-EILSEQ`,
-  `-ETIME`, `-EOVERFLOW`, `-EREMOTEIO`) are presented as STALL.
+- **Stall (IN).**
+  - The pump writes any partial data, unlinks later URBs and halts the
+    gadget endpoint.
+  - It then clears the remote halt *once* (the stub calls
+    `usb_clear_halt`) and probes with a single URB.
+  - A device that stalls the probe as well (for example BOT after an
+    invalid CBW, until reset recovery) is parked. The pump retries only
+    after host activity (a forwarded control request or OUT traffic) or an
+    exponential backoff of up to 2 s. This replaces a 53k CMD_SUBMIT/s spin
+    with about 10 per second (`tests/test_usb_faults.py`).
+- **Stall (OUT).** The remote halt is cleared at once, and again before each
+  later transfer until one succeeds. A device that keeps its halt until a
+  class reset is therefore released right after the host performed that
+  reset.
+- **Host CLEAR_FEATURE(ENDPOINT_HALT).** The UDC answers it itself (⚠ dwc3,
+  dummy_hcd). dwc3 gives requests already *started* on that endpoint back
+  with `-EPIPE`; the pump treats that as the host's clear. It unlinks the
+  endpoint's URBs, forwards the clear to the device and retries the same
+  write or read (`host_clear_halts`). A clear on an endpoint without a
+  started request is invisible to the proxy.
+- **Transaction errors** (`-EPROTO`, `-EILSEQ`, `-ETIME`, `-EOVERFLOW`,
+  `-EREMOTEIO`) are presented as STALL.
 - **Cancel.** URBs are unlinked when pumps stop: SET_CONFIGURATION,
-  SET_INTERFACE, bus reset, disconnect, stall recovery and teardown. Both
-  RET_UNLINK orderings in the protocol document are handled.
+  SET_INTERFACE, bus reset, disconnect, stall recovery and teardown.
+  - stub_tx sends every queued RET_SUBMIT before every queued RET_UNLINK
+    on each pass, so RET_UNLINK(0) can precede the URB's own RET_SUBMIT.
+  - An unlink that loses the race carries the URB status (0 or -EPIPE)
+    with no RET_SUBMIT at all.
+  - The client keeps tombstones for unlinked sequence numbers and gives an
+    ambiguous unlink 200 ms for a late RET_SUBMIT, whose data it delivers.
+    Afterwards it consumes stragglers instead of dropping the connection.
 
 ## Descriptor adjustments
 
@@ -103,13 +126,24 @@ Rejected with a clear status:
     in peripheral or OTG device role (`dr_mode`, or the usb-role-switch
     sysfs `role` = `device`);
   - UDC name expected `fcc00000.usb` (check `ls /sys/class/udc`).
+  - Raw Gadget's `usb_raw_init.driver_name` is the controller's *gadget*
+    name, not the UDC name. dwc3 names every gadget `dwc3-gadget`,
+    dummy_hcd `dummy_udc`; a wrong name makes RUN fail with EBUSY. The worker
+    infers it from `/sys/class/udc/<udc>/device/driver` (dwc3 → `dwc3-gadget`,
+    verified for dummy_udc in the VM test); `--gadget-driver` overrides it.
 - **No other gadget on that UDC.** Radxa images may bind an ADB/NCM
   configfs gadget. Clear its `UDC` attribute first, otherwise RUN fails
   with "is another gadget bound?".
 - **Device node:** `/dev/raw-gadget`, owned by the `yoke-gadget` user through
   a udev rule (see `examples/yoke-gadget.service`). Open must be blocking.
-- **Signals:** the worker installs a SIGUSR1 handler; cancelling blocked
-  endpoint ioctls relies on EINTR from `wait_for_completion_interruptible`.
+- **Signals:** the worker installs a SIGUSR1 handler. Cancelling a blocked
+  EVENT_FETCH/EP_READ/EP_WRITE relies on EINTR from
+  `wait_for_completion_interruptible`.
+  - The ioctl must go through ctypes (`LibcIoctl`): CPython's `fcntl.ioctl`
+    retries EINTR (PEP 475) because Python handlers only run on the main
+    thread, so teardown could never be confirmed.
+  - The VM test proves both sides: the production worker stops in about
+    0.1 s, and an `fcntl` variant cannot stop.
 - **Device side:** stock `usbip-host` and `usbipd` with the device bound
   (the existing `usbip` producer driver).
 - **Data-plane admission (lane/ctl, ⚠).** The producer accepts TCP 3240 only
@@ -161,13 +195,62 @@ Packaging needs for the computer role:
 host model ↔ simulated UDC/Raw Gadget ↔ proxy ↔ USB/IP ↔ exporter ↔ device model
 ```
 
-- The simulated kernel runs the real `RawGadgetBackend` code against the
-  ioctl surface, including Raw Gadget's EBUSY/EINVAL rules.
-- The exporter enforces the stock stub's connection-dropping checks.
-- The host model enumerates like Linux, Windows and macOS (modelled
-  sequences) and enforces the §9.2.6.4 deadlines.
+- The simulated kernel runs the real `RawGadgetBackend` dispatch against the
+  ioctl surface and returns `-errno` (no exceptions, no retries), with:
+  - Raw Gadget's EBUSY/EINVAL rules;
+  - the dwc3 gadget name, so RUN fails on a wrong name;
+  - signals that are lost unless the thread is blocked;
+  - EPIPE when the host clears a halt on an endpoint with a started
+    request;
+  - dwc3 disconnect leaving requests queued;
+  - a late ep0 reply blocking (and later SETUPs stalling) until bus reset.
+- The exporter enforces the stock stub's checks:
+  - a connection drop on a bad `devid`;
+  - desynchronization on a bad endpoint, because the OUT payload is left
+    unread;
+  - EBADR and a drop on a control wLength mismatch;
+  - a WARN on a control direction mismatch.
 
-The end-to-end tests are in `tests/test_usb_proxy.py`. Benchmarks
+  It also offers both stub_tx unlink orderings.
+- The host model enumerates like Linux, Windows and macOS (modelled
+  sequences). It records §9.2.6.4 deadline misses as advisory metrics and
+  fails only after the 5 s host-stack timeout.
+
+The end-to-end tests are in `tests/test_usb_proxy.py`, and regressions for
+the 2026-11-04 cold review are in `tests/test_usb_faults.py`.
+
+**Real-kernel loopback (`make verify-usb-kernel`).** QEMU/KVM boots the
+host's own kernel with the host root shared read-only. No root is needed on
+the host. Inside the VM:
+
+- A real configfs mass-storage gadget on `dummy_udc.1` is exported by the
+  kernel `usbip-host` stub. A minimal `usbipd` performs the sysfs handoff,
+  because the tools are not installed.
+- The production worker presents it through `/dev/raw-gadget` on
+  `dummy_udc.0`, driven by the real `usb-gadget` driver over the control
+  socket.
+- The guest's `usb-storage` reads and writes it.
+
+Results on 2026-11-04 (kernel 7.2.14, 2 vCPUs):
+
+| Check | Result |
+|---|---|
+| 8 MiB read / write via the proxied `/dev/sda`, checksums, data landed in the source file | pass (high-speed) |
+| Throughput (dummy_hcd has no bus limit; direct source read 139 MB/s) | 93.7 MB/s read, 73.2 MB/s write |
+| Driver evidence | ACTIVE: worker `configured`, UDC sysfs `configured`, link high-speed |
+| Detach through the driver | confirmed; device gone; export released (FIN reached the stub) |
+| Remote loss (stub `usbip_sockfd = -1`) | disconnect presented in 0.1 s |
+| usbipd restart | re-imported and re-enumerated 1.6 s after restart |
+| Worker SIGTERM | exit 0 in 0.11 s (blocked ioctls interrupted) |
+| Negative control: same worker with `fcntl.ioctl` | teardown unconfirmed, exit 1 (as the review predicted) |
+| `dmesg` WARN/BUG/BOGUS | none |
+
+The first run measured 2.3 MB/s because the minimal usbipd lacked
+`TCP_NODELAY`: Nagle plus delayed ACK added about 40 ms per command. Stock
+usbipd sets it (`usbip_net_set_nodelay`), and so does the worker; any
+replacement exporter must too.
+
+Benchmarks
 (`make benchmark-usb`) measure simulated, software-only latency and
 throughput; see the results table below.
 
@@ -227,7 +310,8 @@ descriptor reads stay under 1 ms.
    alone.
 4. **Standalone worker** (no agent): run
    `python -m yoke.usb.worker --udc fcc00000.usb --target <device-box-ip>:3240/<busid> --source <computer-box-vlan-ip>`.
-   Expected:
+   The worker logs the inferred gadget name; if RUN fails with EBUSY,
+   pass `--gadget-driver dwc3-gadget`. Expected:
    - `/sys/class/udc/fcc00000.usb/state` reaches `configured` and
      `current_speed` is `full-speed` (low-speed keyboard presented at full
      speed);
@@ -257,14 +341,32 @@ Each step's pass/fail, kernel version and measurements belong in
 
 ## Limits and open work
 
-- **Control OUT STALL after data.** Raw Gadget lets the UDC finish the
-  status stage of an OUT request with data before the remote answers, so
-  that STALL cannot be returned.
+### STALLs that cannot reach the computer
+
+Raw Gadget delays the status stage only for requests without data, so a
+control OUT request *with data* is acknowledged when its data arrives. A
+bulk/interrupt OUT packet is acknowledged when a read is queued, so a
+device's refusal surfaces on the next transaction.
+
+| Class | Affected request | Effect |
+|---|---|---|
+| HID | SET_REPORT (LEDs, output/feature reports) | a device STALL is reported as success |
+| CDC-ACM | SET_LINE_CODING (7 bytes) | an unsupported line coding looks accepted; GET_LINE_CODING shows the truth |
+| Mass storage (BOT) | bulk OUT data or CBW refused by STALL | seen one packet late; BOT reset recovery still converges |
+| Vendor | any OUT request with data | a failure is visible only in the device's later state |
+| Audio, DFU, printer | SET_CUR, DNLOAD, and similar | same as vendor; not tested |
+
+### Other limits
+
 - **Remote wakeup** is not supported (no Raw Gadget ioctl), so the presented
   device never advertises it.
 - **Packet-per-URB forwarding** costs per-packet Python overhead for non-BOT
   bulk devices. A native worker behind `GadgetBackend` is the path to full
   high-speed throughput.
+- **Host clear-halt visibility.** dwc3 reports a host CLEAR_FEATURE(HALT)
+  only through started requests (EPIPE). A device that keeps a halt until
+  it sees that specific request is released by the parked-pump retry, not
+  by the host's request itself.
 - **Bus power.** A RK3566 board drawing more than 100 mA before enumeration
   exceeds the USB 2 unconfigured-device budget. Many hosts tolerate it; it
   must be measured ⚠.

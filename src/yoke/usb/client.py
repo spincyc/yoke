@@ -20,6 +20,8 @@ import dataclasses
 import socket
 import struct
 import threading
+import time
+from collections import OrderedDict
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Protocol
@@ -133,6 +135,8 @@ class UrbResult:
     actual_length: int
     buffer: bytearray | None = None
     """IN data at ``buffer[HEADROOM:HEADROOM + actual_length]``."""
+    unlinked: bool = False
+    """Resolved by CMD_UNLINK without data; never treat it as a transfer."""
 
     @property
     def data(self) -> bytes:
@@ -226,9 +230,17 @@ class UsbipConnection:
         self._devid = info.devid
         self._on_lost = on_lost
         self._lock = threading.Lock()
+        self._cond = threading.Condition(self._lock)
         self._send_lock = threading.Lock()
         self._pending: dict[int, Urb] = {}
         self._unlinks: dict[int, Urb] = {}
+        # Unlinked seqnums whose RET_SUBMIT may still arrive (stub_tx sends
+        # all RET_SUBMITs before all RET_UNLINKs on each pass) -> direction.
+        self._tombstones: OrderedDict[int, int] = OrderedDict()
+        # Targets whose RET_UNLINK carried the URB's own status (0, -EPIPE):
+        # a late RET_SUBMIT may still deliver their data.
+        self._acknowledged: dict[int, int] = {}
+        self.late_ret_submits = 0
         self._seqnum = 0
         self._lost: BaseException | None = None
         self._reader = threading.Thread(
@@ -328,6 +340,52 @@ class UsbipConnection:
         self._send([usbip.CmdUnlink(seqnum, self._devid, urb.seqnum).pack()])
         return handle
 
+    def cancel(
+        self, urbs: Sequence[Urb], *, timeout: float, grace: float = 0.2
+    ) -> None:
+        """Unlink ``urbs`` and return once every one is resolved.
+
+        RET_UNLINK with -ECONNRESET/-ENOENT resolves its target. RET_UNLINK
+        with the URB's own status (0 or -EPIPE) is ambiguous: the URB finished
+        and its RET_SUBMIT may still follow, so it gets ``grace`` seconds to
+        deliver data before it is abandoned. Raises TimeoutError if RET_UNLINK
+        replies do not arrive within ``timeout``.
+        """
+        deadline = time.monotonic() + timeout
+        handles = []
+        for urb in urbs:
+            if not urb.done:
+                try:
+                    handles.append(self.unlink(urb))
+                except ConnectionLostError:
+                    break  # _fail() resolves every pending URB
+        try:
+            for handle in handles:
+                handle.wait(max(0.0, deadline - time.monotonic()))
+        except ConnectionLostError:
+            return  # _fail() resolved every pending URB
+        grace_end = min(deadline, time.monotonic() + grace)
+        with self._cond:
+            while not all(u.done for u in urbs):
+                remaining = grace_end - time.monotonic()
+                if remaining <= 0:
+                    break
+                self._cond.wait(remaining)
+            abandoned = []
+            for urb in urbs:
+                if not urb.done and self._pending.pop(urb.seqnum, None) is not None:
+                    status = self._acknowledged.pop(urb.seqnum, -usbip.ECONNRESET)
+                    self._tombstone(urb.seqnum, urb.direction)
+                    urb.result = UrbResult(status, 0, None, unlinked=True)
+                    abandoned.append(urb)
+        for urb in abandoned:
+            urb._resolve()
+
+    def _tombstone(self, seqnum: int, direction: int) -> None:
+        self._tombstones[seqnum] = direction
+        while len(self._tombstones) > 4096:
+            self._tombstones.popitem(last=False)
+
     def control(
         self, setup: Setup, data: bytes = b"", *, timeout: float
     ) -> bytes | None:
@@ -336,7 +394,9 @@ class UsbipConnection:
         A transfer error other than STALL raises :class:`UsbipError`. On
         timeout the URB is unlinked and :class:`TimeoutError` propagates.
         """
-        direction = DIR_IN if setup.is_in else DIR_OUT
+        # Linux treats an IN request with wLength 0 as OUT (usb_submit_urb
+        # warns "BOGUS control dir" otherwise).
+        direction = DIR_IN if setup.has_in_data else DIR_OUT
         urb = self.submit(
             0,
             direction,
@@ -347,8 +407,8 @@ class UsbipConnection:
         try:
             result = urb.wait(timeout)
         except TimeoutError:
-            with contextlib.suppress(UsbipError):
-                self.unlink(urb).wait(timeout)
+            with contextlib.suppress(UsbipError, TimeoutError):
+                self.cancel([urb], timeout=timeout)
             raise
         if result.status == -usbip.EPIPE:
             return None
@@ -379,48 +439,71 @@ class UsbipConnection:
     def _ret_submit(self, message: RetSubmit) -> None:
         with self._lock:
             urb = self._pending.get(message.seqnum)
+            late = None
             if urb is None:
-                raise ProtocolError(f"RET_SUBMIT for unknown seqnum {message.seqnum}")
-            if message.actual_length > urb.length:
+                late = self._tombstones.pop(message.seqnum, None)
+                if late is None:
+                    raise ProtocolError(
+                        f"RET_SUBMIT for unknown seqnum {message.seqnum}"
+                    )
+            elif message.actual_length > urb.length:
                 raise ProtocolError("RET_SUBMIT actual_length exceeds the request")
             # Keep it pending until its payload is read, so a loss fails it.
+        if late is not None:
+            # A RET_SUBMIT after its URB was abandoned: consume and drop.
+            if late == DIR_IN and message.actual_length:
+                recv_exact(self._stream, memoryview(bytearray(message.actual_length)))
+            self.late_ret_submits += 1
+            return
+        assert urb is not None
         buffer = None
         if urb.direction == DIR_IN:
             buffer = bytearray(HEADROOM + message.actual_length)
             recv_exact(self._stream, memoryview(buffer)[HEADROOM:])
             self.bytes_in += message.actual_length
-        with self._lock:
+        with self._cond:
             if self._pending.pop(message.seqnum, None) is None:
                 return  # failed concurrently by close()
-        urb.result = UrbResult(message.status, message.actual_length, buffer)
+            if self._acknowledged.pop(message.seqnum, None) is not None:
+                self.late_ret_submits += 1  # RET_UNLINK(0) came first
+            urb.result = UrbResult(message.status, message.actual_length, buffer)
+            self._cond.notify_all()
         urb._resolve()
 
     def _ret_unlink(self, message: RetUnlink) -> None:
-        with self._lock:
+        cancelled = None
+        with self._cond:
             handle = self._unlinks.pop(message.seqnum, None)
             if handle is None:
                 raise ProtocolError(f"RET_UNLINK for unknown seqnum {message.seqnum}")
             target = handle.target
             assert target is not None
-            # A target still pending will never see RET_SUBMIT (protocol doc).
-            cancelled = self._pending.pop(target.seqnum, None)
+            if target.seqnum in self._pending:
+                if message.status in (-usbip.ECONNRESET, -usbip.ENOENT):
+                    cancelled = self._pending.pop(target.seqnum)
+                    self._tombstone(target.seqnum, target.direction)
+                    cancelled.result = UrbResult(message.status, 0, None, unlinked=True)
+                else:
+                    self._acknowledged[target.seqnum] = message.status
+            handle.result = UrbResult(message.status, 0, None)
+            self._cond.notify_all()
         if cancelled is not None:
-            cancelled.result = UrbResult(-usbip.ECONNRESET, 0, None)
             cancelled._resolve()
-        handle.result = UrbResult(message.status, 0, None)
         handle._resolve()
 
     def _fail(self, exc: BaseException) -> None:
-        with self._lock:
+        with self._cond:
             if self._lost is not None:
                 return
             self._lost = exc
             pending = list(self._pending.values()) + list(self._unlinks.values())
             self._pending.clear()
             self._unlinks.clear()
+            for urb in pending:
+                urb.error = exc
+            self._cond.notify_all()
         abort_stream(self._stream)
         for urb in pending:
-            urb.error = exc
             urb._resolve()
         if self._on_lost is not None:
             self._on_lost(exc)

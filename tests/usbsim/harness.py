@@ -106,15 +106,21 @@ def make_rig(
     service_delay: float = 0.0,
     reset_delay: float = 0.0,
     udc_endpoints: list[UdcEndpoint] | None = None,
+    unlink_mode: str = "cancel",
+    clear_halt_cancels: bool = True,
     connect: bool = True,
 ) -> Rig:
     usbipd = FakeUsbipd(
-        {BUSID: device}, service_delay=service_delay, reset_delay=reset_delay
+        {BUSID: device},
+        service_delay=service_delay,
+        reset_delay=reset_delay,
+        unlink_mode=unlink_mode,
     )
     kernel = FakeRawGadgetKernel(
         udc_handles_standard=udc_handles_standard,
         sysfs_root=sysfs_root,
         endpoints=udc_endpoints,
+        clear_halt_cancels=clear_halt_cancels,
     )
     rig = Rig(
         device=device,

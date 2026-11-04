@@ -117,7 +117,7 @@ def test_enumeration_matches_device_modulo_documented_rewrites(
             assert seen.qualifier is None  # FS-only devices stall the qualifier
         if seen.bos is not None:
             assert device.bos is not None and seen.bos == expected_bos(device.bos)
-        assert rig.host.violations == []
+        assert rig.host.violations == [] and rig.host.deadline_misses == []
         assert device.violations == [] and rig.usbipd.violations == []
         assert device.configuration == 1 and rig.kernel.usb_state == "configured"
         assert rig.kernel.vbus_ma == 500
@@ -409,15 +409,17 @@ def test_latency_and_jitter_still_meet_control_deadlines() -> None:
 
 
 def test_round_trip_above_the_no_data_budget_misses_set_configuration() -> None:
-    """Documents the RTT budget: SET_CONFIGURATION is forwarded (50 ms limit)."""
+    """Documents the RTT budget: SET_CONFIGURATION is forwarded (50 ms limit).
+
+    Real hosts wait about 5 s, so enumeration succeeds; the miss is an
+    advisory metric, while cached descriptor reads stay far inside it.
+    """
     device = Loopback()
     with rig_for(device, transport=Transport(latency=0.03)) as rig:
         rig.host.attach()
-        with pytest.raises(HostTimeoutError):
-            rig.host.enumerate("linux")
-        assert any(
-            "SET_CONFIGURATION" in v or "request=9" in v for v in rig.host.violations
-        )
+        rig.host.enumerate("linux")
+        assert rig.host.violations == []
+        assert any("request=9" in v for v in rig.host.deadline_misses)
         cached = [r for r in rig.host.records if r.setup.request == ch9.GET_DESCRIPTOR]
         assert cached and max(r.elapsed for r in cached) < ch9.NO_DATA_DEADLINE
 

@@ -70,6 +70,7 @@ class _Request:
     receiver: Receiver | None = None
     status: int | None = None  # bytes transferred, or -errno
     thread: int = 0
+    started: bool = True  # dwc3 defers requests queued on a halted endpoint
 
 
 @dataclass
@@ -97,13 +98,16 @@ class FakeRawGadgetKernel:
         self,
         *,
         name: str = "fcc00000.usb",
+        gadget_name: str = "dwc3-gadget",
         max_speed: Speed = Speed.HIGH,
         endpoints: list[UdcEndpoint] | None = None,
         ep0_size: int = 64,
         udc_handles_standard: bool = True,
         sysfs_root: Path | None = None,
+        clear_halt_cancels: bool = True,
     ) -> None:
         self.name = name
+        self.gadget_name = gadget_name
         self.max_speed = max_speed
         self.ep0_size = ep0_size
         self.udc_handles_standard = udc_handles_standard
@@ -124,7 +128,11 @@ class FakeRawGadgetKernel:
         self._ep0_data_out = b""
         self._ep0_result: ControlResult | None = None
         self._ep0_waiting = False
+        self.clear_halt_cancels = clear_halt_cancels
         self.interrupted: set[int] = set()
+        self._blocked: set[int] = set()
+        self._ep0_late = False
+        self._bus_epoch = 0
         self.link_speed = Speed.UNKNOWN
         self.usb_state = "not attached"
         self.address = 0
@@ -168,9 +176,16 @@ class FakeRawGadgetKernel:
             self.cond.notify_all()
 
     def interrupt(self, thread_ident: int) -> None:
+        """A signal: interrupts the thread only while it is blocked here.
+
+        Like a real signal aimed at a thread that is not inside the syscall,
+        an interrupt that arrives at any other time is lost, so callers must
+        repeat it until the thread leaves.
+        """
         with self.cond:
-            self.interrupted.add(thread_ident)
-            self.cond.notify_all()
+            if thread_ident in self._blocked:
+                self.interrupted.add(thread_ident)
+                self.cond.notify_all()
 
     def read_text(self, path: Path) -> str:
         with self.cond:
@@ -183,7 +198,7 @@ class FakeRawGadgetKernel:
     def backend(self) -> rawgadget.RawGadgetBackend:
         return rawgadget.RawGadgetBackend(
             self.name,
-            self.name,
+            driver_name=self.gadget_name,
             opener=self.open,
             ioctl=self.ioctl,
             closer=self.close,
@@ -217,12 +232,15 @@ class FakeRawGadgetKernel:
     def _wait(self, ready: Callable[[], bool]) -> None:
         """Wait (lock held) until ``ready()`` or interruption (EINTR)."""
         me = threading.get_ident()
-        while not ready():
-            if me in self.interrupted:
-                self.interrupted.discard(me)
-                raise OSError(errno.EINTR, "interrupted")
-            self.cond.wait()
-        self.interrupted.discard(me)
+        self._blocked.add(me)
+        try:
+            while not ready():
+                if me in self.interrupted:
+                    raise OSError(errno.EINTR, "interrupted")
+                self.cond.wait()
+        finally:
+            self._blocked.discard(me)
+            self.interrupted.discard(me)
 
     def _running(self) -> None:
         if self.dev_state != "running":
@@ -234,8 +252,10 @@ class FakeRawGadgetKernel:
                 ep.request.status = status
         self.cond.notify_all()
 
-    def _link_down(self, state: str) -> None:
-        self._cancel_requests(-errno.ESHUTDOWN)
+    def _link_down(self, state: str, *, cancel: bool = True) -> None:
+        if cancel:
+            self._cancel_requests(-errno.ESHUTDOWN)
+        self._bus_epoch += 1
         self.link_speed = Speed.UNKNOWN
         self.address = 0
         self._abandon_ep0()
@@ -249,14 +269,18 @@ class FakeRawGadgetKernel:
     # --- ioctl ----------------------------------------------------------------
 
     def ioctl(self, fd: int, request: int, arg: int | bytearray) -> int:
+        """The injected :data:`~yoke.usb.rawgadget.RawIoctl`: ``-errno``, no raise."""
         with self.cond:
             self.ioctl_calls += 1
             if fd != self._fd:
-                raise OSError(errno.EBADF, "bad fd")
+                return -errno.EBADF
             handler = _HANDLERS.get(request)
             if handler is None:
-                raise OSError(errno.EINVAL, f"unknown ioctl {request:#x}")
-            return handler(self, arg)
+                return -errno.ENOTTY
+            try:
+                return handler(self, arg)
+            except OSError as exc:
+                return -(exc.errno or errno.EIO)
 
     def _init(self, arg: int | bytearray) -> int:
         assert isinstance(arg, bytearray)
@@ -277,8 +301,11 @@ class FakeRawGadgetKernel:
             raise OSError(errno.EINVAL, "RUN takes no argument")
         if self.dev_state != "initialized":
             raise OSError(errno.EINVAL, "device is not initialized")
-        if self._init_names != (self.name, self.name):
-            raise OSError(errno.ENODEV, "no such UDC")
+        if self._init_names != (self.gadget_name, self.name):
+            # gadget_bind() returns -ENODEV, so match_existing_only makes
+            # usb_gadget_register_driver() report -EBUSY.
+            self.log.append(f"RUN: no UDC matches {self._init_names}")
+            raise OSError(errno.EBUSY, "couldn't find an available UDC")
         if self.busy_with_other_gadget:
             raise OSError(errno.EBUSY, "UDC is bound to another gadget")
         self.dev_state = "running"
@@ -309,9 +336,22 @@ class FakeRawGadgetKernel:
         ):
             raise OSError(errno.EBUSY, "ep0 wrong direction")
         setup = self._ep0_setup
-        self.ep0_in_pending = self.ep0_out_pending = False
         if not self._ep0_waiting or setup is None:
-            return 0 if not is_in else length  # host abandoned the transfer
+            # The host abandoned this transfer: the reply is queued but no
+            # token will ever complete it, so the pending flags stay set (and
+            # later SETUPs stall) until a bus reset flushes ep0 or a signal.
+            self.ep0_queued = True
+            epoch = self._bus_epoch
+            try:
+                self._wait(
+                    lambda: self._bus_epoch != epoch or self.dev_state != "running"
+                )
+            finally:
+                self.ep0_queued = False
+                self.ep0_in_pending = self.ep0_out_pending = False
+            self.log.append("late ep0 reply flushed")
+            raise OSError(errno.ECONNRESET, "ep0 request flushed")
+        self.ep0_in_pending = self.ep0_out_pending = False
         if is_in:
             data = bytes(arg[HEADROOM : HEADROOM + length])
             self._ep0_result = ControlResult(
@@ -428,7 +468,7 @@ class FakeRawGadgetKernel:
             raise OSError(errno.EBUSY, "urb already queued")
         if is_in != bool(ep.address & 0x80):
             raise OSError(errno.EINVAL, "wrong direction")
-        request = _Request(thread=threading.get_ident())
+        request = _Request(thread=threading.get_ident(), started=not ep.halted)
         if is_in:
             request.data = bytes(arg[HEADROOM : HEADROOM + length])
             request.zero = bool(flags & rawgadget.USB_RAW_IO_FLAGS_ZERO)
@@ -502,6 +542,7 @@ class FakeRawGadgetKernel:
             if not self.bound:
                 raise ConnectionError("no gadget on the bus")
             self._cancel_requests(-errno.ESHUTDOWN)
+            self._bus_epoch += 1
             for ep in self._eps:
                 ep.halted = ep.wedged = False
             self.address = 0
@@ -511,8 +552,9 @@ class FakeRawGadgetKernel:
             self._queue_event(EventType.RESET)
 
     def host_disconnect(self) -> None:
+        """VBUS loss: dwc3's disconnect interrupt does not give requests back."""
         with self.cond:
-            self._link_down("not attached")
+            self._link_down("not attached", cancel=False)
             if self.bound:
                 self._queue_event(EventType.DISCONNECT)
 
@@ -561,8 +603,18 @@ class FakeRawGadgetKernel:
                     return ControlResult("stall")
                 if enable:
                     ep.halted = True
-                elif not ep.wedged:
-                    ep.halted = False
+                else:
+                    request = ep.request
+                    if request is not None and request.status is None:
+                        if request.started and self.clear_halt_cancels:
+                            # __dwc3_gadget_ep_set_halt(value=0): stop the
+                            # transfer, give started requests back -EPIPE.
+                            request.status = -errno.EPIPE
+                            self.log.append(f"clear-halt EPIPE {ep.address:#04x}")
+                        else:
+                            request.started = True
+                    if not ep.wedged:
+                        ep.halted = False
                 self.cond.notify_all()
                 return ControlResult("ack")
         if setup.request == ch9.SET_CONFIGURATION and setup.value == 0:

@@ -120,3 +120,34 @@ the computer side.
   not generic. It remains a possible separate backend.
 - **A Yoke-specific transport.** Rejected: management and USB transport
   must stay open and interoperable (`doc/design/USB-ENDPOINT.md`).
+
+## Amendment (2026-11-04, cold review)
+
+An independent review found two hardware-blocking defects that the first
+simulation encoded as assumptions. The code was corrected, and the
+simulation now models the kernel behavior. A real-kernel loopback test
+(`make verify-usb-kernel`: QEMU/KVM, dummy_hcd, usbip-host, Raw Gadget)
+exercises the production worker.
+
+- **Gadget name.** `usb_raw_init.driver_name` is compared with
+  `usb_gadget.name` (`dwc3-gadget`, `dummy_udc`), not the UDC device name;
+  RUN otherwise fails with EBUSY. The name is inferred from the UDC's
+  platform driver, with an override.
+- **Cancellation.** CPython's `fcntl.ioctl` retries EINTR when no Python
+  handler raised, and handlers never run off the main thread, so SIGUSR1
+  could not cancel a blocked ioctl and teardown could not be confirmed.
+  - Raw Gadget ioctls now go through ctypes (stdlib, GIL released, called
+    exactly once), and the dispatch never retries.
+  - The VM test's `fcntl` negative control reproduces the failure.
+- **Host clear-halt.** dwc3 returns started requests with -EPIPE when the
+  host clears an endpoint's halt. The pump forwards the clear to the device
+  and retries the I/O.
+- **Remote stall.** The remote halt is cleared once per local halt. An IN
+  endpoint that stalls again is parked until host activity, or a backoff of
+  up to 2 s, so it never spins.
+- **Unlink ordering.** RET_UNLINK may precede a late RET_SUBMIT (stub_tx
+  order) or carry the URB's own status. The client keeps tombstones and
+  never drops the connection for it.
+- **Control direction.** An IN request with wLength 0 travels as an OUT URB,
+  as Linux expects.
+- **BOT sizing.** A CBW is parsed only when no data phase is planned.

@@ -110,10 +110,12 @@ class UsbGadgetDriver:
         except ControlError as exc:
             raise DriverError(str(exc)) from exc
 
-    def _send(self, current: WorkerStatus, target: Target | None) -> WorkerStatus:
+    def _send(
+        self, current: WorkerStatus, target: Target | None
+    ) -> tuple[int, WorkerStatus]:
         generation = max(current.generation, self._generation or 0) + 1
         try:
-            return self._client.route(Route(generation, target))
+            return generation, self._client.route(Route(generation, target))
         except ControlError as exc:
             raise DriverError(str(exc)) from exc
 
@@ -132,11 +134,12 @@ class UsbGadgetDriver:
             self._generation = current.generation
             self._error = None
             return
-        status = self._send(current, target)
-        if status.target != target:
+        sent, status = self._send(current, target)
+        if status.generation != sent or status.target != target:
             self._error = (
-                f"gadget worker did not adopt route to {target} "
-                f"(state {status.state}: {status.detail})"
+                f"gadget worker did not adopt route {sent} to {target} "
+                f"(generation {status.generation}, state {status.state}: "
+                f"{status.detail})"
             )
             raise DriverError(self._error)
         self._generation = status.generation
@@ -150,8 +153,12 @@ class UsbGadgetDriver:
             self._generation = current.generation
             self._error = None
             return
-        status = self._send(current, None)
-        if status.target is not None or status.state != "idle":
+        sent, status = self._send(current, None)
+        if (
+            status.generation != sent
+            or status.target is not None
+            or status.state != "idle"
+        ):
             self._error = (
                 f"gadget teardown unconfirmed (state {status.state}: {status.detail})"
             )

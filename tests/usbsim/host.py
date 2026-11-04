@@ -7,12 +7,12 @@ as 255 bytes, string reads with a language ID and with short then exact
 lengths, the Microsoft OS string probe, DEVICE_QUALIFIER for USB 2.0 devices
 at full speed). They are models, not captured traces.
 
-Every control transfer is timed. Standard requests must meet USB 2.0
-§9.2.6.4: a request without a data stage within 50 ms, and a data stage
-within 500 ms. Class and vendor requests use the 5 s timeout common to host
-stacks. A miss, a reply longer than wLength, or a short reply that ends on a
-packet boundary without a zero-length packet is recorded as a violation and
-fails the transfer, as it would on a real host.
+Every control transfer is timed against USB 2.0 §9.2.6.4 (50 ms without a
+data stage, 500 ms for a data stage). Those are device requirements; real
+host stacks wait about 5 s, so a miss is recorded in ``deadline_misses`` (an
+advisory metric) and only the 5 s host timeout fails the transfer. A reply
+longer than wLength, or a short reply that ends on a packet boundary without
+a zero-length packet, is a hard violation, as it would be on a real host.
 """
 
 from __future__ import annotations
@@ -25,6 +25,7 @@ from yoke.usb import ch9
 from yoke.usb.ch9 import Setup, Speed
 
 CLASS_TIMEOUT = 5.0
+HOST_TIMEOUT = 5.0  # Linux USB_CTRL_GET_TIMEOUT; Windows and macOS are similar
 
 
 class StallError(Exception):
@@ -71,6 +72,7 @@ class UsbHost:
         self.ep0_size = ep0_size
         self.speed = Speed.UNKNOWN
         self.violations: list[str] = []
+        self.deadline_misses: list[str] = []
         self.records: list[ControlRecord] = []
         self.address = 0
 
@@ -107,16 +109,17 @@ class UsbHost:
         if not setup.is_in and len(data) != setup.length:
             raise ValueError("OUT data must match wLength")
         deadline = self.deadline(setup)
-        # Wait a little past the deadline so lateness is measured, not hidden.
-        result = self.kernel.host_control(setup, data, deadline * 4)
+        result = self.kernel.host_control(setup, data, HOST_TIMEOUT)
         self.records.append(
             ControlRecord(setup, result.outcome, result.elapsed, deadline)
         )
-        if result.outcome == "timeout" or result.elapsed > deadline:
-            self.violations.append(
+        if result.elapsed > deadline:
+            self.deadline_misses.append(
                 f"{setup} took {result.elapsed * 1000:.1f} ms "
-                f"(limit {deadline * 1000:.0f} ms)"
+                f"(§9.2.6.4 limit {deadline * 1000:.0f} ms)"
             )
+        if result.outcome == "timeout":
+            self.violations.append(f"{setup}: no answer within {HOST_TIMEOUT} s")
             raise HostTimeoutError(str(setup))
         if result.outcome == "stall":
             raise StallError(str(setup))

@@ -7,6 +7,8 @@
 #   modprobe raw_gadget   (CONFIG_USB_RAW_GADGET; bench-unverified on Radxa)
 #   unbind any configfs gadget (ADB/NCM) from fcc00000.usb and put the
 #   DWC3 port in peripheral/OTG device role.
+# Raw Gadget needs the controller's gadget name (dwc3: dwc3-gadget); the
+# worker infers it from the UDC's driver, or pass --gadget-driver NAME.
 # The agent's usb-gadget driver connects to /run/yoke-gadget/control.sock
 # (group yoke). Remove --socket and add --target HOST:PORT/BUSID for a
 # standalone bench run without the agent.

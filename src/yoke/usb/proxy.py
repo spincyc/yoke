@@ -14,11 +14,17 @@ completions into one gadget write; the UDC re-packetizes them into the same
 packets. Bulk-Only Transport interfaces derive exact transfer sizes from
 each CBW (a payload inspection confined to this worker process).
 
-A remote STALL is reproduced locally: the pump writes any partial data,
-unlinks later URBs, halts the gadget endpoint and immediately clears the
-remote halt; the computer's own CLEAR_FEATURE is handled by the UDC. The
-owner reacts to :attr:`Proxy.ended` by calling :meth:`Proxy.stop`, which
-closes the gadget so the computer sees a disconnect.
+A remote IN STALL is reproduced exactly: the pump writes any partial data,
+unlinks later URBs, halts the gadget endpoint, clears the remote halt once
+and probes (parking with backoff if the device stays halted). A remote OUT
+STALL reaches the computer one transaction late, because the UDC already
+acknowledged the refused packet; a control OUT request *with data* is
+acknowledged before the device answers, so its STALL cannot reach the
+computer at all (counted as ``late_out_stalls``). The computer's own
+CLEAR_FEATURE(HALT) is answered by the UDC; dwc3 surfaces it only as EPIPE
+on a started request, which the pump mirrors to the device. The owner
+reacts to :attr:`Proxy.ended` by calling :meth:`Proxy.stop`, which closes
+the gadget so the computer sees a disconnect.
 """
 
 from __future__ import annotations
@@ -45,6 +51,7 @@ from yoke.usb.gadget import (
     EventType,
     GadgetBackend,
     GadgetError,
+    GadgetHaltClearedError,
     GadgetInterruptedError,
     GadgetShutdownError,
     UdcEndpoint,
@@ -88,6 +95,9 @@ class Counters:
     forwarded: int = 0
     local_stalls: int = 0
     remote_stalls: int = 0
+    remote_clears: int = 0
+    host_clear_halts: int = 0
+    parked: int = 0
     transaction_errors: int = 0
     late_out_stalls: int = 0
     dropped_out: int = 0
@@ -139,6 +149,8 @@ class _Pump:
             proxy.presentation.remote_speed, endpoint.transfer_type, endpoint.interval
         )
         self.stopping = False
+        self.kicked = False
+        self.remote_halted = False  # remote stalled; no success since
         self.cond = threading.Condition()
         self.inflight: deque[Urb] = deque()
         self.sizes: dict[int, int] = {}
@@ -147,6 +159,12 @@ class _Pump:
 
     def wake(self, _urb: Urb | None = None) -> None:
         with self.cond:
+            self.cond.notify_all()
+
+    def kick(self) -> None:
+        """Host activity that may have released a device-side halt."""
+        with self.cond:
+            self.kicked = True
             self.cond.notify_all()
 
     def request_stop(self) -> None:
@@ -167,51 +185,102 @@ class _Pump:
     def _run(self) -> None:
         raise NotImplementedError
 
-    def _unlink(self, urbs: list[Urb]) -> None:
-        """Unlink not-yet-complete URBs and wait for every resolution."""
-        conn = self.proxy.conn
-        for urb in urbs:
-            if not urb.done:
-                with contextlib.suppress(UsbipError):
-                    conn.unlink(urb, callback=self.wake)
-        deadline = time.monotonic() + self.proxy.policy.stop_timeout
-        with self.cond:
-            while not all(u.done for u in urbs):
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise TeardownError(
-                        f"endpoint {self.address:#04x}: unlink unconfirmed"
-                    )
-                self.cond.wait(remaining)
-
-    def _halt_and_recover(self, later: list[Urb]) -> None:
-        """Reproduce a remote STALL locally, then clear the remote halt."""
-        self._unlink(later)
-        if self.bot is not None and self.endpoint.is_in:
-            self.bot.requeue_in([self.sizes.pop(id(u), self.size) for u in later])
-        backend = self.proxy.backend
+    def _cancel(self, urbs: list[Urb]) -> None:
+        """Unlink URBs and wait (bounded) until every one is resolved."""
         try:
-            backend.ep_set_halt(self.handle)
-        except GadgetError as exc:
-            if self.stopping:
-                raise _Stop from exc
-            self.proxy._fault(f"halt {self.address:#04x}: {exc}")
-        self.proxy.counters.local_stalls += 1
+            self.proxy.conn.cancel(urbs, timeout=self.proxy.policy.stop_timeout)
+        except TimeoutError as exc:
+            raise TeardownError(
+                f"endpoint {self.address:#04x}: unlink unconfirmed"
+            ) from exc
+
+    def _take_inflight(self) -> list[Urb]:
+        with self.cond:
+            urbs = list(self.inflight)
+            self.inflight.clear()
+        return urbs
+
+    def _clear_remote(self) -> None:
+        """CLEAR_FEATURE(ENDPOINT_HALT) on the device (stub: usb_clear_halt).
+
+        Called only while no URB of this endpoint is in flight, because Linux
+        resets the host endpoint state when it clears a halt.
+        """
         clear = Setup(
             ch9.RECIP_ENDPOINT,
             ch9.CLEAR_FEATURE,
             ch9.FEATURE_ENDPOINT_HALT,
             self.address,
         )
-        result = self.proxy.conn.control(
-            clear, timeout=self.proxy.policy.control_timeout
-        )
-        if result is None:
+        self.proxy.counters.remote_clears += 1
+        if (
+            self.proxy.conn.control(clear, timeout=self.proxy.policy.control_timeout)
+            is None
+        ):
             self.proxy._fault(f"remote refused to clear halt on {self.address:#04x}")
+
+    def _local_halt(self) -> None:
+        try:
+            self.proxy.backend.ep_set_halt(self.handle)
+        except GadgetError as exc:
+            if self.stopping:
+                raise _Stop from exc
+            self.proxy._fault(f"halt {self.address:#04x}: {exc}")
+        self.proxy.counters.local_stalls += 1
+
+    def _host_cleared(self) -> None:
+        """The UDC returned a started request with EPIPE: the host cleared
+        this endpoint's halt (dwc3). Mirror it on the device, then retry."""
+        self.proxy.counters.host_clear_halts += 1
+        later = self._take_inflight()
+        self._cancel(later)
+        self._requeue(later)
+        self._clear_remote()
+        self.remote_halted = False
+
+    def _requeue(self, urbs: list[Urb]) -> None:
+        sizes = [self.sizes.pop(id(u), self.size) for u in urbs]
+        if self.bot is not None and self.endpoint.is_in and urbs:
+            self.bot.requeue_in(sizes)
+
+    def _io(self, call: Callable[[], int], what: str) -> int:
+        while True:
+            try:
+                return call()
+            except GadgetInterruptedError as exc:
+                if self.stopping:
+                    raise _Stop from exc
+            except GadgetHaltClearedError:
+                if self.stopping:
+                    raise _Stop from None
+                self._host_cleared()
+            except GadgetShutdownError as exc:
+                raise _Stop from exc
+            except GadgetError as exc:
+                self.proxy._fault(f"{what} {self.address:#04x}: {exc}")
+                raise _Stop from exc
 
 
 class _InPump(_Pump):
-    """Device-to-computer: prefetch URBs, write completions in order."""
+    """Device-to-computer: prefetch URBs, write completions in order.
+
+    After a remote STALL the pump halts the gadget endpoint, clears the
+    remote halt once and probes with a single URB. A device that stalls the
+    probe too is left alone ("parked") until host activity (a forwarded
+    control request or OUT traffic) or an exponential backoff (≤ 2 s), so a
+    device that stays halted until a class reset cannot cause a submit storm.
+    """
+
+    PARK_MIN = 0.05
+    PARK_MAX = 2.0
+
+    def __init__(
+        self, proxy: Proxy, endpoint: Endpoint, handle: int, bot: _BotLink | None
+    ) -> None:
+        super().__init__(proxy, endpoint, handle, bot)
+        self.probing = False
+        self.parked_until: float | None = None
+        self.backoff = self.PARK_MIN
 
     def _next_size(self) -> int | None:
         if self.bot is not None:
@@ -221,29 +290,34 @@ class _InPump(_Pump):
     def _can_submit(self, depth: int) -> bool:
         """A BOT size hint arrived while the queue has room (no lost wakeup)."""
         return (
-            self.bot is not None
+            self.parked_until is None
+            and self.bot is not None
             and bool(self.bot.in_sizes)
             and len(self.inflight) < depth
         )
 
     def _write(self, buf: bytearray, length: int, zero: bool) -> None:
         backend = self.proxy.backend
-        while True:
-            try:
-                backend.ep_write(self.handle, buf, length, zero)
-            except GadgetInterruptedError as exc:
-                if self.stopping:
-                    raise _Stop from exc
-                continue
-            except GadgetShutdownError as exc:
-                raise _Stop from exc
-            except GadgetError as exc:
-                self.proxy._fault(f"write {self.address:#04x}: {exc}")
-                raise _Stop from exc
-            counters = self.proxy.counters
-            counters.gadget_writes += 1
-            counters.in_bytes += length
-            return
+        self._io(lambda: backend.ep_write(self.handle, buf, length, zero), "write")
+        counters = self.proxy.counters
+        counters.gadget_writes += 1
+        counters.in_bytes += length
+
+    def _unpark(self) -> None:
+        """Wait while parked; then clear the remote halt and probe again."""
+        with self.cond:
+            while not self.stopping and not self.kicked:
+                assert self.parked_until is not None
+                remaining = self.parked_until - time.monotonic()
+                if remaining <= 0:
+                    break
+                self.cond.wait(remaining)
+            if self.stopping:
+                raise _Stop
+            self.kicked = False
+            self.parked_until = None
+        self._clear_remote()
+        self.probing = True
 
     def _run(self) -> None:
         policy = self.proxy.policy
@@ -255,8 +329,11 @@ class _InPump(_Pump):
         )
         scratch = bytearray(HEADROOM + policy.max_transfer)
         while True:
+            if self.parked_until is not None:
+                self._unpark()
+            limit = 1 if self.probing else depth
             batch: list[Submission] = []
-            while len(self.inflight) + len(batch) < depth and not self.stopping:
+            while len(self.inflight) + len(batch) < limit and not self.stopping:
                 size = self._next_size()
                 if size is None:
                     break
@@ -282,7 +359,7 @@ class _InPump(_Pump):
                 while (
                     not self.stopping
                     and not (self.inflight and self.inflight[0].done)
-                    and not self._can_submit(depth)
+                    and not self._can_submit(limit)
                 ):
                     self.cond.wait()
                 if self.stopping:
@@ -301,11 +378,20 @@ class _InPump(_Pump):
                 raise ConnectionLostError(str(urb.error))
             assert urb.result is not None
             status = urb.result.status
+            if urb.result.unlinked or status in CANCELLED:
+                self._requeue([urb])
+                if self.stopping:
+                    raise _Stop
+                index += 1
+                continue
             if status == 0:
                 run: list[tuple[int, int]] = []
                 for item in done[index:] if policy.coalesce_in else [urb]:
-                    assert item.result is not None or item.error is not None
-                    if item.result is None or item.result.status != 0:
+                    if (
+                        item.result is None
+                        or item.result.status != 0
+                        or item.result.unlinked
+                    ):
                         break
                     run.append((item.result.actual_length, item.length))
                 count, total, zero = in_write_plan(
@@ -328,17 +414,15 @@ class _InPump(_Pump):
                     buf = scratch
                 for item in done[index : index + count]:
                     self.sizes.pop(id(item), None)
+                self.probing = False
+                self.remote_halted = False
+                self.backoff = self.PARK_MIN
                 self._write(buf, total, zero)
                 index += count
                 continue
             self.sizes.pop(id(urb), None)
             if status in GONE:
                 raise ConnectionLostError(f"device gone (status {status})")
-            if status in CANCELLED:
-                if self.stopping:
-                    raise _Stop
-                index += 1
-                continue
             # STALL (or a transaction error, reported to the computer as STALL).
             counters = self.proxy.counters
             if status == -usbip.EPIPE:
@@ -348,15 +432,32 @@ class _InPump(_Pump):
             if urb.result.actual_length:
                 assert urb.result.buffer is not None
                 self._write(urb.result.buffer, urb.result.actual_length, False)
-            with self.cond:
-                later = done[index + 1 :] + list(self.inflight)
-                self.inflight.clear()
-            self._halt_and_recover(later)
+            later = done[index + 1 :] + self._take_inflight()
+            self._cancel(later)
+            self._requeue([urb, *later] if self.bot is not None else later)
+            self._local_halt()
+            if self.remote_halted and not self.kicked:
+                # The device stalled again right after we cleared it: it is
+                # waiting for something only the host can do. Park.
+                self.parked_until = time.monotonic() + self.backoff
+                self.backoff = min(self.backoff * 2, self.PARK_MAX)
+                counters.parked += 1
+            else:
+                with self.cond:
+                    self.kicked = False
+                self._clear_remote()
+                self.remote_halted = True
+                self.probing = True
             return
 
 
 class _OutPump(_Pump):
-    """Computer-to-device: read from the gadget, submit in order."""
+    """Computer-to-device: read from the gadget, submit in order.
+
+    After a remote STALL the remote halt is cleared immediately and again
+    before each later transfer until one succeeds, so a device that keeps its
+    halt until a class reset (BOT) is released once the host has done it.
+    """
 
     def __init__(
         self, proxy: Proxy, endpoint: Endpoint, handle: int, bot: _BotLink | None
@@ -367,20 +468,9 @@ class _OutPump(_Pump):
 
     def _read(self, buf: bytearray, size: int) -> int:
         backend = self.proxy.backend
-        while True:
-            try:
-                count = backend.ep_read(self.handle, buf, size)
-            except GadgetInterruptedError as exc:
-                if self.stopping:
-                    raise _Stop from exc
-                continue
-            except GadgetShutdownError as exc:
-                raise _Stop from exc
-            except GadgetError as exc:
-                self.proxy._fault(f"read {self.address:#04x}: {exc}")
-                raise _Stop from exc
-            self.proxy.counters.gadget_reads += 1
-            return count
+        count = self._io(lambda: backend.ep_read(self.handle, buf, size), "read")
+        self.proxy.counters.gadget_reads += 1
+        return count
 
     def _completed(self) -> tuple[list[Urb], bool]:
         """Pop completed head URBs; report whether one of them failed."""
@@ -393,9 +483,10 @@ class _OutPump(_Pump):
                 if urb.error is not None:
                     raise ConnectionLostError(str(urb.error))
                 assert urb.result is not None
-                if urb.result.status != 0:
+                if urb.result.status != 0 or urb.result.unlinked:
                     failed = True
                     break
+                self.remote_halted = False
         return done, failed
 
     def _handle_failure(self, urb: Urb) -> None:
@@ -403,7 +494,7 @@ class _OutPump(_Pump):
         status = urb.result.status
         if status in GONE:
             raise ConnectionLostError(f"device gone (status {status})")
-        if status in CANCELLED:
+        if urb.result.unlinked or status in CANCELLED:
             if self.stopping:
                 raise _Stop
             return
@@ -412,12 +503,13 @@ class _OutPump(_Pump):
             counters.remote_stalls += 1
         else:
             counters.transaction_errors += 1
-        with self.cond:
-            later = list(self.inflight)
-            self.inflight.clear()
+        later = self._take_inflight()
         if self.proxy.policy.out_window > 1:
             counters.late_out_stalls += 1
-        self._halt_and_recover(later)
+        self._cancel(later)
+        self._local_halt()
+        self._clear_remote()
+        self.remote_halted = True
 
     def _run(self) -> None:
         policy = self.proxy.policy
@@ -435,7 +527,8 @@ class _OutPump(_Pump):
                     while not self.stopping and not self.inflight[0].done:
                         self.cond.wait()
                     continue
-            size = self.read_sizes.popleft() if self.read_sizes else self.size
+            planned = bool(self.read_sizes)
+            size = self.read_sizes.popleft() if planned else self.size
             count = self._read(buf, size)
             with self.cond:
                 late = any(
@@ -446,7 +539,9 @@ class _OutPump(_Pump):
                 # acknowledged this data; the device would have refused it.
                 self.proxy.counters.dropped_out += 1
                 continue
-            if self.bot is not None and count == 31:
+            if self.remote_halted and not self.inflight:
+                self._clear_remote()  # the host has cleared; mirror it first
+            if self.bot is not None and count == 31 and not planned:
                 cbw = parse_cbw(memoryview(buf)[HEADROOM : HEADROOM + count])
                 if cbw is not None:
                     self._plan(*cbw)
@@ -464,6 +559,7 @@ class _OutPump(_Pump):
             counters.out_bytes += count
             with self.cond:
                 self.inflight.append(urb)
+            self.proxy._kick_parked()
 
     def _plan(self, length: int, data_in: bool) -> None:
         assert self.bot is not None
@@ -509,6 +605,7 @@ class Proxy:
         self._handles: dict[int, int] = {}
         self._udc_endpoints: list[UdcEndpoint] = []
         self._stopping = False
+        self._stop_lock = threading.Lock()
         self._event_thread = threading.Thread(
             target=self._event_main, name="usb-gadget-events", daemon=True
         )
@@ -564,7 +661,13 @@ class Proxy:
         self._log(message)
         self.error = message
 
-    def _interrupt_join(self, thread: threading.Thread, deadline: float) -> bool:
+    def _interrupt_join(self, thread: threading.Thread, timeout: float) -> bool:
+        """Signal ``thread`` every 20 ms until it leaves a blocking call.
+
+        A signal that arrives while the thread is not inside the ioctl is
+        lost, so it is repeated. Each thread gets its own ``timeout``.
+        """
+        deadline = time.monotonic() + timeout
         while thread.is_alive() and time.monotonic() < deadline:
             ident = thread.ident
             if ident is not None:
@@ -574,21 +677,32 @@ class Proxy:
         return not thread.is_alive()
 
     def stop(self) -> None:
-        """Confirmed teardown; raise :class:`TeardownError` if unconfirmed."""
+        """Confirmed teardown; raise :class:`TeardownError` if unconfirmed.
+
+        Idempotent and serialized: concurrent callers share one teardown.
+        """
+        with self._stop_lock:
+            if self.state == "stopped":
+                return
+            self._stop_locked()
+
+    def _stop_locked(self) -> None:
         self._stopping = True
         self._end("stopped")
-        deadline = time.monotonic() + self.policy.stop_timeout
+        timeout = self.policy.stop_timeout
         problems = []
         if self._event_thread.is_alive() and not self._interrupt_join(
-            self._event_thread, deadline
+            self._event_thread, timeout
         ):
             problems.append("event thread")
         try:
-            self._stop_pumps(list(self._pumps.values()), deadline)
+            self._stop_pumps(list(self._pumps.values()))
         except TeardownError as exc:
             problems.append(str(exc))
         for thread in self._reset_threads:
-            thread.join(max(0.0, deadline - time.monotonic()))
+            thread.join(timeout)
+            if thread.is_alive():
+                problems.append("remote reset thread")
         self.conn.close()
         if problems:
             self.error = f"teardown unconfirmed: {'; '.join(problems)}"
@@ -708,7 +822,16 @@ class Proxy:
     def _remote_control(self, setup: Setup, data: bytes = b"") -> bytes | None:
         self._gate()
         self.counters.forwarded += 1
-        return self.conn.control(setup, data, timeout=self.policy.control_timeout)
+        try:
+            return self.conn.control(setup, data, timeout=self.policy.control_timeout)
+        finally:
+            self._kick_parked()
+
+    def _kick_parked(self) -> None:
+        """Host activity may have released a device-side halt (e.g. BOT reset)."""
+        for pump in list(self._pumps.values()):
+            if isinstance(pump, _InPump) and pump.parked_until is not None:
+                pump.kick()
 
     def _forward(self, setup: Setup, cache: bool) -> None:
         data = b""
@@ -787,15 +910,14 @@ class Proxy:
                 pump.bot_in_packet = in_packets[0]
         return pumps
 
-    def _stop_pumps(self, pumps: list[_Pump], deadline: float | None = None) -> None:
-        if deadline is None:
-            deadline = time.monotonic() + self.policy.stop_timeout
+    def _stop_pumps(self, pumps: list[_Pump]) -> None:
         for pump in pumps:
             pump.request_stop()
+        timeout = self.policy.stop_timeout
         stuck = [
             f"{p.address:#04x}"
             for p in pumps
-            if p.thread.is_alive() and not self._interrupt_join(p.thread, deadline)
+            if p.thread.is_alive() and not self._interrupt_join(p.thread, timeout)
         ]
         if stuck:
             raise TeardownError(f"endpoint pumps did not stop: {', '.join(stuck)}")
@@ -804,7 +926,7 @@ class Proxy:
                 outstanding = list(pump.inflight)
                 pump.inflight.clear()
             if outstanding and self.conn.lost is None:
-                pump._unlink(outstanding)
+                pump._cancel(outstanding)
             self._pumps.pop(pump.address, None)
 
     def _disable_endpoints(self, addresses: list[int]) -> None:
