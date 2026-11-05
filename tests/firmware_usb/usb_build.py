@@ -138,7 +138,7 @@ def build(target: Path, names: tuple[str, ...], flags: list[str] = FLAGS) -> Pat
         pytest.skip("host C compiler unavailable; target build is a separate check")
     if not (NATIVE_YUSB / "include").is_dir() or not (NATIVE_YWP / "include").is_dir():
         pytest.skip("native cores unavailable (set YOKE_NATIVE_YUSB/YOKE_NATIVE_YWP)")
-    subprocess.run(
+    result = subprocess.run(
         [
             compiler,
             *flags,
@@ -150,10 +150,12 @@ def build(target: Path, names: tuple[str, ...], flags: list[str] = FLAGS) -> Pat
             str(target),
             "-lm",
         ],
-        check=True,
         capture_output=True,
         text=True,
     )
+    if result.returncode != 0:
+        # Show the compiler's own diagnostics; CalledProcessError hides them.
+        raise RuntimeError(f"building {target.name} failed:\n{result.stderr[-8000:]}")
     return target
 
 

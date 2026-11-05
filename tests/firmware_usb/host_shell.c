@@ -253,12 +253,11 @@ int yoke_usbh_submit(yoke_usbh_urb_t *urb)
 }
 void yoke_usbh_cancel(yoke_usbh_urb_t *urb) { (void)urb; }
 
-static unsigned polls, routes;
+static unsigned polls;
 static void role_route(uint32_t generation, bool detach, const char *producer, const char *media,
                        size_t media_len)
 {
     (void)generation; (void)detach; (void)producer; (void)media; (void)media_len;
-    routes++;
 }
 static void role_poll(uint32_t tag)
 {
