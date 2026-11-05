@@ -1,21 +1,34 @@
 # Yoke implementation handoff
 
-Updated 2026-11-04. Software for both USB boxes and the IR endpoint is
-implemented and verified **in software only**: a pure-software simulation
-and, for USB, a real-kernel loopback in a VM. **Nothing has run on the
-boards.** The ordered ZERO 3E boards and PoE HAT were expected
-2026-11-05. The first bench session decides whether this works.
+Updated 2026-11-05. The USB product is now a **tiered line** (ADR 0027).
+Every tier shares one portable C core, and everything is verified **in
+software only**: simulation, differential tests against the Python
+reference, fuzzing, and a real-kernel VM loopback. **Nothing has run on
+the boards yet.** The ZERO 3E boards, the PoE HAT and the ESP32-S3
+DevKitC + W5500 parts arrived 2026-11-05. Their bench sessions decide
+what works.
+
+## Tiers
+
+| Tier | Hardware | Firmware/software | Status |
+|---|---|---|---|
+| 1: HID, controllers, serial, MIDI (low/full speed) | ESP32-S3 DevKitC N16R8 + W5500 (computer side bus-powered; device side USB-A breakout on GPIO19/20) | `firmware/esp32-usb` (ADR 0030) on `native/yusb` + `native/ywp` | Builds with zero warnings; 182 firmware host tests; self-test image ready to flash |
+| 1.5: high-speed compatible, about 11 MB/s floor | ESP32-P4 (e.g. M5Stack Unit PoE-P4) | Same app, FILL+LZ4 compression (ADR 0028) | Build only; no hardware |
+| 2: full USB 2.0 | Radxa ZERO 3E; PoE HAT on the device side only | Kernel `usbip-host` on the device side; native C `yoke-gadget-worker` on the computer side (Python worker kept as reference) | VM: about 3x less CPU per MiB than Python; bench next |
+| 3: USB 3.0 | none | research only | — |
 
 ## State at a glance
 
 | Area | State | Evidence | Next |
 |---|---|---|---|
-| Computer-side USB bridge | Userspace USB/IP client + Raw Gadget presentation in a separate worker (ADRs 0021/0022) | `tests/usbsim` end-to-end simulation; `make verify-usb-kernel` (QEMU/KVM, dummy_hcd + raw_gadget + usbip-host, 8 MiB checksummed I/O at 480M, detach, remote loss, usbipd restart) | Seven-step bench procedure in `doc/design/USB-DATAPATH.md` |
-| Device-side USB | Stock usbipd/usbip-host; data-plane admission limited to the authenticated paired consumer (nftables, ADR 0024); `packaging/zero3e/install.sh device` | Offline packaging tests; `systemd-analyze verify` | Bench: bind, admission ruleset, peripheral power |
-| Control plane | Clock-robust admission, bounded sequence floor, transmitted-byte auth with vectors, journal logging, explicit open mode (ADR 0023) | `make verify`, `make simulate` | — |
-| Computer-side power | Powered by the computer through the OTG port; no PoE HAT (owner, 2026-11-04) | Schematic: Type-C VBUS feeds `+5V_INPUT`, sink-only CC | Measure draw at idle/boot/load with a USB meter; prefer USB 3/USB-C ports |
-| IR | Standalone ESP32-S3/W5500 PoE endpoint, RMT output, opt-in iTach subset on TCP 4998, mutual-TLS admin/OTA (ADRs 0025/0026) | `make verify-firmware` (132 host tests, waveform model), target build 616,016 B | Bench procedure in `doc/design/IR-ENDPOINT.md`; one USB reflash for the 0.2.0 partition table |
-| Housing | R7: compact PoE device box 81.4 × 36.25 × 41.7 mm and bare computer box 81.4 × 36.25 × 18.5 mm sharing one base | Independent cold review (second pass after a joint FAIL); one plate submitted 2026-11-04 20:29:59 UTC and verified PRINTING ([print record](hardware/usb-housing/r7/print.json)) | Unpowered fit, seam/HAT-gap bands, cable seating, ten service cycles, powered cooling |
+| Portable USB/IP core `native/yusb` | Codec, descriptor cache, computer-side presentation, device-side export with a per-URB pool, fencing, exact footprints, YX extension (ADRs 0027, 0028) | usbsim scenarios on both workers, Python differential tests, 7 fuzz targets, TSan, QEMU/KVM real-kernel loopback (native and Python workers, export core through vhci-hcd) | Bench on the ZERO 3E; usbmon traces of real devices to set YX defaults |
+| Pairing in C `native/ywp` | Wire-identical YWP/1 frames and node, CPython-exact numbers, NVS blob (ADR 0029) | 27 vectors, C/Python differential decode, lockstep against `Node`, every simnet scenario in four mixes with byte-identical traffic, real-socket interop with `yoke agent` | Target timing on ESP32 (`/v1/status` `ywp.cost`) |
+| ESP32 USB box | Computer role (TinyUSB mirror) and device role (USB Host Library export), YWP/1 pairing, SNTP or forward-only clock PUT, PSRAM | `python3 firmware/verify.py --offline` (182 host tests, S3/P4/IR images) | Bench procedure in `doc/design/USB-TIER1.md` |
+| Computer-side USB bridge (Linux) | Native worker plus the Python reference over Raw Gadget (ADRs 0021, 0022) | as above | Seven-step bench procedure in `doc/design/USB-DATAPATH.md` |
+| Device-side USB (Linux) | Stock usbipd/usbip-host; data-plane admission (ADR 0024); `packaging/zero3e/install.sh device` | Offline packaging tests | Bench: bind, admission ruleset, peripheral power |
+| Control plane | Clock-robust admission, transmitted-byte auth, explicit open mode (ADR 0023); `node.py` compares opaque JSON by canonical bytes and keeps admitted consumers' rows (ADR 0029) | `make verify`, `make simulate` | — |
+| IR | ESP32-S3/W5500 RMT endpoint, iTach subset on TCP 4998 (ADRs 0025, 0026); shares `firmware/components` with the USB box | `firmware/verify.py` | Bench procedure in `doc/design/IR-ENDPOINT.md` |
+| Housing | R7 compact PoE and bare boxes, printed 2026-11-04 | [print record](hardware/usb-housing/r7/print.json) | Fit, seam and HAT-gap bands, cooling |
 
 ## Hardware decisions and their reasons
 
@@ -73,8 +86,15 @@ make verify               # format, lint, mypy --strict, tests, docs
 make simulate             # control fault campaign
 make verify-usb-kernel    # opt-in real-kernel USB loopback (QEMU/KVM, no root)
 make verify-firmware      # pinned ESP-IDF build + firmware host tests
-make benchmark-control benchmark-usb firmware-bench
+make native-usb fuzz-usb tsan-usb   # native worker build, fuzzers, ThreadSanitizer
+make ywp-fuzz ywp-bench   # native YWP/1 fuzzing and host cost
+make benchmark-control benchmark-usb benchmark-usbtrace firmware-bench firmware-usb-bench
 ```
+
+On a ZERO 3E: `make native-usb NATIVE_CC=gcc`, then
+`packaging/zero3e/install.sh computer --native-worker <path>`. Capture
+real-device traffic with `tools/usbtrace/capture.py` and replay it with
+`tools/usbtrace/replay.py` to choose YX defaults (`native/README.md`).
 
 Simulated and host-model numbers are software evidence only. None of them
 establishes hardware compatibility, throughput, or IR timing on silicon.
@@ -87,6 +107,9 @@ establishes hardware compatibility, throughput, or IR timing on silicon.
 | `doc/design/USB-DATAPATH.md` | Gadget data path, simulation, kernel test, bench procedure |
 | `doc/design/PROTOCOL.md`, `ARCHITECTURE.md` | Normative YWP/1 and current structure |
 | `doc/decisions/0021-*` … `0026-*` | 2026-11-04 decisions |
+| `doc/decisions/0027-*` … `0030-*` | 2026-11-05: tiers, native C cores, YX extension, ESP32 USB box |
+| `native/README.md`, `native/ywp/README.md` | Native cores: build, test, sizing, deliberate subsets |
+| `doc/design/USB-TIER1.md`, `firmware/esp32-usb/README.md` | ESP32 USB box design, wiring, flashing and bench procedure |
 | `doc/design/DEPLOYMENT.md`, `packaging/zero3e/` | Box install recipe |
 | `doc/design/IR-ENDPOINT.md`, `ESP32-UPDATES.md` | IR endpoint and its updater |
 | `doc/design/USB-HOUSING.md`, `hardware/usb-housing/r7/` | Enclosure revisions and R7 |

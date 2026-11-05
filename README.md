@@ -17,13 +17,19 @@ manager can control the boxes, but is optional.
 
 ## Development status
 
-The pairing software, stored settings, monitors and simulations exist.
-The computer-side box's USB bridge, which presents the remote device
-through its own USB port, is implemented. It passes a pure-software
-end-to-end simulation and a real-kernel loopback test in a virtual
-machine. Nothing has run on the boards yet; hardware tests are the next
-step. IR firmware for an ESP32 PoE endpoint exists in
-software and awaits bench validation.
+The USB product is a tiered line (ADR 0027):
+
+- **Tier 1:** ESP32-S3 boxes for keyboards, mice, controllers and serial.
+- **Tier 1.5:** ESP32-P4 boxes for high-speed-compatible devices.
+- **Tier 2:** Radxa ZERO 3E boxes for full USB 2.0.
+
+All tiers share one portable C core (`native/`). The pairing software,
+stored settings, monitors and simulations exist. The USB bridge, the
+ESP32 USB box firmware and the C pairing core are implemented and pass
+simulation, differential tests against the Python reference, fuzzing and
+a real-kernel loopback in a virtual machine. Nothing has run on the
+boards yet; hardware tests are the next step. IR firmware for an ESP32
+PoE endpoint also awaits bench validation.
 
 The user's computer is separate from both boxes. Linux inside the boxes
 is a firmware choice, not a requirement for that computer.
