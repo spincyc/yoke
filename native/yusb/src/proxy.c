@@ -582,6 +582,9 @@ static bool e0_ready(const yusb_proxy_t *p)
  * yusb_proxy.h). */
 static void e0_control(yusb_proxy_t *p, const uint8_t raw[8], bool acked)
 {
+    /* A SETUP owed across a reset was superseded: a STALL now would answer
+     * this one. */
+    p->e0.stall_owed = false;
     if (p->e0.nqueued) {
         /* The host gave up on the newest waiting SETUP, unless its status
          * stage is already complete (then it still runs, without answer). */
@@ -610,7 +613,9 @@ static void e0_control(yusb_proxy_t *p, const uint8_t raw[8], bool acked)
         }
     }
     if (p->e0.nqueued == E0_QUEUE) {
-        px_fault(p, "ep0: more than %u SETUPs waiting", E0_QUEUE);
+        /* Only acknowledged requests accumulate (a waiting owed one is
+         * replaced), and dropping one would lose its effect: end instead. */
+        px_end(p, YUSB_END_FAULT, "ep0: more than %u acknowledged requests waiting", E0_QUEUE);
         return;
     }
     memcpy(p->e0.queue[p->e0.nqueued].raw, raw, 8);

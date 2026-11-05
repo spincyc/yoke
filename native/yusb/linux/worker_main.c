@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <sys/file.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
@@ -301,6 +302,7 @@ typedef struct {
     worker_t *w;
     int fd;
     int stop[2];                  /* written at shutdown */
+    int lock_fd;                  /* flock on PATH.lock, held while serving */
     dev_t dev;                    /* the socket file this worker bound */
     ino_t ino;
     char path[sizeof(((struct sockaddr_un *)0)->sun_path)];
@@ -454,9 +456,12 @@ static void *serve(void *arg)
     return NULL;
 }
 
-/* Bind the control socket. A socket file left by a dead worker is replaced;
- * one a live worker answers on is not (-EADDRINUSE): the second instance
- * fails and the first keeps serving the agent. */
+/* Bind the control socket. Starts on one path are serialized by an flock on
+ * PATH.lock, held for the process lifetime, so a second worker can never
+ * see a socket between bind and listen as stale. Then a socket file left by
+ * a dead worker is replaced; one a live worker answers on is not
+ * (-EADDRINUSE), so the first keeps serving the agent; anything else at the
+ * path is refused (-ENOTSOCK) and left alone. */
 static int listen_control(server_t *srv, const char *path)
 {
     struct sockaddr_un addr = {.sun_family = AF_UNIX};
@@ -464,8 +469,18 @@ static int listen_control(server_t *srv, const char *path)
     snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", path);
     snprintf(srv->path, sizeof(srv->path), "%s", path);
     for (int k = 0; k < CTL_CONNS; ++k) srv->conns[k].fd = -1;
+    char lock[sizeof(srv->path) + 8];
+    snprintf(lock, sizeof(lock), "%s.lock", path);
+    srv->lock_fd = open(lock, O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0660);
+    if (srv->lock_fd < 0) return -errno;
+    if (flock(srv->lock_fd, LOCK_EX | LOCK_NB)) {
+        int err = errno;
+        close(srv->lock_fd);
+        return err == EWOULDBLOCK ? -EADDRINUSE : -err;
+    }
     struct stat st;
-    if (!lstat(path, &st) && S_ISSOCK(st.st_mode)) {
+    if (!lstat(path, &st)) {
+        if (!S_ISSOCK(st.st_mode)) return -ENOTSOCK;
         int probe = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
         if (probe < 0) return -errno;
         int rc = connect(probe, (struct sockaddr *)&addr, sizeof(addr)), err = errno;
@@ -500,6 +515,7 @@ static void close_control(server_t *srv, pthread_t thread)
     close(srv->stop[1]);
     struct stat st;
     if (!lstat(srv->path, &st) && st.st_dev == srv->dev && st.st_ino == srv->ino) unlink(srv->path);
+    close(srv->lock_fd);   /* the lock file stays: unlinking it would race a starting worker */
 }
 
 /* --- command line ------------------------------------------------------------ */
@@ -686,6 +702,11 @@ int main(int argc, char **argv)
         if (rc == -EADDRINUSE) {
             fprintf(stderr, "yoke-gadget-worker: control socket %s: another worker is serving it\n",
                     socket_path);
+            return 1;
+        }
+        if (rc == -ENOTSOCK) {
+            fprintf(stderr, "yoke-gadget-worker: control socket %s: the path exists and is not a "
+                            "socket; remove it\n", socket_path);
             return 1;
         }
         if (rc < 0 || pthread_create(&server_thread, NULL, serve, &srv)) {

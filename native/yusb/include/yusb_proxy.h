@@ -118,11 +118,13 @@ typedef struct {
  *    completion without an answer; SETUPs wait while an acked request or an
  *    outstanding ep0 operation finishes. A waiting SETUP followed by a newer
  *    one is dropped unless it was delivered as YUSB_EV_CONTROL_ACKED.
+ *    Acknowledged requests are never dropped: more than YUSB_E0_QUEUE (16)
+ *    of them waiting at once ends the session (YUSB_END_FAULT).
  *  - After YUSB_EV_RESET or YUSB_EV_DISCONNECT the core may issue one
  *    ep0_stall, for the most recent SETUP if it is still owed (Raw Gadget
  *    keeps it pending across the reset and refuses later SETUPs until ep0
- *    answers). A backend with nothing pending completes it at once without
- *    bus effect.
+ *    answers); a SETUP delivered before that STALL is issued cancels it. A
+ *    backend with nothing pending completes it at once without bus effect.
  *  - A backend that serves device-recipient GET_DESCRIPTOR itself answers
  *    from yusb_proxy_presentation() with yusb_presentation_lookup(): device,
  *    configurations, qualifier, other-speed, BOS (or their STALL), the

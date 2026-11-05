@@ -189,10 +189,12 @@ def test_native_worker_and_export_core_negotiate_yx(levers: str) -> None:
 
 @pytest.mark.parametrize("yx", ["none", "fill,lz4,cache"])
 def test_small_buffer_pool_holds_urbs_back_without_losing_data(yx: str) -> None:
-    """Few slots and a pool for two 64 KiB URBs: the proxy's pipelined reads
-    and write-behind are held and replayed in order; nothing fails."""
+    """Few slots (two for reads, one kept for writes) and a pool for two
+    64 KiB reads with their encoded replies, besides the control and write
+    reserves: the proxy's pipelined reads and write-behind are held and
+    replayed in order; nothing fails."""
     options = ("--yx", yx, "--yx-cache", "16")
-    pool = ("--max-urbs", "4", "--pool-bytes", str(140_000))
+    pool = ("--max-urbs", "4", "--max-urb-bytes", "65536", "--pool-bytes", "330000")
     with (
         server(*options, *pool) as exporter,
         native_to(exporter, *options) as rig,

@@ -724,6 +724,74 @@ static void test_get_status_reports_a_local_halt(void)
     yusb_proxy_destroy(p);
 }
 
+
+/* Review N2: a STALL owed across a reset, deferred behind an outstanding ep0
+ * operation, must not land on a SETUP delivered after the reset. */
+static void test_owed_stall_is_cancelled_by_a_newer_setup(void)
+{
+    yusb_policy_t policy;
+    yusb_policy_defaults(&policy);
+    yusb_gadget_ops_t ops = scripted_ops(NULL);
+    uint64_t now = 1000;
+    yusb_proxy_t *p = presenting(&policy, &ops, now);
+    sx.n = 0;
+    uint8_t get[8] = {0x80, 6, 0, 1, 0, 0, 18, 0};
+    yusb_proxy_event(p, YUSB_EV_CONTROL, get, now);    /* ep0_write outstanding */
+    uint8_t x[8] = {0xc0, 0x01, 0, 0, 0, 0, 8, 0};
+    yusb_proxy_event(p, YUSB_EV_CONTROL, x, now);      /* X waits, owed */
+    yusb_proxy_event(p, YUSB_EV_RESET, NULL, now);     /* STALL owed after the write */
+    uint8_t y[8] = {0x80, 6, 0, 1, 0, 0, 64, 0};
+    yusb_proxy_event(p, YUSB_EV_CONTROL, y, now);      /* Y, after the reset */
+    sx.ep0_ops = 0;
+    ep0_finish(p, YUSB_GADGET_SHUTDOWN, now);          /* the old write ends */
+    CHECK(sx.ep0_busy && sx.ep0_last == 1 && sx.ep0_len == 18);   /* Y's only answer */
+    ep0_finish(p, 18, now);
+    CHECK(sx.ep0_ops == 1 && !sx.ep0_busy);
+    yusb_proxy_stop(p, now);
+    yusb_proxy_destroy(p);
+}
+
+/* Review N3: acknowledged requests are never dropped silently. */
+static void test_acknowledged_requests_are_never_dropped(void)
+{
+    for (unsigned extra = 0; extra < 2; ++extra) {
+        yusb_policy_t policy;
+        yusb_policy_defaults(&policy);
+        yusb_gadget_ops_t ops = scripted_ops(NULL);
+        uint64_t now = 1000;
+        yusb_proxy_t *p = ready(&policy, &ops, cfg_desc, now);
+        uint8_t setconf[8] = {0, 9, 1, 0, 0, 0, 0, 0};
+        yusb_proxy_event(p, YUSB_EV_CONTROL_ACKED, setconf, now);
+        collect(p);
+        cmd_t sc = take_ep0();
+        unsigned n = 16 + extra;                       /* the queue holds 16 */
+        for (unsigned i = 0; i < n; ++i) {
+            uint8_t clr[8] = {0x02, 1, 0, 0, 0x81, 0, 0, 0};
+            yusb_proxy_event(p, YUSB_EV_CONTROL_ACKED, clr, now);
+        }
+        yusb_proxy_status_t st;
+        yusb_proxy_status(p, &st);
+        if (extra) {
+            CHECK(st.end == YUSB_END_FAULT && strstr(st.end_reason, "acknowledged"));
+        } else {
+            reply(p, sc.seq, 0, NULL, 0, now);
+            collect(p);
+            unsigned forwarded = 0;
+            for (unsigned g = 0; g < 64 && count_ep0(); ++g) {
+                cmd_t c = take_ep0();
+                if (c.unlink) { unlink_reply(p, c.seq, -YUSB_ECONNRESET, now); continue; }
+                forwarded++;
+                reply(p, c.seq, 0, NULL, 0, now);
+                collect(p);
+            }
+            yusb_proxy_status(p, &st);
+            CHECK(forwarded == n && st.end == YUSB_END_NONE && sx.ep0_ops == 0);
+        }
+        yusb_proxy_stop(p, now);
+        yusb_proxy_destroy(p);
+    }
+}
+
 /* --- BOT after a data-out STALL (review C) ------------------------------- */
 
 static void cbw(uint8_t out[31], uint32_t length, bool in)
@@ -931,6 +999,8 @@ int main(void)
     test_ep0_buffer_waits_for_an_unsent_out_payload();
     test_bot_plan_ends_with_the_data_out_phase();
     test_get_status_reports_a_local_halt();
+    test_owed_stall_is_cancelled_by_a_newer_setup();
+    test_acknowledged_requests_are_never_dropped();
     test_raw_gadget_abi();
     test_footprints();
     if (failures) {

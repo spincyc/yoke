@@ -74,7 +74,9 @@ struct session {
     char gadget_name[128];
     bool stopping, tx_closed, in_send, gadget, built, io_done, exit;
     bool stop_tried;          /* session_stop ran (and was unconfirmed) before */
-    uint64_t service_at;      /* when the waiting service thread wakes by itself */
+    uint64_t service_at;      /* when the waiting service thread wakes by itself; 0 awake */
+    bool service_dirty;       /* core state changed while the service thread was awake
+                                 (or with the lock dropped): recompute before waiting */
     char fatal[256];
     pthread_t io, service, event;
     bool io_started, service_started, event_started;
@@ -146,6 +148,7 @@ static void flush_locked(session_t *s)
         pthread_mutex_lock(&s->lock);
         s->in_send = false;
         if (s->stopping) pthread_cond_broadcast(&s->wake);   /* session_stop waits */
+        s->service_dirty = true;   /* the lock was dropped; tx_done may settle */
         if (w > 0) {
             yusb_proxy_tx_done(s->proxy, (size_t)w);
         } else if (w < 0 && err == EINTR) {
@@ -157,15 +160,28 @@ static void flush_locked(session_t *s)
     }
 }
 
-/* Leaving the core: send what it queued, and wake the service thread only
- * when its timer must fire earlier (a wakeup per transfer would put it on
- * the lock in every transfer's critical path). */
+/* Bytes queued that this thread may send now (none while another sends:
+ * that sender's loop takes them). */
+static bool tx_pending(session_t *s)
+{
+    yusb_iov_t seg;
+    return s->proxy && !s->tx_closed && !s->in_send && yusb_proxy_tx_iov(s->proxy, &seg, 1);
+}
+
+/* Leaving the core: send what it queued, run due timers (and send what they
+ * queue), and wake the service thread only when its timer must fire earlier
+ * (a wakeup per transfer would put it on the lock in every transfer's
+ * critical path). */
 static void after_core(session_t *s)
 {
-    flush_locked(s);
-    if (!s->proxy) return;
-    uint64_t next = yusb_proxy_poll(s->proxy, wk_now_ms());
-    if (s->stopping || next < s->service_at) pthread_cond_broadcast(&s->wake);
+    uint64_t next;
+    do {
+        flush_locked(s);
+        if (!s->proxy) return;
+        next = yusb_proxy_poll(s->proxy, wk_now_ms());
+    } while (tx_pending(s));
+    if (!s->service_at) s->service_dirty = true;   /* awake: it must not wait on a stale deadline */
+    else if (s->stopping || next < s->service_at) pthread_cond_broadcast(&s->wake);
 }
 
 /* --- operation threads ---------------------------------------------------- */
@@ -406,10 +422,15 @@ static void *service_main(void *arg)
     thread_enter("yw-service");
     pthread_mutex_lock(&s->lock);
     while (!s->exit) {
+        /* Timers, then sends; repeated until nothing changed meanwhile: a
+         * send drops the lock, and its tx_done or another thread's core call
+         * can set an earlier deadline than the `next` computed here. */
+        s->service_dirty = false;
         complete_failed(s);
         uint64_t now = wk_now_ms();
         uint64_t next = s->proxy ? yusb_proxy_poll(s->proxy, now) : UINT64_MAX;
         flush_locked(s);
+        if (s->service_dirty) continue;
         if (signal_cancels(s) && next > now + KILL_PERIOD_MS) next = now + KILL_PERIOD_MS;
         if (next > now + 1000) next = now + 1000;
         struct timespec ts;

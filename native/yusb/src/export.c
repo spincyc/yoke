@@ -7,10 +7,14 @@
  * Memory, all allocated at create (the YX codec at import):
  *  - slots: one small descriptor per URB handed to the backend, with its
  *    reply headers. A slot is reused only after its reply bytes were sent.
- *    One slot is kept for control transfers.
+ *    One slot is kept for control transfers and one for OUT URBs.
  *  - pool: one byte budget from which each URB's buffer is cut to its own
- *    length (first fit over two arenas: a small control reserve, then the
- *    rest). The backend's DMA alignment holds for every buffer. With YX, a
+ *    length, over three arenas: a small control reserve, a write reserve
+ *    that holds one max_urb_bytes OUT buffer, and the rest. OUT and control
+ *    buffers are cut first fit from the low end; IN buffers (which may be
+ *    parked for long) best fit at the high end of their hole, so they do
+ *    not split the space writes need. The backend's DMA alignment holds
+ *    for every buffer. With YX, a
  *    bulk IN buffer also has room for the encoded reply's headers and
  *    bodies (RAW bodies are sent from the data itself).
  *  - held: CMD_SUBMITs without data that found no slot or no buffer. They
@@ -22,6 +26,17 @@
  * When the held set, the notes, or (for OUT data) a slot and buffer run
  * out, the core stops receiving (TCP backpressure) until bytes are sent or
  * URBs complete. Per endpoint, URBs reach the backend in arrival order.
+ *
+ * Write progress (yusb_export.h): IN URBs never take the write slot or the
+ * write arena, so an OUT URB that waits for a slot or buffer waits only on
+ * earlier OUT or control URBs at the backend (OUT buffers are freed when
+ * they complete) and on sends, never on reads the device may keep parked:
+ *  - no slot: IN holds at most max_urbs - 2, so an OUT or control URB holds
+ *    one of the others;
+ *  - no buffer: the write arena fits any OUT buffer when empty, and only
+ *    OUT URBs use it;
+ *  - ordering: earlier URBs of its endpoint are OUT URBs, held for the same
+ *    two reasons or flushed and awaiting resubmission.
  */
 #include <stdarg.h>
 #include <stdio.h>
@@ -33,7 +48,7 @@
 
 enum { X_OP, X_BUSID, X_URBS, X_PAYLOAD, X_DONE };
 enum { XS_FREE, XS_BUSY, XS_UNLINKING, XS_REPLIED };
-enum { A_EP0, A_MAIN, A_COUNT };
+enum { A_EP0, A_OUT, A_MAIN, A_COUNT };
 
 #define KEYS 32u              /* endpoint keys: 0 control, ep | 16 * dir_in */
 #define IOV_CHUNK 16u         /* stack segments per YX encode step */
@@ -50,6 +65,7 @@ typedef struct {
     bool collateral;          /* flushed by another URB's unlink: resubmit */
     bool control;             /* counts against the control reservation */
     bool fits;                /* has a buffer; else completes -ENOMEM */
+    bool in;                  /* a non-control IN URB (counts in nin) */
     uint8_t key;
     yusb_xurb_t urb;
     uint64_t order;           /* submission order, per connection */
@@ -101,7 +117,7 @@ struct yusb_export {
     void *pool;
     arena_t arenas[A_COUNT];
     xslot_t *slots;
-    unsigned nslots, nfree, nonctl;
+    unsigned nslots, nfree, nonctl, nin;   /* in use: all, non-control, IN */
     xheld_t *held;            /* arrival order */
     unsigned nheld;
     xnote_t *notes;           /* nslots entries */
@@ -185,19 +201,29 @@ static size_t extent_bytes(const ybuf_layout_t *l, size_t room)
     return ybuf_round(l, ybuf_offset(l) + room);
 }
 
-static void pool_plan(const yusb_export_cfg_t *cfg, const ybuf_layout_t *l, size_t *ep0, size_t *main)
+/* Arena sizes, in pool order: the control reserve, the write reserve (one
+ * max_urb_bytes OUT buffer), the rest. Automatic: the rest holds
+ * YUSB_EXPORT_AUTO_POOL_URBS - 1 full-size IN buffers (at least one), so
+ * with the write reserve the pool has room for that many full URBs. An
+ * explicit budget is cut in the same order. Returns the total. */
+static size_t pool_plan(const yusb_export_cfg_t *cfg, const ybuf_layout_t *l, size_t size[A_COUNT])
 {
     uint32_t ep0_max = cfg->max_urb_bytes < YUSB_EXPORT_EP0_BYTES ? cfg->max_urb_bytes : YUSB_EXPORT_EP0_BYTES;
     size_t reserve = extent_bytes(l, data_room(ep0_max, true));
+    size_t write = extent_bytes(l, data_room(cfg->max_urb_bytes, false));
     if (!cfg->pool_bytes) {
         unsigned urbs = cfg->max_urbs < YUSB_EXPORT_AUTO_POOL_URBS ? cfg->max_urbs : YUSB_EXPORT_AUTO_POOL_URBS;
-        *ep0 = reserve;
-        *main = urbs * extent_bytes(l, data_room(cfg->max_urb_bytes, true));
-        return;
+        size[A_EP0] = reserve;
+        size[A_OUT] = write;
+        size[A_MAIN] = (urbs > 1 ? urbs - 1u : 1u) * extent_bytes(l, data_room(cfg->max_urb_bytes, true));
+    } else {
+        size_t total = cfg->pool_bytes / l->hook.align * l->hook.align;
+        size[A_EP0] = reserve < total ? reserve : total;
+        total -= size[A_EP0];
+        size[A_OUT] = write < total ? write : total;
+        size[A_MAIN] = total - size[A_OUT];
     }
-    size_t total = cfg->pool_bytes / l->hook.align * l->hook.align;
-    *ep0 = reserve < total ? reserve : total;
-    *main = total - *ep0;
+    return size[A_EP0] + size[A_OUT] + size[A_MAIN];
 }
 
 /* Bytes ybuf_alloc takes for the pool block. */
@@ -230,15 +256,14 @@ size_t yusb_export_footprint(const yusb_export_cfg_t *cfg, const yusb_buffers_t 
     if (!cfg_ok(cfg)) return 0;
     ybuf_layout_t layout;
     ybuf_layout(&layout, buffers);
-    size_t ep0, main;
-    pool_plan(cfg, &layout, &ep0, &main);
+    size_t size[A_COUNT], pool = pool_plan(cfg, &layout, size);
     yusb_yx_params_t limits;
     bool yx = yx_limits(cfg, &limits);
     size_t n = cfg->max_urbs;
     size_t bytes = sizeof(yusb_export_t) + n * (sizeof(xslot_t) + sizeof(xheld_t) + sizeof(xnote_t)) +
                    A_COUNT * n * sizeof(uint16_t) +
-                   txq_capacity(cfg, ep0 + main, yx) * sizeof(yusb_iov_t) +
-                   rx_stage_size(cfg->max_urb_bytes) + pool_alloc_bytes(&layout, ep0 + main);
+                   txq_capacity(cfg, pool, yx) * sizeof(yusb_iov_t) +
+                   rx_stage_size(cfg->max_urb_bytes) + pool_alloc_bytes(&layout, pool);
     if (yx)   /* the codec, allocated at import when agreed */
         bytes += sizeof(yusb_yx_enc_t) + sizeof(yusb_yx_dec_t) + yusb_yx_enc_footprint(&limits) +
                  yusb_yx_dec_footprint(&limits);
@@ -252,20 +277,28 @@ static uint8_t *extent_data(yusb_export_t *x, const extent_t *e)
     return ybuf_at(&x->layout, x->pool, e->off) + YUSB_HEADROOM;
 }
 
-/* First fit by offset. Lengths are multiples of the alignment, so every
- * offset stays aligned. */
-static bool extent_alloc(yusb_export_t *x, unsigned a, unsigned id, size_t len)
+/* low: first fit at the low end of the first hole that fits; else best
+ * fit (the smallest hole) at its high end. Lengths and arena bounds are
+ * multiples of the alignment, so every offset stays aligned. */
+static bool extent_alloc(yusb_export_t *x, unsigned a, unsigned id, size_t len, bool low)
 {
     arena_t *ar = &x->arenas[a];
     if (len > ar->size) return false;
-    size_t at = ar->base;
-    unsigned i = 0;
-    for (; i < ar->n; ++i) {
-        const extent_t *e = extent(x, ar->ids[i]);
-        if (e->off - at >= len) break;
-        at = e->off + e->len;
+    size_t at = 0, best = SIZE_MAX, from = ar->base;
+    unsigned pick = 0;
+    for (unsigned i = 0; i <= ar->n; ++i) {
+        size_t to = i < ar->n ? extent(x, ar->ids[i])->off : ar->base + ar->size;
+        size_t hole = to - from;
+        if (hole >= len && hole < best) {
+            best = hole;
+            pick = i;
+            at = low ? from : to - len;
+            if (low) break;
+        }
+        if (i < ar->n) from = to + extent(x, ar->ids[i])->len;
     }
-    if (i == ar->n && ar->base + ar->size - at < len) return false;
+    if (best == SIZE_MAX) return false;
+    unsigned i = pick;
     memmove(ar->ids + i + 1, ar->ids + i, (ar->n - i) * sizeof(*ar->ids));
     ar->ids[i] = (uint16_t)id;
     ar->n++;
@@ -316,19 +349,18 @@ yusb_export_t *yusb_export_create(const yusb_export_cfg_t *cfg, const yusb_hc_op
     x->receiving = -1;
     x->nslots = x->nfree = cfg->max_urbs;
     ybuf_layout(&x->layout, ops->buffers);
-    size_t ep0, main;
-    pool_plan(cfg, &x->layout, &ep0, &main);
-    x->arenas[A_EP0] = (arena_t){0, ep0, NULL, 0};
-    x->arenas[A_MAIN] = (arena_t){ep0, main, NULL, 0};
+    size_t size[A_COUNT], pool = pool_plan(cfg, &x->layout, size);
+    for (size_t a = 0, base = 0; a < A_COUNT; base += size[a++]) x->arenas[a] = (arena_t){base, size[a], NULL, 0};
     yusb_yx_params_t limits;
     bool ok = (x->slots = calloc(x->nslots, sizeof(*x->slots))) &&
               (x->held = calloc(x->nslots, sizeof(*x->held))) &&
               (x->notes = calloc(x->nslots, sizeof(*x->notes))) &&
               (x->arenas[A_EP0].ids = calloc(x->nslots, sizeof(uint16_t))) &&
+              (x->arenas[A_OUT].ids = calloc(x->nslots, sizeof(uint16_t))) &&
               (x->arenas[A_MAIN].ids = calloc(x->nslots, sizeof(uint16_t))) &&
-              !txq_init(&x->tx, txq_capacity(cfg, ep0 + main, yx_limits(cfg, &limits))) &&
+              !txq_init(&x->tx, txq_capacity(cfg, pool, yx_limits(cfg, &limits))) &&
               !rx_init(&x->rx, rx_stage_size(cfg->max_urb_bytes)) &&
-              (x->pool = ybuf_alloc(&x->layout, ep0 + main));
+              (x->pool = ybuf_alloc(&x->layout, pool));
     if (!ok) {
         yusb_export_destroy(x);
         return NULL;
@@ -454,37 +486,47 @@ static void set_collateral(yusb_export_t *x, xslot_t *s, bool on)
 static bool fits(const yusb_export_t *x, const xheld_t *r)
 {
     size_t cap = x->arenas[A_MAIN].size;
-    if (r->type == YUSB_XFER_CONTROL && x->arenas[A_EP0].size > cap) cap = x->arenas[A_EP0].size;
+    unsigned other = r->type == YUSB_XFER_CONTROL ? A_EP0 : r->dir_in ? A_MAIN : A_OUT;
+    if (x->arenas[other].size > cap) cap = x->arenas[other].size;
     return r->length <= x->cfg.max_urb_bytes &&
            extent_bytes(&x->layout, data_room(r->length, r->dir_in)) <= cap;
 }
 
-/* A free slot and, when the URB fits, its buffer: control first from the
- * reserve, then from the rest; other URBs leave one slot for control. A
- * bulk IN URB with YX also gets room for its encoded reply when the pool
+/* A free slot and, when the URB fits, its buffer. Control takes the
+ * control reserve first; OUT the low end of the rest, then the write
+ * reserve; IN only the rest, best fit from the high end. Non-control URBs
+ * leave one slot for control, and IN URBs one more for OUT (max_urbs >= 3).
+ * A bulk IN URB with YX also gets room for its encoded reply when the pool
  * could ever hold both; otherwise its reply goes plain. */
 static xslot_t *acquire(yusb_export_t *x, const xheld_t *r)
 {
-    bool control = r->type == YUSB_XFER_CONTROL;
-    if (!x->nfree || (!control && x->nslots > 1 && x->nonctl >= x->nslots - 1)) return NULL;
+    bool control = r->type == YUSB_XFER_CONTROL, in = !control && r->dir_in;
+    if (!x->nfree || (!control && x->nslots > 1 && x->nonctl >= x->nslots - 1) ||
+        (in && x->nslots > 2 && x->nin >= x->nslots - 2))
+        return NULL;
     unsigned i = 0;
     while (x->slots[i].state != XS_FREE) ++i;
     xslot_t *s = &x->slots[i];
     size_t len = extent_bytes(&x->layout, data_room(r->length, r->dir_in)), wire_at = 0;
     bool fit = fits(x, r);
-    if (fit && x->yx && r->dir_in && yusb_yx_eligible(r->type, r->length)) {
+    if (fit && in && x->yx && yusb_yx_eligible(r->type, r->length)) {
         size_t wire = ybuf_round(&x->layout, yusb_yx_bound(r->length));
         if (wire <= x->arenas[A_MAIN].size - len) {
             wire_at = len;
             len += wire;
         }
     }
-    if (fit && !(control && extent_alloc(x, A_EP0, i, len)) && !extent_alloc(x, A_MAIN, i, len))
-        return NULL;
+    if (fit) {
+        bool got = control ? extent_alloc(x, A_EP0, i, len, true) || extent_alloc(x, A_MAIN, i, len, true)
+                   : in    ? extent_alloc(x, A_MAIN, i, len, false)
+                           : extent_alloc(x, A_MAIN, i, len, true) || extent_alloc(x, A_OUT, i, len, true);
+        if (!got) return NULL;
+    }
     s->state = XS_BUSY;
     s->collateral = false;
     s->control = control;
     s->fits = fit;
+    s->in = in;
     s->wire_at = wire_at;
     s->key = r->key;
     s->tx_end = 0;
@@ -508,6 +550,7 @@ static xslot_t *acquire(yusb_export_t *x, const xheld_t *r)
     s->urb.data = fit ? extent_data(x, &s->ext) : NULL;
     x->nfree--;
     if (!control) x->nonctl++;
+    if (in) x->nin++;
     return s;
 }
 
@@ -519,6 +562,7 @@ static void release(yusb_export_t *x, xslot_t *s)
     s->state = XS_FREE;
     x->nfree++;
     if (!s->control) x->nonctl--;
+    if (s->in) x->nin--;
 }
 
 /* RET_SUBMIT and its payload. True when the payload references the URB

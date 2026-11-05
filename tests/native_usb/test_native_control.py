@@ -19,6 +19,8 @@ from __future__ import annotations
 import codecs
 import contextlib
 import dataclasses
+import fcntl
+import functools
 import json
 import math
 import os
@@ -1058,6 +1060,65 @@ def test_second_instance_leaves_the_live_socket_alone(short_dir: Path) -> None:
     assert sock.exists()
     with idle_worker(short_dir) as (third, sock):  # a stale socket is replaced
         assert third.poll() is None and status_time(sock) < 1
+
+
+def start_on(sock: Path) -> subprocess.CompletedProcess[str]:
+    """A worker that is expected to refuse to start."""
+    return subprocess.run(
+        [str(native.build("sim")), "--udc", "u", "--socket", str(sock)],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+
+def any_exited(processes: list[subprocess.Popen[str]]) -> bool:
+    return any(p.poll() is not None for p in processes)
+
+
+def answers(sock: Path) -> bool:
+    try:
+        return control.ControlClient(str(sock), timeout=2).status().state == "idle"
+    except control.ControlError:
+        return False
+
+
+def test_a_non_socket_at_the_path_is_refused_and_kept(short_dir: Path) -> None:
+    sock = short_dir / "control.sock"
+    sock.write_text("not a socket\n")
+    result = start_on(sock)
+    assert result.returncode == 1
+    assert "exists and is not a socket" in result.stderr
+    assert sock.read_text() == "not a socket\n"
+
+
+def test_starts_on_one_path_are_serialized(short_dir: Path) -> None:
+    """PATH.lock: a starting worker never mistakes another's socket, bound
+    but not yet listening, for a stale one."""
+    sock = short_dir / "control.sock"
+    with (short_dir / "control.sock.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)  # as if another worker were starting
+        result = start_on(sock)
+        assert result.returncode == 1
+        assert "another worker is serving it" in result.stderr
+        assert not sock.exists()
+    for _ in range(5):  # simultaneous starts: exactly one serves
+        command = [str(native.build("sim")), "--udc", "u", "--socket", str(sock)]
+        pair = [
+            subprocess.Popen(command, stderr=subprocess.PIPE, text=True)
+            for _ in range(2)
+        ]
+        native.wait_for(functools.partial(any_exited, pair), 10)
+        loser = next(p for p in pair if p.poll() is not None)
+        winner = next(p for p in pair if p is not loser)
+        assert loser.returncode == 1 and winner.poll() is None
+        native.wait_for(lambda: answers(sock), 10)  # it may still be starting
+        winner.send_signal(signal.SIGTERM)
+        assert winner.wait(10) == 0
+        for process in pair:
+            assert process.stderr is not None
+            process.stderr.close()
+        assert not sock.exists()
 
 
 @contextmanager

@@ -137,7 +137,10 @@ typedef struct {
 } pump_t;
 
 enum ep0_flow { E0_IDLE, E0_REPLY, E0_DATA, E0_QUIESCE, E0_GATE, E0_REMOTE };
-#define E0_QUEUE 4u                 /* SETUPs waiting behind a request that must finish */
+#ifndef YUSB_E0_QUEUE
+#define YUSB_E0_QUEUE 16u           /* SETUPs waiting behind a request that must finish */
+#endif
+#define E0_QUEUE YUSB_E0_QUEUE
 
 struct yusb_proxy {
     yusb_policy_t policy;
