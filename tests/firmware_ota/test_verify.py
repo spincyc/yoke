@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[2]
 )
 def test_verification_requires_complete_success(tmp_path: Path, outcome: str) -> None:
     # Loading this explicit developer command has no install/network side effects.
-    verifier = runpy.run_path(str(ROOT / "firmware/esp32/verify.py"))
+    verifier = runpy.run_path(str(ROOT / "firmware/verify.py"))
     count = verifier["MINIMUM_TESTS"]
     case = '<testcase name="check"/>'
     cases = case * count
@@ -37,7 +37,7 @@ def test_isr_encoder_must_link_into_iram(
     tmp_path: Path, address: str | None, ok: bool
 ) -> None:
     """Finding 8: the RMT encoder must run while flash writes disable cache."""
-    verifier = runpy.run_path(str(ROOT / "firmware/esp32/verify.py"))
+    verifier = runpy.run_path(str(ROOT / "firmware/verify.py"))
     lines = []
     for symbol in verifier["ISR_SYMBOLS"]:
         if address is not None:

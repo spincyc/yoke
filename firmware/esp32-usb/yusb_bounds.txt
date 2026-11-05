@@ -1,0 +1,11 @@
+# native/yusb's compile-time bounds for the USB box's internal RAM (its
+# #ifndef defaults suit Linux). The one source for the firmware build
+# (CMakeLists.txt) and the host tests and bench (tests/firmware_usb).
+YUSB_MAX_CONFIGS=4
+YUSB_MAX_ALTS=32
+YUSB_MAX_CONFIG_EPS=32
+YUSB_MAX_STRINGS=48
+YUSB_PRESENTATION_ARENA=16384u
+YUSB_MISS_ARENA=1024u
+YUSB_MAX_BOTS=2u
+YUSB_EXPORT_MAX_DEVICES=1

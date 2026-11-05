@@ -171,12 +171,17 @@ static esp_err_t validate_trust(void)
 
 /* Every planned restart lets the application finish physical output
  * first (IR frames must never be cut by a reboot) and records the clock. */
-static void restart(void *arg)
+static void __attribute__((noreturn)) restart(void *arg)
 {
     (void)arg;
     if (restart_guard) restart_guard();
     (void)save_clock();
     esp_restart();
+}
+
+void yoke_ota_restart(void)
+{
+    restart(NULL);
 }
 
 static void wdt_feed(void)
@@ -230,7 +235,7 @@ static void upload_expired(void *arg)
      * the current deadline must itself have expired under this mutex. */
     xSemaphoreTake(deadline_lock, portMAX_DELAY);
     if (upload_fd >= 0 && esp_timer_get_time() >= upload_deadline) {
-        ESP_LOGE(TAG, "Absolute upload deadline; shutting down socket");
+        ESP_LOGE(TAG, "Absolute request deadline; shutting down socket");
         shutdown(upload_fd, SHUT_RDWR);
     }
     xSemaphoreGive(deadline_lock);
@@ -244,11 +249,11 @@ static void disarm_upload(void)
     (void)esp_timer_stop(upload_timer);
 }
 
-static esp_err_t arm_upload(httpd_req_t *req, int64_t started)
+static esp_err_t arm_upload(httpd_req_t *req, int64_t deadline)
 {
     xSemaphoreTake(deadline_lock, portMAX_DELAY);
     upload_fd = httpd_req_to_sockfd(req);
-    upload_deadline = started + UPLOAD_US;
+    upload_deadline = deadline;
     int64_t remaining = upload_deadline - esp_timer_get_time();
     xSemaphoreGive(deadline_lock);
     if (remaining <= 0) return ESP_ERR_INVALID_STATE;
@@ -359,8 +364,8 @@ void yoke_ota_fail_health(void)
 {
     if (!lock) return;
     xSemaphoreTake(lock, portMAX_DELAY);
-    /* A confirmed image is never rolled back here; app_main retries or
-     * restarts (see firmware/esp32/main/main.c). */
+    /* A confirmed image is never rolled back here; the application retries
+     * or restarts (see yoke_node_restart_later). */
     if (!pending_verify) { xSemaphoreGive(lock); return; }
     ESP_LOGE(TAG, "Boot health failed or deadline expired; rolling back");
     if (restart_guard) restart_guard();
@@ -370,7 +375,7 @@ void yoke_ota_fail_health(void)
     esp_restart();
 }
 
-static esp_err_t respond(httpd_req_t *req, const char *status, cJSON *body)
+esp_err_t yoke_ota_respond(httpd_req_t *req, const char *status, cJSON *body)
 {
     if (!body) return ESP_ERR_NO_MEM;
     char *json = cJSON_PrintUnformatted(body);
@@ -393,7 +398,7 @@ static esp_err_t reject(httpd_req_t *req, const char *status, const char *detail
     if (save_journal() != ESP_OK) ESP_LOGE(TAG, "Failed to persist update error");
     cJSON *body = cJSON_CreateObject();
     if (body) cJSON_AddStringToObject(body, "error", detail);
-    (void)respond(req, status, body);
+    (void)yoke_ota_respond(req, status, body);
     /* The response is sent; failing the handler makes HTTPD close the
      * socket instead of purging an unread body (up to a whole slot, at the
      * peer's pace) without feeding the watchdog. */
@@ -462,7 +467,7 @@ static esp_err_t status_request(httpd_req_t *req)
         cJSON_AddBoolToObject(body, "coredump_present", coredump_present());
         if (status_hook) status_hook(body);
     }
-    esp_err_t err = respond(req, "200 OK", body);
+    esp_err_t err = yoke_ota_respond(req, "200 OK", body);
     xSemaphoreGive(lock);
     return err;
 }
@@ -510,7 +515,7 @@ static esp_err_t upload_request(httpd_req_t *req)
     journal.version[0] = 0;
     state("receiving", NULL);
     watchdog_armed = true;
-    if (arm_upload(req, started) != ESP_OK) {
+    if (arm_upload(req, started + UPLOAD_US) != ESP_OK) {
         failure = "upload-watchdog-failed"; goto failed;
     }
     /* Erase sector by sector while writing: no single multi-second erase
@@ -563,7 +568,7 @@ static esp_err_t upload_request(httpd_req_t *req)
         journal.pending = 0; failure = "boot-selection-failed"; goto failed;
     }
     /* Schedule before sending: a dropped response must not cancel activation. */
-    if (esp_timer_start_once(reboot_timer, REBOOT_DELAY_US) != ESP_OK) {
+    if (yoke_ota_schedule_restart() != ESP_OK) {
         ESP_LOGE(TAG, "Reboot timer failed after boot selection; resetting");
         restart(NULL); /* still guarded: never cut an IR frame */
     }
@@ -573,7 +578,7 @@ static esp_err_t upload_request(httpd_req_t *req)
         cJSON_AddStringToObject(body, "version", journal.version);
         cJSON_AddStringToObject(body, "sha256", journal.digest);
     }
-    result = respond(req, "202 Accepted", body);
+    result = yoke_ota_respond(req, "202 Accepted", body);
     goto done;
 failed:
     if (watchdog_armed) disarm_upload();
@@ -593,7 +598,20 @@ static esp_err_t coredump_delete(httpd_req_t *req)
     if (coredump_present()) err = esp_core_dump_image_erase();
 #endif
     if (body) cJSON_AddBoolToObject(body, "coredump_present", coredump_present());
-    return respond(req, err == ESP_OK ? "200 OK" : "500 Internal Server Error", body);
+    return yoke_ota_respond(req, err == ESP_OK ? "200 OK" : "500 Internal Server Error", body);
+}
+
+esp_err_t yoke_ota_arm_deadline(httpd_req_t *req, int64_t deadline_us)
+{
+    return arm_upload(req, deadline_us);
+}
+
+void yoke_ota_disarm_deadline(void) { disarm_upload(); }
+
+esp_err_t yoke_ota_schedule_restart(void)
+{
+    return initialized ? esp_timer_start_once(reboot_timer, REBOOT_DELAY_US)
+                       : ESP_ERR_INVALID_STATE;
 }
 
 esp_err_t yoke_ota_start(void)

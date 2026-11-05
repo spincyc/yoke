@@ -14,7 +14,7 @@
 #include "mbedtls/ssl.h"
 #include "mbedtls/entropy.h"
 #include "mbedtls/ctr_drbg.h"
-#include "../../firmware/esp32/handshake_deadline.h"
+#include "../../firmware/components/yoke_ota/handshake_deadline.h"
 
 static uint64_t now_us(void)
 {

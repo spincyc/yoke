@@ -11,8 +11,10 @@ Hardware checks remain **NOT RUN**; IR pins and polarity are ⚠ unverified.
 Use ESP-IDF **v5.5.6**, commit
 `880a203ae603d08a94d06aa01e0d6761958e5e9e`. The tested board configuration is
 ESP32-S3, 16 MiB flash, no PSRAM requirement, W5500 on SPI2. Ethernet pin
-defaults are isolated in `main/Kconfig.projbuild` and IR pins in
-`components/yoke_ir/Kconfig`; all require physical bench validation.
+defaults are isolated in the shared `../components/yoke_eth/Kconfig.projbuild`
+and IR pins in `components/yoke_ir/Kconfig`; all require physical bench
+validation. The updater, Ethernet bring-up and boot lifecycle are shared with
+the [USB box](../esp32-usb/README.md) under `../components`.
 
 Run from the repository root. All tools, build output, generated configs,
 temporary data and private commissioning files below stay in `.scratch`.
@@ -35,7 +37,7 @@ idf.py -C firmware/esp32 -B "$PWD/.scratch/esp32-ota/build" \
 ```
 
 DHCP is the default. For an isolated static network, run the same `idf.py`
-command with `menuconfig` instead of `build`, choose Yoke W5500 Ethernet,
+command with `menuconfig` instead of `build`, choose Yoke Ethernet board profile,
 enable static IPv4 and set the address/netmask/gateway, then build. Use the
 device name plus curl `--resolve` below; no DNS or mDNS service is required.
 
@@ -45,7 +47,7 @@ the trust image will contain the device key; protect it and back it up
 outside this disposable workspace before `wt tidy`.
 
 ```sh
-python firmware/esp32/provision.py --name ir-01.local \
+python firmware/components/yoke_ota/provision.py --name ir-01.local \
   --out .scratch/esp32-ota/trust/ir-01
 python "$IDF_PATH/components/nvs_flash/nvs_partition_generator/nvs_partition_gen.py" \
   generate .scratch/esp32-ota/trust/ir-01/trust.csv \
@@ -138,10 +140,10 @@ uses the physical trust write only and must preserve application NVS.
 The explicit software verification command installs/reuses the pinned SDK,
 its official ESP32-S3 toolchain and Python constraints, and the repository's
 pinned pytest development dependencies under `.scratch/esp32-ota`. It builds
-host mbedTLS, requires the entire firmware suite (`tests/firmware_ota` and
-`tests/firmware_ir`) with **zero skipped tests**, regenerates the SDK
-configuration from `sdkconfig.defaults`, and builds the target image with
-the actual generated SDK TLS adapter. It checks from the link map that the
+host mbedTLS, requires the entire firmware suite (`tests/firmware_ota`,
+`tests/firmware_ir` and `tests/firmware_usb`) with **zero skipped tests**,
+regenerates the SDK configuration from `sdkconfig.defaults`, and builds this
+image and the USB box images with the actual generated SDK TLS adapter. It checks from the link map that the
 IR encoder is in IRAM, and checks the SDK commit, submodule hashes and clean
 tracked source before and afterward. No device is contacted or flashed, and
 nothing is uploaded.
@@ -151,15 +153,15 @@ compiler and OpenSSL 3.0+. First use downloads developer tools and test
 dependencies from GitHub, Espressif and the configured Python package index;
 these are build dependencies and are never device runtime requirements.
 The reusable `.github/workflows/esp32.yml` runs this command on Ubuntu 24.04
-with Python 3.12 and a 20-minute timeout; it publishes no artifacts or keys.
+with Python 3.12 and a 40-minute timeout; it publishes no artifacts or keys.
 
 ```sh
-python3.12 firmware/esp32/verify.py
+python3.12 firmware/verify.py
 # Equivalent root Make entry point:
 make verify-firmware PYTHON=python3.12
 
 # Reuse an existing SDK/toolchain and pinned dev environment without downloads:
-python3 firmware/esp32/verify.py --offline \
+python3 firmware/verify.py --offline \
   --test-python "$PWD/.scratch/dev/bin/python"
 ```
 
@@ -171,7 +173,7 @@ the pinned host library manually after SDK installation:
 cmake -S .scratch/esp32-ota/esp-idf/components/mbedtls/mbedtls \
   -B .scratch/esp32-ota/host-mbedtls -DENABLE_TESTING=OFF -DENABLE_PROGRAMS=OFF
 cmake --build .scratch/esp32-ota/host-mbedtls -j 8
-python -m pytest tests/firmware_ota tests/firmware_ir -ra \
+python -m pytest tests/firmware_ota tests/firmware_ir tests/firmware_usb -ra \
   --basetemp=.scratch/esp32-ota/pytest
 ```
 

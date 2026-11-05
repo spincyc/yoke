@@ -17,15 +17,22 @@ import tomllib
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]
 SCRATCH = ROOT / ".scratch/esp32-ota"
 IDF = SCRATCH / "esp-idf"
 IDF_TAG = "v5.5.6"
 IDF_COMMIT = "880a203ae603d08a94d06aa01e0d6761958e5e9e"
-MINIMUM_TESTS = 132
+MINIMUM_TESTS = 182
+TARGETS = ("esp32s3", "esp32p4")
 # ESP32-S3 internal SRAM instruction bus; flash-mapped code is 0x42xxxxxx.
 IRAM = range(0x40370000, 0x403E0000)
 ISR_SYMBOLS = ("ir_tx_fill", "ir_tx_extend", "__wrap_esp_panic_handler")
+# TinyUSB must call the USB box's mirrors, never esp_tinyusb's static model.
+MIRRORED = (
+    "tud_descriptor_device_cb",
+    "tud_descriptor_configuration_cb",
+    "tud_descriptor_string_cb",
+)
 
 
 def run(command: list[str], env: dict[str, str], *, capture: bool = False) -> str:
@@ -101,10 +108,12 @@ def prepare_sdk(env: dict[str, str], offline: bool) -> None:
     check_sdk(env)
     if not offline:
         print(
-            "[firmware] Installing/reusing pinned ESP32-S3 developer tools", flush=True
+            "[firmware] Installing/reusing pinned ESP32-S3/P4 developer tools",
+            flush=True,
         )
         installer = str(IDF / "tools/idf_tools.py")
-        run([sys.executable, installer, "install", "--targets=esp32s3"], env)
+        targets = ",".join(TARGETS)
+        run([sys.executable, installer, "install", f"--targets={targets}"], env)
         run([sys.executable, installer, "install-python-env", "--features=core"], env)
 
 
@@ -169,19 +178,86 @@ def require_complete_report(report: Path) -> int:
     return len(cases)
 
 
-def require_iram(link_map: Path) -> None:
-    """The RMT encoder runs from the TX ISR while OTA flash writes disable
-    the cache: its code must be linked into internal IRAM."""
+def linked_symbols(link_map: Path) -> dict[str, int]:
+    """Symbols the link map places in the image (discarded ones excluded)."""
     addresses = {}
     for line in link_map.read_text().splitlines():
         fields = line.split()
-        if len(fields) == 2 and fields[0].startswith("0x") and fields[1] in ISR_SYMBOLS:
+        if len(fields) == 2 and fields[0].startswith("0x"):
             addresses[fields[1]] = int(fields[0], 16)
+    return addresses
+
+
+def require_iram(link_map: Path) -> None:
+    """The RMT encoder runs from the TX ISR while OTA flash writes disable
+    the cache: its code must be linked into internal IRAM."""
+    addresses = linked_symbols(link_map)
     for symbol in ISR_SYMBOLS:
         if symbol not in addresses:
             raise RuntimeError(f"{symbol} missing from the link map")
         if addresses[symbol] not in IRAM:
             raise RuntimeError(f"{symbol} is not linked into IRAM")
+
+
+def require_mirror_callbacks(link_map: Path) -> None:
+    """The USB box serves remote descriptors verbatim: TinyUSB's callbacks
+    are linked to the __wrap_ mirrors and esp_tinyusb's own are dropped."""
+    symbols = linked_symbols(link_map)
+    for symbol in MIRRORED:
+        if f"__wrap_{symbol}" not in symbols:
+            raise RuntimeError(f"__wrap_{symbol} missing from the link map")
+        if symbol in symbols:
+            raise RuntimeError(f"esp_tinyusb's {symbol} is still linked")
+
+
+def require_app(image_path: Path) -> bytes:
+    image = image_path.read_bytes()
+    if not 288 <= len(image) <= 6 * 1024 * 1024:
+        raise RuntimeError(f"{image_path.name} does not fit the dual-OTA partitions")
+    return image
+
+
+def idf_build(
+    env: dict[str, str],
+    project: str,
+    build: Path,
+    sdkconfig: Path,
+    target: str = "",
+    defines: tuple[str, ...] = (),
+) -> None:
+    """Build from the committed defaults with the generated TLS adapter."""
+    # ESP-IDF applies sdkconfig.defaults only to symbols missing from an
+    # existing sdkconfig; regenerate it so the committed defaults are built.
+    sdkconfig.unlink(missing_ok=True)
+    run(
+        [
+            "bash",
+            "-c",
+            'set -e; source "$1"; shift; exec idf.py "$@"',
+            "yoke-firmware",
+            str(IDF / "export.sh"),
+            "-C",
+            str(ROOT / project),
+            "-B",
+            str(build),
+            "-D",
+            f"SDKCONFIG={sdkconfig}",
+            *(["-D", f"IDF_TARGET={target}"] if target else []),
+            *(argument for define in defines for argument in ("-D", define)),
+            "build",
+        ],
+        env,
+    )
+    commands = json.loads((build / "compile_commands.json").read_text())
+    tls = [
+        Path(command["file"]).resolve()
+        for command in commands
+        if Path(command["file"]).name in ("esp_tls_mbedtls.c", "yoke_esp_tls_mbedtls.c")
+    ]
+    if tls != [build / "yoke_esp_tls_mbedtls.c"]:
+        raise RuntimeError(
+            "Target must compile exactly the generated SDK deadline adapter"
+        )
 
 
 def verify(env: dict[str, str], python: Path, jobs: int) -> None:
@@ -212,6 +288,7 @@ def verify(env: dict[str, str], python: Path, jobs: int) -> None:
             "pytest",
             "tests/firmware_ota",
             "tests/firmware_ir",
+            "tests/firmware_usb",
             "-ra",
             f"--basetemp={SCRATCH / 'verify-pytest'}",
             f"--junitxml={report}",
@@ -219,47 +296,33 @@ def verify(env: dict[str, str], python: Path, jobs: int) -> None:
         env,
     )
     count = require_complete_report(report)
-    print(
-        f"[firmware] {count} tests passed with no skips; compiling ESP32-S3", flush=True
-    )
+    print(f"[firmware] {count} tests passed with no skips; compiling", flush=True)
     build = SCRATCH / "build"
-    # ESP-IDF applies sdkconfig.defaults only to symbols missing from an
-    # existing sdkconfig; regenerate it so the committed defaults are built.
-    (SCRATCH / "sdkconfig").unlink(missing_ok=True)
-    run(
-        [
-            "bash",
-            "-c",
-            'set -e; source "$1"; shift; exec idf.py "$@"',
-            "yoke-firmware",
-            str(IDF / "export.sh"),
-            "-C",
-            str(ROOT / "firmware/esp32"),
-            "-B",
-            str(build),
-            "-D",
-            f"SDKCONFIG={SCRATCH / 'sdkconfig'}",
-            "build",
-        ],
-        env,
-    )
-    commands = json.loads((build / "compile_commands.json").read_text())
-    tls = [
-        Path(command["file"]).resolve()
-        for command in commands
-        if Path(command["file"]).name in ("esp_tls_mbedtls.c", "yoke_esp_tls_mbedtls.c")
-    ]
-    if tls != [build / "yoke_esp_tls_mbedtls.c"]:
-        raise RuntimeError(
-            "Target must compile exactly the generated SDK deadline adapter"
-        )
-    check_sdk(env)
+    idf_build(env, "firmware/esp32", build, SCRATCH / "sdkconfig")
     require_iram(build / "yoke-ir-updater.map")
-    image = (build / "yoke-ir-updater.bin").read_bytes()
-    if not 288 <= len(image) <= 6 * 1024 * 1024:
-        raise RuntimeError("App image does not fit the dual-OTA partition contract")
-    print(f"[firmware] PASS: {count} tests, no skips; target app {len(image)} bytes")
-    print(f"[firmware] app SHA-256 {hashlib.sha256(image).hexdigest()}")
+    images = {"IR endpoint (esp32s3)": require_app(build / "yoke-ir-updater.bin")}
+    # The native cores default to native/yusb and native/ywp; a lane worktree
+    # names them with YOKE_NATIVE_YUSB/YOKE_NATIVE_YWP (the tests read them too).
+    native = tuple(
+        f"{key}={env[key]}"
+        for key in ("YOKE_NATIVE_YUSB", "YOKE_NATIVE_YWP")
+        if key in env
+    )
+    for target in TARGETS:
+        lock = ROOT / f"firmware/esp32-usb/dependencies.lock.{target}"
+        pinned = lock.read_bytes()
+        build = SCRATCH / f"build-usb-{target}"
+        sdkconfig = SCRATCH / f"sdkconfig-usb-{target}"
+        idf_build(env, "firmware/esp32-usb", build, sdkconfig, target, native)
+        if lock.read_bytes() != pinned:
+            raise RuntimeError(f"{lock.name} changed: the pinned components drifted")
+        require_mirror_callbacks(build / "yoke-usb-box.map")
+        images[f"USB box ({target})"] = require_app(build / "yoke-usb-box.bin")
+    check_sdk(env)
+    print(f"[firmware] PASS: {count} tests, no skips")
+    for name, image in images.items():
+        digest = hashlib.sha256(image).hexdigest()
+        print(f"[firmware] {name}: {len(image)} bytes, SHA-256 {digest}")
     print("[firmware] Hardware acceptance NOT RUN; no device contacted or flashed")
 
 

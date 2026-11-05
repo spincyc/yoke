@@ -9,9 +9,9 @@ permissions:
 
 jobs:
   firmware:
-    name: ESP32-S3 build and complete host tests
+    name: ESP32-S3/P4 builds and complete host tests
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -25,7 +25,7 @@ jobs:
           sudo apt-get install --no-install-recommends -y \
             git cmake ninja-build gcc g++ openssl flex bison gperf \
             libffi-dev libssl-dev libusb-1.0-0 dfu-util
-      - name: Verify pinned SDK, every firmware test, and ESP32-S3 image
-        run: python firmware/esp32/verify.py
+      - name: Verify pinned SDK, every firmware test, IR and USB box images
+        run: python firmware/verify.py
       # No firmware/trust artifacts are published. This workflow never flashes
       # hardware, contacts endpoint devices, or requires deployment secrets.

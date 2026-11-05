@@ -1,0 +1,27 @@
+menu "Yoke USB box"
+
+choice YOKE_USB_ROLE
+    prompt "Role until one is set over the admin API (NVS yoke_usb/role)"
+    default YOKE_USB_ROLE_COMPUTER
+    help
+        Each box has one USB role per boot. Change it with
+        PUT /v1/usb/config {"role": "device"} (mutual TLS); the box restarts.
+
+config YOKE_USB_ROLE_DEVICE
+    bool "device: USB host for the peripheral (device-side box)"
+
+config YOKE_USB_ROLE_COMPUTER
+    bool "computer: USB device toward the computer (computer-side box)"
+
+endchoice
+
+config YOKE_USB_NTP_SERVER
+    string "NTP server (besides one from DHCP option 42)"
+    default "pool.ntp.org"
+    help
+        YWP/1 pairing needs the real wall clock: peers drop frames whose
+        sequence (Unix time) is far off. The box asks DHCP for an NTP
+        server and also polls this one; empty: DHCP's only. Without either,
+        set the clock over the admin API (PUT /v1/usb/clock).
+
+endmenu
