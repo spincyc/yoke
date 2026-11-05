@@ -34,7 +34,10 @@
  *    yields RET_UNLINK(0) after that RET_SUBMIT.
  *  - Client bound: reads at the device are limited by those max_urbs - 2
  *    slots and by the pool; max_held more wait held; any read beyond that
- *    fails with -ENOMEM instead of stopping the stream.
+ *    fails with -ENOMEM instead of stopping the stream. Such an -ENOMEM
+ *    can complete before an earlier URB still pending on the same
+ *    endpoint, so per-endpoint completion order holds only within
+ *    max_held; the Yoke proxy presents that failure to the host as a STALL.
  *  - Invariant: parsing never waits on an IN URB. It stops (rx_space
  *    returns 0, TCP backpressure) only (a) at a CMD_SUBMIT with OUT data
  *    until it has a slot and buffer, which, with a pool_bytes that holds
