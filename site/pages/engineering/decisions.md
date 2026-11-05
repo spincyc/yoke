@@ -37,6 +37,7 @@ is normative for control behavior.
 | [0027 — Tiered USB product line and a native C data path](../../../doc/decisions/0027-tiered-usb-product-line-and-native-c-data-path.md) | tiers 1, 1.5, 2 and 3 |
 | [0028 — Negotiated USB/IP payload extension (YX) and latency hiding](../../../doc/decisions/0028-negotiated-usbip-payload-extension.md) |  |
 | [0029 — Native YWP/1 core: number model, replay digest and bounded tables](../../../doc/decisions/0029-native-ywp1-core-interpretations.md) |  |
+| [ADR 0030: USB box firmware on ESP-IDF (tiers 1 and 1.5)](../../../doc/decisions/0030-usb-box-firmware-on-esp-idf.md) |  |
 
 Protocol behavior changes require updating the normative protocol and
 recording the decision before implementation. See

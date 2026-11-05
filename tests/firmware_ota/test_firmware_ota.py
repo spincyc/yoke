@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-COMPONENT = ROOT / "firmware/esp32/components/yoke_ota"
+COMPONENT = ROOT / "firmware/components/yoke_ota"
 HERE = Path(__file__).resolve().parent
 
 
@@ -143,7 +143,7 @@ def test_firmware_safety_configuration() -> None:
     timeout = next(v for v in config if v.startswith("CONFIG_ESP_TASK_WDT_TIMEOUT_S="))
     assert int(timeout.split("=")[1]) > 10  # longer than the TLS handshake deadline
     ir_service = (ROOT / "firmware/esp32/components/yoke_ir/ir_service.c").read_text()
-    updater = (ROOT / "firmware/esp32/components/yoke_ota/yoke_ota.c").read_text()
+    updater = (COMPONENT / "yoke_ota.c").read_text()
     assert "esp_task_wdt_add(NULL)" in ir_service
     assert "esp_task_wdt_add_user" in updater and "httpd_queue_work" in updater
     fragment = (ROOT / "firmware/esp32/components/yoke_ir/linker.lf").read_text()
@@ -162,7 +162,7 @@ def test_unique_local_credentials(tmp_path: Path) -> None:
         subprocess.run(
             [
                 sys.executable,
-                str(ROOT / "firmware/esp32/provision.py"),
+                str(COMPONENT / "provision.py"),
                 "--name",
                 "ir-test.local",
                 "--out",
@@ -199,7 +199,7 @@ def test_sdk_override_rejects_drift(tmp_path: Path) -> None:
     changed = tmp_path / "changed.c"
     changed.write_bytes(original + b"\n/* unexpected SDK drift */\n")
     output = tmp_path / "override.c"
-    script = ROOT / "firmware/esp32/prepare_tls.py"
+    script = COMPONENT / "prepare_tls.py"
     result = subprocess.run(
         [sys.executable, str(script), str(changed), str(output)], capture_output=True
     )
@@ -257,7 +257,7 @@ def crypto_tools(
         subprocess.run(
             [
                 sys.executable,
-                str(ROOT / "firmware/esp32/provision.py"),
+                str(COMPONENT / "provision.py"),
                 "--name",
                 "ir-test.local",
                 "--out",

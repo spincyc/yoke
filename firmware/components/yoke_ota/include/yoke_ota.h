@@ -29,3 +29,14 @@ httpd_handle_t yoke_ota_server(void);
 void yoke_ota_set_restart_guard(void (*guard)(void));
 /* Adds application fields to GET /v1/status. */
 void yoke_ota_set_status_hook(void (*hook)(cJSON *body));
+/* Guarded planned restart now (restart guard, clock floor). */
+void yoke_ota_restart(void) __attribute__((noreturn));
+/* Guarded planned restart two seconds from now (after a response). */
+esp_err_t yoke_ota_schedule_restart(void);
+/* Admin handler reply: JSON body (consumed), no-store, connection closed. */
+esp_err_t yoke_ota_respond(httpd_req_t *req, const char *status, cJSON *body);
+/* Admin handler body reads: at deadline_us (esp_timer time) the request's
+ * socket is shut down, so a peer trickling bytes cannot hold the server
+ * task (the upload's own deadline). One at a time; disarm before replying. */
+esp_err_t yoke_ota_arm_deadline(httpd_req_t *req, int64_t deadline_us);
+void yoke_ota_disarm_deadline(void);

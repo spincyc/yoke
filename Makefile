@@ -12,7 +12,7 @@ export TMPDIR := $(abspath .scratch/tmp)
 export PLAYWRIGHT_BROWSERS_PATH := $(abspath .scratch/cache/playwright)
 
 .PHONY: venv lint type test verify docs docs-serve browser-install verify-browser simulate \
-	benchmark-control benchmark-media benchmark-telemetry benchmark-usb verify-usb-kernel verify-firmware firmware-bench ywp-bench ywp-fuzz verify-net \
+	benchmark-control benchmark-media benchmark-telemetry benchmark-usb verify-usb-kernel verify-firmware firmware-bench firmware-usb-bench ywp-bench ywp-fuzz verify-net \
 	native-usb fuzz-usb tsan-usb benchmark-usbtrace \
 	media-send media-recv clean
 
@@ -74,7 +74,7 @@ verify-browser: docs
 verify: lint type test docs
 
 verify-firmware:
-	$(PYTHON) firmware/esp32/verify.py
+	$(PYTHON) firmware/verify.py
 
 # Host-only cost of the IR endpoint core (no SDK, no device): JSON on stdout.
 IR_CORE := firmware/esp32/components/yoke_ir
@@ -98,6 +98,13 @@ ywp-bench:
 
 ywp-fuzz: venv
 	YWP_FUZZ_SECONDS=$(FUZZ_SECONDS) $(BIN)/python -m pytest -q tests/native_ywp/test_ywp_fuzz.py
+
+# Host-only cost of the USB box's data path: both boxes' native cores and
+# glue over TCP loopback, without sanitizers (tests/firmware_usb/host_bridge.c;
+# YOKE_NATIVE_YUSB may point at another native/yusb).
+firmware-usb-bench: venv
+	$(BIN)/python tests/firmware_usb/usb_build.py .scratch/firmware-bench/host-usb-bridge
+	for mode in bulk-in bulk-out report; do .scratch/firmware-bench/host-usb-bridge $$mode; done
 
 simulate: venv
 	$(BIN)/python -m yoke.simulation --json

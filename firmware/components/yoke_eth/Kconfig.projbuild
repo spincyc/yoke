@@ -1,0 +1,84 @@
+menu "Yoke Ethernet board profile (pins bench-unverified)"
+
+choice YOKE_ETH_INTERFACE
+    prompt "Ethernet controller"
+    default YOKE_ETH_EMAC if IDF_TARGET_ESP32P4
+    default YOKE_ETH_W5500
+
+config YOKE_ETH_W5500
+    bool "WIZnet W5500 on SPI2 (ESP32-S3 boards, W5500 modules)"
+    depends on ETH_SPI_ETHERNET_W5500
+
+config YOKE_ETH_EMAC
+    bool "Internal EMAC with an IP101 RMII PHY (ESP32-P4 boards)"
+    depends on ETH_USE_ESP32_EMAC && IDF_TARGET_ESP32P4
+    help
+        RMII data and clock pins are ESP-IDF's ESP32-P4 defaults (TX_EN 49,
+        TXD0 34, TXD1 35, CRS_DV 28, RXD0 29, RXD1 30, 50 MHz clock in on
+        GPIO 50), the ESP32-P4-Function-EV-Board and Waveshare
+        ESP32-P4-ETH layout. Check the schematic of any other board.
+
+endchoice
+
+config YOKE_ETH_MOSI
+    int "W5500 MOSI GPIO"
+    depends on YOKE_ETH_W5500
+    default 11
+config YOKE_ETH_MISO
+    int "W5500 MISO GPIO"
+    depends on YOKE_ETH_W5500
+    default 12
+config YOKE_ETH_SCLK
+    int "W5500 clock GPIO"
+    depends on YOKE_ETH_W5500
+    default 13
+config YOKE_ETH_CS
+    int "W5500 chip select GPIO"
+    depends on YOKE_ETH_W5500
+    default 14
+config YOKE_ETH_INT
+    int "W5500 interrupt GPIO"
+    depends on YOKE_ETH_W5500
+    default 10
+config YOKE_ETH_SPI_MHZ
+    int "W5500 SPI MHz"
+    depends on YOKE_ETH_W5500
+    range 1 40
+    default 20
+
+config YOKE_ETH_MDC
+    int "PHY management clock (MDC) GPIO"
+    depends on YOKE_ETH_EMAC
+    default 31
+config YOKE_ETH_MDIO
+    int "PHY management data (MDIO) GPIO"
+    depends on YOKE_ETH_EMAC
+    default 52
+config YOKE_ETH_PHY_ADDR
+    int "PHY address"
+    depends on YOKE_ETH_EMAC
+    range 0 31
+    default 1
+
+config YOKE_ETH_RESET
+    int "W5500 or PHY reset GPIO (-1: none)"
+    default 51 if YOKE_ETH_EMAC
+    default 9
+
+config YOKE_STATIC_IPV4
+    bool "Use static IPv4 instead of DHCP"
+    default n
+config YOKE_IP
+    string "Static IPv4 address"
+    depends on YOKE_STATIC_IPV4
+    default "192.168.20.50"
+config YOKE_MASK
+    string "Static IPv4 netmask"
+    depends on YOKE_STATIC_IPV4
+    default "255.255.255.0"
+config YOKE_GATEWAY
+    string "Static IPv4 gateway (0.0.0.0 allowed)"
+    depends on YOKE_STATIC_IPV4
+    default "0.0.0.0"
+
+endmenu

@@ -2,7 +2,7 @@
  * for the host. No firmware/device traffic; does not replace TLS bench tests. */
 #define YOKE_OTA_HOST_TEST
 #define YOKE_OTA_REAL_MBEDTLS
-#include "../../firmware/esp32/components/yoke_ota/yoke_ota.c"
+#include "../../firmware/components/yoke_ota/yoke_ota.c"
 #include <assert.h>
 
 static char *read_file(const char *path, size_t *size)

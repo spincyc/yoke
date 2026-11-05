@@ -170,7 +170,10 @@ src/yoke/
     rawgadget.py Raw Gadget ioctl backend behind gadget.py's GadgetBackend
     proxy.py     descriptor cache, control relay, endpoint pumps; session.py, control.py
     worker.py    yoke.usb.worker process and its bounded control socket
-firmware/esp32/  ESP-IDF IR endpoint: RMT IR, iTach-subset API, mutual-TLS OTA (ADRs 0025/0026)
+firmware/
+  components/    shared ESP-IDF components: yoke_ota updater, yoke_eth, yoke_node lifecycle
+  esp32/         IR endpoint: RMT IR, iTach-subset API, mutual-TLS OTA (ADRs 0025/0026)
+  esp32-usb/     USB box (ESP32-S3/P4): USB host or TinyUSB device role (ADRs 0027/0030)
 packaging/zero3e/ ZERO 3E device/computer box units, udev rules and install recipe
 native/yusb/     portable C USB/IP core and the native gadget worker (ADRs 0027, 0028)
 native/ywp/      portable C YWP/1 core for MCU boxes (ADRs 0027, 0029)
@@ -190,7 +193,7 @@ site/            documentation template, navigation, and static assets
 | `yoke metrics`, `top` | `yoke.telemetry.cli` | Optional read-only observation and host sampling |
 | `yoke-media` | `yoke.media.cli` | Separate synthetic reference media tools |
 | `python -m yoke.update` | `yoke.update` | Explicit offline Linux release operations |
-| `python firmware/esp32/verify.py` | `firmware/esp32/verify.py` | Software verification of the separate firmware project |
+| `python firmware/verify.py` | `firmware/verify.py` | Software verification of the separate firmware projects |
 | `python scripts/build_docs.py` | `scripts.docsite` | Developer-only static documentation build |
 
 The control core imports only its own types and wire codec. Drivers consume

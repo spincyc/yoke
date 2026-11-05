@@ -131,7 +131,7 @@ yoke_journal_result_t yoke_ota_journal_decode_legacy(const uint8_t *blob, size_t
 
 yoke_health_t yoke_ota_health_decide(const yoke_health_inputs_t *in)
 {
-    if (!in->local_ok || !in->ir_ok) return YOKE_HEALTH_FAIL;
+    if (!in->local_ok || !in->app_ok) return YOKE_HEALTH_FAIL;
     if (!in->listeners_up) return YOKE_HEALTH_WAIT;
     bool link_down = !in->link_up &&
                      (in->link_down_seen || in->ms_since_eth_start >= in->link_settle_ms);

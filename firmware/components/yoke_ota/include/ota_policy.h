@@ -47,9 +47,9 @@ yoke_journal_result_t yoke_ota_journal_decode_legacy(const uint8_t *blob, size_t
  * network is proven (IP acquired) or the link was observed down (a
  * cable-less bench boot must not roll back a locally healthy image). */
 typedef struct {
-    bool local_ok;        /* trust, storage, W5500 driver, HTTPS listener */
-    bool ir_ok;           /* IR outputs created and self-test passed */
-    bool listeners_up;    /* IR listener up, or IR API disabled by config */
+    bool local_ok;        /* trust, storage, Ethernet driver, HTTPS listener */
+    bool app_ok;          /* application hardware up and its self-test passed */
+    bool listeners_up;    /* application services up (or disabled by config) */
     bool ip_acquired;
     bool link_up;
     bool link_down_seen;  /* explicit link-down event */

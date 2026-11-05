@@ -1,5 +1,5 @@
 #define YOKE_OTA_HOST_TEST
-#include "../../firmware/esp32/components/yoke_ota/yoke_ota.c"
+#include "../../firmware/components/yoke_ota/yoke_ota.c"
 #include <assert.h>
 
 static esp_partition_t active = {0x30000, 0x600000, 16, "ota_0"};
@@ -226,7 +226,7 @@ int main(int argc, char **argv)
         return 0;
     }
     if (!strcmp(fault, "health")) {
-        yoke_health_inputs_t in = {.local_ok = true, .ir_ok = true, .listeners_up = true,
+        yoke_health_inputs_t in = {.local_ok = true, .app_ok = true, .listeners_up = true,
                                    .link_settle_ms = 10000};
         /* Link up, no IP yet: wait (never confirm on listener start alone). */
         in.link_up = true;
@@ -240,7 +240,7 @@ int main(int argc, char **argv)
         assert(yoke_ota_health_decide(&in) == YOKE_HEALTH_WAIT);
         in.listeners_up = true;
         /* Cable-less bench boot: link never came up within the window. */
-        in = (yoke_health_inputs_t){.local_ok = true, .ir_ok = true, .listeners_up = true,
+        in = (yoke_health_inputs_t){.local_ok = true, .app_ok = true, .listeners_up = true,
                                     .link_settle_ms = 10000, .ms_since_eth_start = 9999};
         assert(yoke_ota_health_decide(&in) == YOKE_HEALTH_WAIT);
         in.ms_since_eth_start = 10000;
@@ -251,9 +251,9 @@ int main(int argc, char **argv)
         assert(yoke_ota_health_decide(&in) == YOKE_HEALTH_CONFIRM);
         /* Local failures always fail, even with IP. */
         in.ip_acquired = true;
-        in.ir_ok = false;
+        in.app_ok = false;
         assert(yoke_ota_health_decide(&in) == YOKE_HEALTH_FAIL);
-        in.ir_ok = true;
+        in.app_ok = true;
         in.local_ok = false;
         assert(yoke_ota_health_decide(&in) == YOKE_HEALTH_FAIL);
         return 0;

@@ -1,0 +1,8 @@
+# ESP32-S3-N16R8 (tier 1): the 8 MB octal PSRAM takes malloc's large
+# allocations (16 KiB and up: the TLS input buffers, the YWP/1 node, the
+# presentation core's state), leaving internal RAM to USB/IP sessions and
+# DMA. A board without PSRAM still boots on internal RAM ⚠.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_IGNORE_NOTFOUND=y
+CONFIG_SPIRAM_USE_MALLOC=y

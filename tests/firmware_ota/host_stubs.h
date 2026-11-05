@@ -105,7 +105,7 @@ esp_err_t esp_ota_get_partition_description(const esp_partition_t *, esp_app_des
 esp_err_t esp_ota_set_boot_partition(const esp_partition_t *);
 esp_err_t esp_ota_mark_app_valid_cancel_rollback(void);
 esp_err_t esp_ota_mark_app_invalid_rollback_and_reboot(void);
-void esp_restart(void);
+void esp_restart(void) __attribute__((noreturn));
 const char *esp_err_to_name(esp_err_t);
 esp_err_t nvs_set_blob(nvs_handle_t, const char *, const void *, size_t);
 esp_err_t nvs_set_i64(nvs_handle_t, const char *, int64_t);

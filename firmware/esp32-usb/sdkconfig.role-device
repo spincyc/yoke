@@ -1,0 +1,3 @@
+# Device-side box image: USB host for the peripheral. Add to SDKCONFIG_DEFAULTS
+# (README.md); a role stored over the admin API still takes precedence.
+CONFIG_YOKE_USB_ROLE_DEVICE=y
