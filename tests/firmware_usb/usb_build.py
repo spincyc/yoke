@@ -31,6 +31,9 @@ LZ4 = NATIVE_YUSB.parent / "third_party/lz4"
 FLAGS = [
     "-std=gnu17",
     "-O1",
+    # Match Ubuntu's default hardening so warn_unused_result fires everywhere.
+    "-U_FORTIFY_SOURCE",
+    "-D_FORTIFY_SOURCE=3",
     "-g",
     "-Wall",
     "-Wextra",

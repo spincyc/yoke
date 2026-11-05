@@ -50,7 +50,9 @@ static uint32_t address;
 static void wake(void)
 {
     uint64_t one = 1;
-    (void)write(wake_fd, &one, sizeof(one));
+    /* A full counter already wakes the task; any other failure loses a wake. */
+    if (write(wake_fd, &one, sizeof(one)) < 0 && errno != EAGAIN)
+        ESP_LOGW(TAG, "wake write failed: errno %d", errno);
 }
 
 void box_net_watch(int fd, bool read, bool write, void (*post)(void (*fn)(void *), void *),
@@ -153,7 +155,8 @@ static void task(void *arg)
         }
         if (FD_ISSET(wake_fd, &readable)) {
             uint64_t count;
-            (void)read(wake_fd, &count, sizeof(count));
+            if (read(wake_fd, &count, sizeof(count)) < 0 && errno != EAGAIN)
+                ESP_LOGW(TAG, "wake read failed: errno %d", errno);
             for (message_t m; xQueueReceive(inbox, &m, 0) == pdTRUE;)
                 if (ywp) dispatch(&m);
         }
