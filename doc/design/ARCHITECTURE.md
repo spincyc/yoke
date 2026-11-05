@@ -172,6 +172,7 @@ src/yoke/
     worker.py    yoke.usb.worker process and its bounded control socket
 firmware/esp32/  ESP-IDF IR endpoint: RMT IR, iTach-subset API, mutual-TLS OTA (ADRs 0025/0026)
 packaging/zero3e/ ZERO 3E device/computer box units, udev rules and install recipe
+native/ywp/      portable C YWP/1 core for MCU boxes (ADRs 0027, 0029)
 tests/           offline behavior, fault, driver transcript, and loopback tests
 benchmarks/      reproducible control, media, and telemetry software measurements
 scripts/

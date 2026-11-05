@@ -19,6 +19,11 @@ boot and stepped at any moment (time sync, bad RTC); the node receives
 ``now + skew`` as its wall reading with every input. Each sender has a
 transport address so producer data-plane admission (ADR 0024) can be
 simulated, including injected spoofed or replayed datagrams.
+
+Implementations (ADR 0027): nodes come from ``NODE_FACTORY``, the Python
+reference by default. tests/native_ywp substitutes the native C node, which
+decodes its own datagrams (``on_datagram``) and encodes its own frames
+(``encode_frame``); everything else is shared.
 """
 
 from __future__ import annotations
@@ -26,8 +31,9 @@ from __future__ import annotations
 import heapq
 import math
 import random
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
+from typing import Any
 
 from yoke.core.frames import FrameDrop, decode, encode
 from yoke.core.node import Node
@@ -58,6 +64,15 @@ from yoke.drivers.sim import SimDriver
 
 PSK = b"simnet-psk"
 T0 = 1_754_000_000.0
+
+
+def python_node(config: NodeConfig, *, psk: bytes, **kwargs: Any) -> Node:
+    """The reference node; the site key stays with the shell (SimNet)."""
+    return Node(config, **kwargs)
+
+
+#: Builds every node a SimNet creates (read when the SimNet is constructed).
+NODE_FACTORY: Callable[..., Node] = python_node
 
 
 @dataclass(frozen=True)
@@ -130,6 +145,7 @@ class SimNet:
         self._observed: dict[str, int] = {}
         self._media_n = 0
         self._addresses: dict[str, str] = {"cli-sim": "10.0.0.250"}
+        self._factory = NODE_FACTORY
 
     # -- topology ------------------------------------------------------------
 
@@ -153,8 +169,9 @@ class SimNet:
         driver = SimDriver(media=media if role is Role.PRODUCER else None)
         config = NodeConfig(node_id=node_id, role=role, kind=kind, name=node_id)
         stored = state or PersistedState()
-        node = Node(
+        node = self._factory(
             config,
+            psk=self.psk,
             state=PersistedState(seq=stored.seq, pairing=stored.pairing),
             now=self.now,
             media=driver.describe(),
@@ -237,8 +254,9 @@ class SimNet:
         else:
             state = PersistedState(seq=sn.stored.seq, pairing=sn.stored.pairing)
         sn.driver = SimDriver(media=sn.driver.media)
-        sn.node = Node(
+        sn.node = self._factory(
             sn.config,
+            psk=self.psk,
             state=state,
             now=self.now,
             media=sn.driver.describe(),
@@ -578,6 +596,19 @@ class SimNet:
         sn = self.nodes[dst]
         if sn.offline:
             return
+        on_datagram = getattr(sn.node, "on_datagram", None)
+        if on_datagram is not None:  # a native node decodes for itself
+            try:
+                decode(raw, self.psk)
+            except FrameDrop as drop:
+                self._trace(f"  ! {dst} rx-drop {drop.reason.value}")
+            else:
+                sn.delivered.append((now, raw))
+            effects = on_datagram(
+                raw, now, wall=self.wall_of(dst), source=self.address_of(src)
+            )
+            self._process(sn, effects, now)
+            return
         try:
             frame = decode(raw, self.psk)
         except FrameDrop as drop:
@@ -594,14 +625,18 @@ class SimNet:
         status: DriverStatus | None = None
         for effect in effects:
             if isinstance(effect, SendFrame):
-                raw = encode(
-                    effect.type,
-                    sn.node_id,
-                    effect.seq,
-                    now + sn.wall_skew,
-                    effect.body,
-                    self.psk,
-                )
+                encode_frame = getattr(sn.node, "encode_frame", None)
+                if encode_frame is not None:  # native encoder, checked
+                    raw = encode_frame(effect, now + sn.wall_skew)
+                else:
+                    raw = encode(
+                        effect.type,
+                        sn.node_id,
+                        effect.seq,
+                        now + sn.wall_skew,
+                        effect.body,
+                        self.psk,
+                    )
                 self._broadcast(raw, sn.node_id)
             elif isinstance(effect, SendRaw):
                 self._broadcast(effect.raw, sn.node_id)

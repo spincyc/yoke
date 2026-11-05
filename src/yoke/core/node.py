@@ -105,6 +105,17 @@ def _bounded_detail(detail: str) -> str:
     return encoded.decode("utf-8", errors="ignore")
 
 
+def _same_json(a: object, b: object) -> bool:
+    """Identity of opaque JSON values is their canonical bytes (ADR 0029).
+
+    Python equality would also merge ``1``, ``1.0`` and ``true``; every
+    implementation must agree on what counts as a changed value.
+    """
+    if a is None or b is None:
+        return a is b
+    return canonical_bytes({"v": a}) == canonical_bytes({"v": b})
+
+
 def _err_suffix(err: str | None) -> str:
     return f", error {err!r}" if err else ""
 
@@ -747,7 +758,7 @@ class Node:
                     fx.append(DetachMedia())
                 fx.extend(self._paired_producer_gone(origin, now))
             elif rec.media is not None and (
-                returned or self._attached_media != rec.media
+                returned or not _same_json(self._attached_media, rec.media)
             ):
                 self._attached_media = rec.media
                 self._teardown_pending = False
@@ -817,7 +828,7 @@ class Node:
         is_rejected = (
             rejected is not None
             and version_key(version) == version_key(rejected[0])
-            and producer == rejected[1]
+            and _same_json(producer, rejected[1])
         )
         entry = self._cache_get(consumer, now)
         if (
@@ -1283,7 +1294,13 @@ class Node:
         self._bound_maps()
 
     def _bound_maps(self) -> None:
-        keep = self._pairing.producer
+        keep = {self._pairing.producer}
+        # A currently admitted consumer's replay and source rows are never
+        # evicted (ADR 0029): a flood of other authentic origins could
+        # otherwise let replays of its captured frames rebind admission. One
+        # MAX_TRACKED for every map keeps origins >= peers, so the replay map
+        # always has an unprotected row to evict.
+        admitted = keep | {pid for pid, _ in self._admitted}
         for name in (
             "_replay",
             "_peers",
@@ -1292,13 +1309,14 @@ class Node:
             "_resend_at",
             "_sources",
         ):
-            self._cap_fifo(getattr(self, name), keep)
+            protected = admitted if name in ("_replay", "_sources") else keep
+            self._cap_fifo(getattr(self, name), protected)
 
     @staticmethod
-    def _cap_fifo(mapping: dict[str, object], keep: str | None) -> None:
+    def _cap_fifo(mapping: dict[str, object], keep: set[str | None]) -> None:
         while len(mapping) > MAX_TRACKED:
             for oldest in mapping:
-                if oldest != keep:
+                if oldest not in keep:
                     del mapping[oldest]
                     break
             else:

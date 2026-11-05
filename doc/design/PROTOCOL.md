@@ -1,7 +1,7 @@
 # Yoke Wire Protocol v1 (YWP/1)
 
 Status: normative for v1, with compatible correctness clarifications in
-ADRs 0012, 0023 and 0024. The frame envelope and version remain **YWP/1**:
+ADRs 0012, 0023, 0024 and 0029. The frame envelope and version remain **YWP/1**:
 existing clients can still send intents and observe multicast. An
 incompatible authority or wire change requires a new version; these fixes
 do not implement the planned per-device/source-authorized YWP/2 security
@@ -50,7 +50,18 @@ below, not a requirement on third-party senders. Duplicate detection
 (Replay defense) compares the canonical re-serialization of the whole
 parsed frame, `sig` included: a byte-identical repeat is a `dup`, while a
 re-formatted copy signed over its own bytes carries a different `sig` and
-counts as `stale`.
+counts as `stale`. An implementation may compare a keyed digest of those
+bytes instead of the bytes (ADR 0029).
+
+The number model is the reference's (ADR 0029). A number with a fraction
+or exponent is an IEEE 754 binary64 value, rounded to nearest with ties to
+even; one that rounds to infinity is not finite and the frame is
+`malformed`. Its canonical spelling is the shortest digit string that
+rounds back to the same value, in Python `repr` layout (`1E2` is
+`100.0`, `1e-5` is `1e-05`, `-0.0` stays `-0.0`). A number without either
+is an integer of arbitrary size, canonically its decimal digits (`-0` is
+`0`). The `ts` field may be such an integer only if it converts, rounded
+the same way, to a finite binary64 value.
 
 ## Frame envelope
 
@@ -293,7 +304,8 @@ prove payload flow, application behavior or a physical target's response.
 Driver evidence (group membership, process running, selected channel or
 owned USB import) is described in bounded `driver_status.detail` announce
 metadata and `media-up` event detail when available.
-A changed non-null producer description invalidates prior attachment
+A changed non-null producer description (its canonical bytes differ,
+ADR 0029) invalidates prior attachment
 readiness: clear old status evidence and announce pending before starting
 the replacement attach. Only current-generation backend success restores
 active readiness.
@@ -443,6 +455,15 @@ A node is live if an `ann` was received within `PEER_TIMEOUT` (3 ×
 consumer paired to a lost producer transitions media to `pending`
 (pairing retained). On the producer's return: `peer-returned`, media
 re-attached.
+
+Per-origin bookkeeping (peer records, replay marks, admission sources, and
+cached and rejected intents) is bounded per table, FIFO in insertion
+order, and never evicts the currently paired producer; a peer lost or
+departed for longer than `PEER_FORGET` (300 s) is forgotten with its
+replay mark (ADR 0010). The bound is an implementation capacity, not a
+protocol constant: the reference keeps 4096 entries per table, while a
+microcontroller node configures fewer and should hold at least every
+origin active on its site (ADR 0029).
 
 ## Anti-entropy
 
