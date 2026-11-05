@@ -34,6 +34,19 @@
  *  - One slot is reserved for control transfers (when max_urbs >= 2), and
  *    the pool keeps a control buffer (YUSB_EXPORT_EP0_BYTES), so bulk and
  *    interrupt URBs cannot starve ep0.
+ *  - Write progress (max_urbs >= 3): one more slot, and a pool region that
+ *    holds one max_urb_bytes OUT buffer, are kept for non-control OUT URBs;
+ *    IN URBs that find only those are held. IN buffers are placed best fit
+ *    from the high end, OUT buffers from the low end. Invariant (with a
+ *    pool_bytes that holds both reserves, as the automatic one does): an
+ *    OUT URB that waits for a slot or buffer (and so stops the stream when
+ *    it carries data) waits only for earlier OUT or control URBs at the
+ *    backend to complete (an OUT buffer is released at completion) or for
+ *    replies to be sent, never for non-control IN URBs, which a device may
+ *    keep parked for good.
+ *    Reads parked on every IN slot therefore cannot block the write they
+ *    wait on, nor the CMD_UNLINK behind it. What remains: a write the
+ *    device never accepts still stops the next write (and the stream).
  * Memory referenced by yusb_export_tx_iov segments stays valid and
  * unchanged until yusb_export_tx_done reports it sent, so a platform may
  * release its lock around the send.
@@ -62,7 +75,8 @@
 #define YUSB_EXPORT_EP0_BYTES 1024u
 #endif
 /* pool_bytes 0: room for this many URBs of max_urb_bytes (fewer when
- * max_urbs is smaller), plus the control buffer. */
+ * max_urbs is smaller; one of them is the write reserve), plus the
+ * control buffer. */
 #ifndef YUSB_EXPORT_AUTO_POOL_URBS
 #define YUSB_EXPORT_AUTO_POOL_URBS 8u
 #endif
@@ -140,8 +154,11 @@ typedef struct {
     yusb_yx_params_t yx;           /* extension levers/cache accepted; levers 0: plain */
     /* URB buffer budget in bytes, allocated once at create. Each URB's
      * buffer is cut from it to fit (data room as in the backend notes, plus
-     * YUSB_HEADROOM, rounded to buffers->align); the first
-     * YUSB_EXPORT_EP0_BYTES of room is kept for control. A full pool holds
+     * YUSB_HEADROOM, rounded to buffers->align). It is cut in order into
+     * the control reserve (YUSB_EXPORT_EP0_BYTES of room), the write
+     * reserve (one max_urb_bytes OUT buffer) and the rest; IN URBs use only
+     * the rest, so a budget below those reserves leaves no room for IN
+     * (they complete -ENOMEM). A full pool holds
      * URBs back (flow control above), it does not fail them. With YX
      * agreed, a bulk IN buffer also holds yusb_yx_bound(length) bytes for
      * the encoded reply when the pool can hold both (else that reply goes

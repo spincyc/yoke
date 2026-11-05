@@ -472,12 +472,12 @@ static void test_export_unlink_reaches_urbs_parked_in_full_slots(void)
     yusb_hc_ops_t ops = ops_();
     yusb_export_cfg_t cfg;
     cfg_(&cfg);
-    cfg.max_urbs = 4;
+    cfg.max_urbs = 5;   /* 3 for IN, 1 kept for OUT, 1 for control */
     yusb_export_t *x = create_with(&cfg, &ops);
     import(x, NULL);
-    /* Interrupt reads that never complete take every non-control slot; two
-     * more are held. The host then gives up on a parked one and on a held
-     * one: both CMD_UNLINKs must be read. */
+    /* Interrupt reads that never complete take every IN slot; two more are
+     * held. The host then gives up on a parked one and on a held one: both
+     * CMD_UNLINKs must be read. */
     uint8_t in[16 * 48];
     size_t len = 0;
     for (uint32_t seq = 1; seq <= 5; ++seq) len += put_submit(in + len, seq, 1, 3, 64, NULL);
@@ -511,15 +511,171 @@ static void test_export_unlink_reaches_urbs_parked_in_full_slots(void)
     CHECK(yusb_export_counters(x)->unlinked == 2);
     /* Held set full: the stream stops (backpressure), then resumes. */
     len = 0;
-    for (uint32_t seq = 10; seq < 10 + 4 + 1; ++seq) len += put_submit(in + len, seq, 1, 3, 64, NULL);
+    for (uint32_t seq = 10; seq < 10 + 5 + 1; ++seq) len += put_submit(in + len, seq, 1, 3, 64, NULL);
     uint8_t *buf;
-    CHECK(feed(x, in, len) == len);   /* staged; 4 held, the fifth waits */
+    CHECK(feed(x, in, len) == len);   /* staged; 5 held, the sixth waits */
     CHECK(yusb_export_rx_space(x, &buf) == 0 && hc.n == 5);
     yusb_export_complete(x, hc.urbs[1], 0, 8, 0);
     drain(x);
     CHECK(hc.n == 6 && hc.urbs[5]->seqnum == 10);
     CHECK(yusb_export_rx_space(x, &buf) > 0);
     finish(x);
+}
+
+/* --- write progress: OUT URBs never wait on parked reads ------------------ */
+
+static bool hc_has(uint32_t seq)
+{
+    for (unsigned i = 0; i < hc.n; ++i)
+        if (hc.urbs[i]->seqnum == seq) return true;
+    return false;
+}
+
+/* N1: reads that wait on the device hold every slot reads may use; the
+ * write the device needs, and the unlink behind it, still go through. */
+static void test_export_write_passes_reads_parked_on_every_slot(void)
+{
+    yusb_hc_ops_t ops = ops_();
+    yusb_export_cfg_t cfg;
+    yusb_export_defaults(&cfg);
+    cfg.max_urbs = 4;
+    cfg.max_urb_bytes = 4096;
+    yusb_export_t *x = create_with(&cfg, &ops);
+    import(x, NULL);
+    static uint8_t in[8 * 48 + 64];
+    size_t len = 0;
+    for (uint32_t k = 0; k < 5; ++k) len += put_submit(in + len, 10 + k, 1, 1, 512, NULL);
+    len += put_submit(in + len, 20, 0, 2, 64, NULL);
+    memset(in + len, 0x5a, 64);
+    len += 64;
+    len += put_unlink(in + len, 21, 10);
+    CHECK(feed(x, in, len) == len);
+    uint8_t *buf;
+    CHECK(hc_has(20) && hc.ncancel == 1 && yusb_export_rx_space(x, &buf) > 0);
+    finish(x);
+}
+
+/* N4: four writes, each followed by a read; the writes complete and the
+ * pinned reads must not split the pool so that a 4 KiB write never fits. */
+static void test_export_pinned_reads_do_not_fragment_writes_out(void)
+{
+    yusb_hc_ops_t ops = ops_();
+    yusb_export_cfg_t cfg;
+    yusb_export_defaults(&cfg);
+    cfg.max_urbs = 32;
+    cfg.max_urb_bytes = 4096;
+    cfg.pool_bytes = 1032 + 4 * (4096 + 8);   /* control reserve + four 4 KiB buffers */
+    yusb_export_t *x = create_with(&cfg, &ops);
+    import(x, NULL);
+    static uint8_t in[8 * (48 + 3000)];
+    size_t len = 0;
+    for (uint32_t r = 0; r < 4; ++r) {
+        len += put_submit(in + len, 100 + 2 * r, 0, 2, 3000, NULL);
+        len += 3000;
+        len += put_submit(in + len, 101 + 2 * r, 1, 1, 512, NULL);
+    }
+    CHECK(feed(x, in, len) == len);
+    for (unsigned i = 0; i < hc.n; ++i)
+        if (!hc.urbs[i]->dir_in) yusb_export_complete(x, hc.urbs[i], 0, 3000, 0);
+    drain(x);
+    CHECK(hc.n == 8);   /* every read went to the device too */
+    len = put_submit(in, 200, 0, 2, 4096, NULL) + 4096;
+    CHECK(feed(x, in, len) == len);
+    CHECK(hc_has(200));
+    finish(x);
+}
+
+/* A cdc-acm-like device at ESP32-S3 sizing: 16 bulk reads and the
+ * notification read parked (17 > the 14 IN slots), then writes and line
+ * control requests. Everything is served; the stream never stops for
+ * long, and the parked reads are unlinked at the end. */
+static void test_export_serial_device_at_mcu_sizing(void)
+{
+    yusb_hc_ops_t ops = ops_();
+    yusb_export_cfg_t cfg;
+    yusb_export_defaults(&cfg);
+    cfg.max_urbs = 16;
+    cfg.max_urb_bytes = 4096;
+    yusb_export_t *x = create_with(&cfg, &ops);
+    import(x, NULL);
+    static uint8_t in[64 * (48 + 4096)];
+    size_t len = 0;
+    uint32_t seq = 1;
+    for (; seq <= 16; ++seq) len += put_submit(in + len, seq, 1, 1, 64, NULL);
+    len += put_submit(in + len, seq++, 1, 3, 16, NULL);   /* 17: notification */
+    const uint8_t line_coding[8] = {0x21, 0x20, 0, 0, 0, 0, 7, 0};
+    const uint8_t line_state[8] = {0x21, 0x22, 3, 0, 0, 0, 0, 0};
+    unsigned writes = 0, controls = 0;
+    for (int round = 0; round < 12; ++round) {
+        len += put_submit(in + len, seq++, 0, 0, 7, line_coding);
+        memset(in + len, 0x11, 7);
+        len += 7;
+        len += put_submit(in + len, seq++, 0, 0, 0, line_state);
+        controls += 2;
+        for (int w = 0; w < 3; ++w, ++writes) {
+            uint32_t n = 1 + (uint32_t)(round * 997 + w * 131) % 4096;
+            len += put_submit(in + len, seq++, 0, 2, n, NULL);
+            memset(in + len, w, n);
+            len += n;
+        }
+    }
+    bool done[256] = {false};
+    size_t off = 0;
+    have = 0;
+    for (int step = 0; off < len && step < 1000; ++step) {
+        off += feed(x, in + off, len - off);
+        /* The device takes every write and control request; reads wait. */
+        for (unsigned i = 0; i < hc.n; ++i) {
+            yusb_xurb_t *u = hc.urbs[i];
+            if (done[i] || (u->dir_in && u->type != YUSB_XFER_CONTROL)) continue;
+            done[i] = true;
+            yusb_export_complete(x, u, 0, u->length, 0);
+        }
+        drain(x);
+    }
+    CHECK(off == len);
+    unsigned ins = 0;
+    for (unsigned i = 0; i < hc.n; ++i) ins += hc.urbs[i]->dir_in;
+    CHECK(ins == 14);   /* every IN slot parked; three reads held */
+    size_t pos = 0;
+    msg_t m;
+    unsigned rets = 0;
+    while (next_msg(&pos, &m, none_in, NULL, NULL)) {
+        CHECK(m.h.command == YUSB_RET_SUBMIT && m.h.status == 0 && m.h.seqnum > 17);
+        rets++;
+    }
+    CHECK(rets == writes + controls);
+    /* Data arrives on one read: a held read takes its slot. Then the host
+     * closes the port, unlinking every read. */
+    for (unsigned i = 0; i < hc.n; ++i)
+        if (hc.urbs[i]->dir_in && !done[i]) {
+            memset(hc.urbs[i]->data, 'a', 5);
+            yusb_export_complete(x, hc.urbs[i], 0, 5, 0);
+            done[i] = true;
+            break;
+        }
+    have = 0;
+    drain(x);
+    unsigned now_ins = 0;
+    for (unsigned i = 0; i < hc.n; ++i) now_ins += hc.urbs[i]->dir_in;
+    CHECK(now_ins == ins + 1);
+    len = 0;
+    for (uint32_t r = 2; r <= 17; ++r) len += put_unlink(in + len, 1000 + r, r);
+    CHECK(feed(x, in, len) == len);
+    for (unsigned i = 0; i < hc.ncancel; ++i) yusb_export_complete(x, hc.cancelled[i], -YUSB_ECONNRESET, 0, 0);
+    drain(x);
+    pos = 0;
+    unsigned unlinked = 0, data = 0;
+    while (next_msg(&pos, &m, all_in, NULL, NULL)) {
+        if (m.h.command == YUSB_RET_SUBMIT) data += m.h.actual_length == 5;
+        if (m.h.command == YUSB_RET_UNLINK) unlinked += m.h.status == -YUSB_ECONNRESET;
+    }
+    CHECK(data == 1 && unlinked == 16);
+    yusb_export_close(x);
+    for (unsigned i = 0; i < hc.n; ++i)
+        if (!done[i]) yusb_export_complete(x, hc.urbs[i], -YUSB_ECONNRESET, 0, 0);
+    CHECK(yusb_export_idle(x));
+    yusb_export_destroy(x);
 }
 
 /* --- lane C: buffers sized per URB, pool exhaustion ---------------------- */
@@ -541,15 +697,16 @@ static void test_export_pool_sizes_buffers_per_urb(void)
     yusb_export_t *x = create_with(&cfg, &ops);
     hc.align = 64;
     import(x, NULL);
-    /* 15 small parked reads fit the automatic pool (8 x 4 KiB). */
+    /* 14 small parked reads (every IN slot) fit the automatic pool. */
     for (uint32_t seq = 1; seq <= 15; ++seq) submit_in(x, seq, 3, 64);
-    CHECK(hc.n == 15);
+    CHECK(hc.n == 14);
     for (unsigned i = 0; i < hc.n; ++i)
         for (unsigned k = 0; k < i; ++k) CHECK(!overlap(hc.urbs[i], hc.urbs[k]));
     finish(x);
 
-    /* A small pool: room for three 4 KiB URBs. Exhaustion holds URBs. */
-    cfg.pool_bytes = 3 * (64 + 4096) + (64 + 1024);
+    /* A small pool: the control and write reserves and room for three
+     * 4 KiB reads. Exhaustion holds URBs. */
+    cfg.pool_bytes = (64 + 1024) + 4 * (64 + 4096);
     x = create_with(&cfg, &ops);
     hc.align = 64;
     import(x, NULL);
@@ -569,20 +726,25 @@ static void test_export_pool_sizes_buffers_per_urb(void)
     CHECK(next_msg(&pos, &m, all_in, NULL, NULL) && m.h.seqnum == 1 && m.h.actual_length == 4096);
     CHECK(m.data && m.data[0] == 0xa5 && m.data[4095] == 0xa5);
     CHECK(next_msg(&pos, &m, all_in, NULL, NULL) && m.h.seqnum == 2 && m.h.actual_length == 0);
-    /* OUT data waits for a buffer: the stream stops before its payload. */
-    static uint8_t in[48 + 4096 + 48];
+    /* Reads fill the shared part; a write still gets the write reserve. A
+     * second write waits for the first (only for it): the stream stops
+     * before its payload and resumes when the first completes. */
+    static uint8_t in[2 * (48 + 4096) + 48];
     size_t len = put_submit(in, 20, 0, 2, 4096, NULL);
     memset(in + len, 0x3c, 4096);
+    len += 4096;
+    len += put_submit(in + len, 22, 0, 2, 4096, NULL);
+    memset(in + len, 0x3d, 4096);
     len += 4096;
     len += put_submit(in + len, 21, 1, 0, 18, get_device);
     uint8_t *buf;
     size_t took = feed(x, in, len);
-    CHECK(yusb_export_rx_space(x, &buf) == 0 && hc.n == 5);
-    yusb_export_complete(x, hc.urbs[2], 0, 0, 0);
-    drain(x);
+    CHECK(yusb_export_rx_space(x, &buf) == 0 && hc.n == 6 && hc.urbs[5]->seqnum == 20);
+    CHECK(hc.urbs[5]->data[4095] == 0x3c);
+    yusb_export_complete(x, hc.urbs[5], 0, 4096, 0);
     CHECK(feed(x, in + took, len - took) == len - took);
-    CHECK(hc.n == 7 && hc.urbs[5]->seqnum == 20 && hc.urbs[5]->data[4095] == 0x3c);
-    CHECK(hc.urbs[6]->seqnum == 21);
+    CHECK(hc.n == 8 && hc.urbs[6]->seqnum == 22 && hc.urbs[6]->data[4095] == 0x3d);
+    CHECK(hc.urbs[7]->seqnum == 21);
     finish(x);
 
     /* A pool that cannot hold a URB fails it with -ENOMEM; zero-length
@@ -888,6 +1050,9 @@ int main(void)
     test_export_devlist_rejects_bad_records_and_sizes_the_reply();
     test_export_unknown_unlinks();
     test_export_unlink_reaches_urbs_parked_in_full_slots();
+    test_export_write_passes_reads_parked_on_every_slot();
+    test_export_pinned_reads_do_not_fragment_writes_out();
+    test_export_serial_device_at_mcu_sizing();
     test_export_pool_sizes_buffers_per_urb();
     test_export_yx_replies_match_the_reference_encoder();
     test_export_readahead_alone_is_not_framed();
