@@ -34,9 +34,9 @@ Memory is allocated only at create and on configuration changes. `yusb_proxy_foo
 
 | Configuration | Proxy at create | Pumps, worst case | Export per connection |
 |---|---|---|---|
-| Linux defaults | 186 KB | 4.6 MB | 1.08 MB (32 URBs, automatic pool) |
+| Linux defaults | 186 KB | 4.6 MB | 1.09 MB (32 URBs, automatic pool, 128 held) |
 | Linux, YX FILL+LZ4+CACHE (64 blocks) | 801 KB | 5.0 MB | 1.64 MB |
-| ESP32-S3 (MCU bounds) | 51.9 KB | 66 KB | 48.4 KB (16 URBs, 4 KiB max) |
+| ESP32-S3 (MCU bounds) | 51.9 KB | 66 KB | 49.8 KB (16 URBs, 4 KiB max, 64 held) |
 | ESP32-S3, YX FILL / FILL+LZ4 / +CACHE 16 | 60.5 / 77.0 / 208 KB | 82 KB | — / 69.9 / 202 KB |
 
 All figures are exact: `test_native_footprint.py` (proxy) and `test_native_export_core.py` (export) count every heap byte by linker wrapping and check the footprint against it; YX figures include what an accepted offer allocates at import. On the ESP32-S3 a YX cache does not fit. The cores need about 2.3 KB of task stack plus the platform's `vsnprintf`.

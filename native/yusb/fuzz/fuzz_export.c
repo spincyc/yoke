@@ -20,12 +20,15 @@
  * Progress oracle (data[1] low nibble 0xf): the input instead drives a
  * well-formed client against a device that completes every write and
  * control request at once but parks every read until it chooses to
- * answer one. While the client keeps at most 2 * max_urbs - 2 reads
- * outstanding (the IN slots plus the held set), every byte it sends must
- * be read: writes never wait on parked reads (yusb_export.h). At the end
- * the device answers everything, and every CMD_SUBMIT must have exactly one
- * answer (RET_SUBMIT, or RET_UNLINK -ECONNRESET when unlinked first) and
- * every CMD_UNLINK exactly one RET_UNLINK. */
+ * answer one; max_held is automatic or tiny (data[0] bits 4-6). However
+ * many reads the client leaves outstanding, every byte it sends must be
+ * parsed: the stream never stops at a read, and writes never wait on
+ * parked reads (yusb_export.h). Reads beyond the held set fail with
+ * RET_SUBMIT(-ENOMEM). At the end the device answers everything, and every
+ * CMD_SUBMIT must have exactly one answer (RET_SUBMIT, or RET_UNLINK
+ * -ECONNRESET when unlinked first) and every CMD_UNLINK exactly one
+ * RET_UNLINK (status 0 only for an unknown seqnum or a URB already
+ * answered before it). */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -114,7 +117,6 @@ static struct {
     pm_done_t done[256];
     unsigned ndone;
     bool parse;                /* after the import reply */
-    unsigned outstanding;      /* reads sent and not answered */
     uint8_t kind[P_SEQS];
     uint32_t victim[P_SEQS];   /* K_UNLINK: the seqnum unlinked */
     uint8_t answers[P_SEQS];   /* RET_SUBMIT for submits, RET_UNLINK for unlinks */
@@ -207,18 +209,20 @@ static bool pm_settle(yusb_export_t *x)
         size_t payload = h.command == YUSB_RET_SUBMIT && pm.dir_in[h.seqnum] ? h.actual_length : 0;
         if (pm.have - pos < YUSB_USBIP_HEADER_SIZE + payload) break;
         if (h.command == YUSB_RET_SUBMIT) {
-            if (pm.kind[h.seqnum] == K_UNLINK || h.status || h.actual_length > pm.length[h.seqnum]) abort();
-            if (!pm.dir_in[h.seqnum] && h.actual_length != pm.length[h.seqnum]) abort();
-            if (pm.kind[h.seqnum] == K_IN) pm.outstanding--;
+            if (pm.kind[h.seqnum] == K_UNLINK || h.actual_length > pm.length[h.seqnum]) abort();
+            if (h.status == -YUSB_ENOMEM) {   /* held set full: holdable submits only */
+                if (h.actual_length || (!pm.dir_in[h.seqnum] && pm.length[h.seqnum])) abort();
+            } else if (h.status || (!pm.dir_in[h.seqnum] && h.actual_length != pm.length[h.seqnum])) {
+                abort();
+            }
         } else if (h.command == YUSB_RET_UNLINK) {
             if (pm.kind[h.seqnum] != K_UNLINK) abort();
             uint32_t v = pm.victim[h.seqnum];
             if (h.status == -YUSB_ECONNRESET) {
                 if (v >= P_SEQS / 2 || pm.kind[v] != K_IN || pm.unlinked[v]) abort();
                 pm.unlinked[v] = true;
-                pm.outstanding--;
             }
-            else if (h.status || v < P_SEQS / 2) abort();   /* RET_UNLINK(0): unknown seqnums only */
+            else if (h.status || (v < P_SEQS / 2 && !pm.answers[v])) abort();   /* unknown or answered */
         } else {
             abort();
         }
@@ -258,6 +262,7 @@ static void progress(const uint8_t *data, size_t size)
     yusb_export_cfg_t cfg;
     yusb_export_defaults(&cfg);
     cfg.max_urbs = (uint16_t)(3 + data[0] % 14);
+    cfg.max_held = (uint16_t)((data[0] >> 4) & 7);
     cfg.max_urb_bytes = 4096;
     yusb_buffers_t hook = {64, hook_alloc, hook_free, NULL};
     yusb_hc_ops_t ops = {.endpoint_type = pm_type, .submit = pm_submit, .cancel = pm_cancel, .log = on_log};
@@ -275,7 +280,6 @@ static void progress(const uint8_t *data, size_t size)
     if (pm.have != YUSB_REP_IMPORT_SIZE) abort();
     pm.have = 0;
     pm.parse = true;
-    const unsigned bound = 2u * cfg.max_urbs - 2u;
     static uint8_t msg[16 * (48 + 4096)];
     uint32_t seq = 1, unknown = P_SEQS / 2;
     size_t at = 1;
@@ -291,11 +295,9 @@ static void progress(const uint8_t *data, size_t size)
             uint32_t n = (uint32_t)(at < size ? data[at] : b) * 17u % 4097u;
             yusb_usbip_hdr_t h;
             if (op <= 2) {
-                if (pm.outstanding >= bound) continue;
                 unsigned ep = b & 8 ? 3 : 1;
                 h = yusb_cmd_submit(seq, P_DEVID, 1, ep, YUSB_URB_DIR_IN, 1 + n % 512, ep == 3 ? 8 : 0, NULL);
                 pm.kind[seq] = K_IN;
-                pm.outstanding++;
             } else if (op <= 4) {
                 h = yusb_cmd_submit(seq, P_DEVID, 0, b & 8 ? 4 : 2, 0, n, 0, NULL);
                 pm.kind[seq] = K_OUT;
@@ -335,7 +337,7 @@ static void progress(const uint8_t *data, size_t size)
         pm_feed(x, msg, len);
     }
     /* The device answers every read; everything must be answered once. */
-    for (int round = 0; round < 64 && (pm.nparked || pm.ndone); ++round) {
+    for (unsigned round = 0; round < P_SEQS && (pm.nparked || pm.ndone); ++round) {   /* one per held read */
         while (pm.nparked) pm_answer(0, 3);
         pm_settle(x);
     }

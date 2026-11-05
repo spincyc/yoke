@@ -17,15 +17,18 @@
  *    for every buffer. With YX, a
  *    bulk IN buffer also has room for the encoded reply's headers and
  *    bodies (RAW bodies are sent from the data itself).
- *  - held: CMD_SUBMITs without data that found no slot or no buffer. They
- *    wait in arrival order while the stream keeps being parsed, so a
- *    CMD_UNLINK behind them is still read (a client can park every slot in
- *    reads that never complete and then unlink one).
- *  - notes: RET_UNLINKs that belong to no slot (unknown seqnum, held URB),
- *    each with its own bytes until they are sent.
- * When the held set, the notes, or (for OUT data) a slot and buffer run
- * out, the core stops receiving (TCP backpressure) until bytes are sent or
- * URBs complete. Per endpoint, URBs reach the backend in arrival order.
+ *  - held: CMD_SUBMITs without data that found no slot or no buffer
+ *    (max_held of them). They wait in arrival order while the stream keeps
+ *    being parsed, so a CMD_UNLINK behind them is still read (a client can
+ *    park every slot in reads that never complete and then unlink one).
+ *    With the held set full, such a submit is answered at once with
+ *    RET_SUBMIT(-ENOMEM), as a stub that cannot allocate would.
+ *  - notes: replies that belong to no slot (RET_UNLINK for an unknown
+ *    seqnum or a held URB, RET_SUBMIT(-ENOMEM) for an overflow), each with
+ *    its own bytes until they are sent.
+ * The core stops receiving (TCP backpressure) only for an OUT URB with data
+ * that has no slot or buffer yet, and while every note waits to be sent.
+ * Per endpoint, URBs reach the backend in arrival order.
  *
  * Write progress (yusb_export.h): IN URBs never take the write slot or the
  * write arena, so an OUT URB that waits for a slot or buffer waits only on
@@ -119,7 +122,7 @@ struct yusb_export {
     xslot_t *slots;
     unsigned nslots, nfree, nonctl, nin;   /* in use: all, non-control, IN */
     xheld_t *held;            /* arrival order */
-    unsigned nheld;
+    unsigned nheld, max_held;
     xnote_t *notes;           /* nslots entries */
     uint16_t held_on[KEYS];   /* held URBs per endpoint key */
     uint16_t flushed_on[KEYS];/* collateral URBs awaiting resubmission */
@@ -176,6 +179,13 @@ void yusb_export_defaults(yusb_export_cfg_t *cfg)
     memset(cfg, 0, sizeof(*cfg));
     cfg->max_urbs = 32;
     cfg->max_urb_bytes = 128u * 1024u;   /* Linux usb-storage: 120 KiB per command */
+}
+
+/* Held submits: cfg->max_held, or max(4 * max_urbs, 64). */
+static unsigned held_capacity(const yusb_export_cfg_t *cfg)
+{
+    if (cfg->max_held) return cfg->max_held;
+    return 4u * cfg->max_urbs > 64u ? 4u * cfg->max_urbs : 64u;
 }
 
 static bool cfg_ok(const yusb_export_cfg_t *cfg)
@@ -260,7 +270,8 @@ size_t yusb_export_footprint(const yusb_export_cfg_t *cfg, const yusb_buffers_t 
     yusb_yx_params_t limits;
     bool yx = yx_limits(cfg, &limits);
     size_t n = cfg->max_urbs;
-    size_t bytes = sizeof(yusb_export_t) + n * (sizeof(xslot_t) + sizeof(xheld_t) + sizeof(xnote_t)) +
+    size_t bytes = sizeof(yusb_export_t) + n * (sizeof(xslot_t) + sizeof(xnote_t)) +
+                   held_capacity(cfg) * sizeof(xheld_t) +
                    A_COUNT * n * sizeof(uint16_t) +
                    txq_capacity(cfg, pool, yx) * sizeof(yusb_iov_t) +
                    rx_stage_size(cfg->max_urb_bytes) + pool_alloc_bytes(&layout, pool);
@@ -348,12 +359,13 @@ yusb_export_t *yusb_export_create(const yusb_export_cfg_t *cfg, const yusb_hc_op
     x->dev = -1;
     x->receiving = -1;
     x->nslots = x->nfree = cfg->max_urbs;
+    x->max_held = held_capacity(cfg);
     ybuf_layout(&x->layout, ops->buffers);
     size_t size[A_COUNT], pool = pool_plan(cfg, &x->layout, size);
     for (size_t a = 0, base = 0; a < A_COUNT; base += size[a++]) x->arenas[a] = (arena_t){base, size[a], NULL, 0};
     yusb_yx_params_t limits;
     bool ok = (x->slots = calloc(x->nslots, sizeof(*x->slots))) &&
-              (x->held = calloc(x->nslots, sizeof(*x->held))) &&
+              (x->held = calloc(x->max_held, sizeof(*x->held))) &&
               (x->notes = calloc(x->nslots, sizeof(*x->notes))) &&
               (x->arenas[A_EP0].ids = calloc(x->nslots, sizeof(uint16_t))) &&
               (x->arenas[A_OUT].ids = calloc(x->nslots, sizeof(uint16_t))) &&
@@ -667,6 +679,13 @@ static void kick(yusb_export_t *x)
 
 /* --- URBs --------------------------------------------------------------- */
 
+static xnote_t *free_note(yusb_export_t *x)
+{
+    for (unsigned i = 0; i < x->nslots; ++i)
+        if (!x->notes[i].used) return &x->notes[i];
+    return NULL;
+}
+
 static int on_submit(yusb_export_t *x)
 {
     const yusb_usbip_hdr_t *h = &x->hdr;
@@ -691,16 +710,32 @@ static int on_submit(yusb_export_t *x)
     bool payload = !dir_in && h->length;
     xslot_t *s = NULL;
     if (!x->held_on[r.key] && !x->flushed_on[r.key]) s = acquire(x, &r);
+    xnote_t *note = NULL;
     if (!s) {
         /* OUT data follows the header: it needs its buffer now. */
-        if (payload || x->nheld == x->nslots) return RX_WAIT;
-        x->held[x->nheld++] = r;
-        x->held_on[r.key]++;
+        if (payload) return RX_WAIT;
+        /* Held set full: fail it now rather than stop the stream (only
+         * sending the reply can be waited for). */
+        if (x->nheld == x->max_held && !(note = free_note(x))) return RX_WAIT;
     }
     if (type == YUSB_XFER_CONTROL && (!yusb_setup_is_in(&setup) || !setup.length) == dir_in)
         xlog(x, "BOGUS control dir");
     rx_record(&x->rx, YUSB_USBIP_HEADER_SIZE);
-    if (!s) return YUSB_OK;
+    if (note) {
+        yusb_usbip_hdr_t ret = yusb_ret_submit(h->seqnum, -YUSB_ENOMEM, 0);
+        ret.number_of_packets = YUSB_NON_ISO_PACKETS;
+        yusb_usbip_encode(&ret, note->raw);
+        note->used = true;
+        x->counters.ret_submits++;
+        if (!push(x, note->raw, YUSB_USBIP_HEADER_SIZE)) return YUSB_ERR_PROTOCOL;
+        note->tx_end = x->tx.queued;
+        return YUSB_OK;
+    }
+    if (!s) {
+        x->held[x->nheld++] = r;
+        x->held_on[r.key]++;
+        return YUSB_OK;
+    }
     if (payload) {
         x->counters.out_bytes += h->length;
         x->receiving = (int)(s - x->slots);
@@ -716,13 +751,6 @@ static int on_submit(yusb_export_t *x)
     }
     start(x, s);
     return YUSB_OK;
-}
-
-static xnote_t *free_note(yusb_export_t *x)
-{
-    for (unsigned i = 0; i < x->nslots; ++i)
-        if (!x->notes[i].used) return &x->notes[i];
-    return NULL;
 }
 
 static int on_unlink(yusb_export_t *x)

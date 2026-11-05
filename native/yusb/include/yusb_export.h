@@ -20,33 +20,32 @@
  * The ADR 0028 extension is accepted when offered and configured.
  *
  * Flow control. Per endpoint, URBs reach the backend in arrival order.
+ * Slots (max_urbs): one is kept for control transfers (max_urbs >= 2) and
+ * one for non-control OUT URBs (max_urbs >= 3), so at most max_urbs - 2
+ * IN URBs are at the backend. The pool likewise keeps a control buffer
+ * (YUSB_EXPORT_EP0_BYTES) and a write buffer (one max_urb_bytes OUT URB);
+ * IN buffers come from the rest only, best fit from its high end.
  *  - A CMD_SUBMIT without OUT data (IN, or OUT of length 0) that finds no
- *    free slot or no buffer is held (up to max_urbs of them) and parsing
- *    continues, so a CMD_UNLINK for a URB parked in a read that never
- *    completes is still read. Unlinking a held URB yields RET_UNLINK
- *    (-ECONNRESET) and no RET_SUBMIT, as the stub does for a URB it has
- *    not started.
- *  - A CMD_SUBMIT with OUT data waits for its slot and buffer: the stream
- *    stops there (rx_space returns 0), and anything behind it, a
- *    CMD_UNLINK included, is read only once an earlier URB completes.
- *  - The stream also stops while max_urbs URBs are held, or while max_urbs
- *    RET_UNLINKs for held or unknown URBs are waiting to be sent.
- *  - One slot is reserved for control transfers (when max_urbs >= 2), and
- *    the pool keeps a control buffer (YUSB_EXPORT_EP0_BYTES), so bulk and
- *    interrupt URBs cannot starve ep0.
- *  - Write progress (max_urbs >= 3): one more slot, and a pool region that
- *    holds one max_urb_bytes OUT buffer, are kept for non-control OUT URBs;
- *    IN URBs that find only those are held. IN buffers are placed best fit
- *    from the high end, OUT buffers from the low end. Invariant (with a
- *    pool_bytes that holds both reserves, as the automatic one does): an
- *    OUT URB that waits for a slot or buffer (and so stops the stream when
- *    it carries data) waits only for earlier OUT or control URBs at the
- *    backend to complete (an OUT buffer is released at completion) or for
- *    replies to be sent, never for non-control IN URBs, which a device may
- *    keep parked for good.
- *    Reads parked on every IN slot therefore cannot block the write they
- *    wait on, nor the CMD_UNLINK behind it. What remains: a write the
- *    device never accepts still stops the next write (and the stream).
+ *    slot or buffer is held, up to max_held of them, and parsing goes on.
+ *    Unlinking a held URB yields RET_UNLINK(-ECONNRESET) and no RET_SUBMIT,
+ *    as the stub does for a URB it has not started. With max_held held,
+ *    the next such submit is answered at once with RET_SUBMIT(-ENOMEM)
+ *    (a stub that cannot allocate does the same); a later CMD_UNLINK of it
+ *    yields RET_UNLINK(0) after that RET_SUBMIT.
+ *  - Client bound: reads at the device are limited by those max_urbs - 2
+ *    slots and by the pool; max_held more wait held; any read beyond that
+ *    fails with -ENOMEM instead of stopping the stream.
+ *  - Invariant: parsing never waits on an IN URB. It stops (rx_space
+ *    returns 0, TCP backpressure) only (a) at a CMD_SUBMIT with OUT data
+ *    until it has a slot and buffer, which, with a pool_bytes that holds
+ *    both reserves (the automatic one does), means until earlier OUT or
+ *    control URBs complete at the device (an OUT buffer is released at
+ *    completion); and (b) while every reply without a slot (max_urbs of
+ *    them: RET_UNLINK for held or unknown URBs, RET_SUBMIT(-ENOMEM)) waits
+ *    to be sent. Reads the device keeps parked for good cannot block the
+ *    write they wait on, nor a CMD_UNLINK behind it. The one remaining
+ *    device wait: a write the device never accepts stops the next write,
+ *    and the stream behind it.
  * Memory referenced by yusb_export_tx_iov segments stays valid and
  * unchanged until yusb_export_tx_done reports it sent, so a platform may
  * release its lock around the send.
@@ -159,11 +158,14 @@ typedef struct {
      * reserve (one max_urb_bytes OUT buffer) and the rest; IN URBs use only
      * the rest, so a budget below those reserves leaves no room for IN
      * (they complete -ENOMEM). A full pool holds
-     * URBs back (flow control above), it does not fail them. With YX
+     * URBs back (flow control above). With YX
      * agreed, a bulk IN buffer also holds yusb_yx_bound(length) bytes for
      * the encoded reply when the pool can hold both (else that reply goes
      * plain). 0: automatic (YUSB_EXPORT_AUTO_POOL_URBS). */
     size_t pool_bytes;
+    /* Submits without OUT data held for a slot or buffer (flow control
+     * above), about 28 bytes each. 0: automatic, max(4 * max_urbs, 64). */
+    uint16_t max_held;
 } yusb_export_cfg_t;
 
 void yusb_export_defaults(yusb_export_cfg_t *cfg);

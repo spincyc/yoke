@@ -473,6 +473,7 @@ static void test_export_unlink_reaches_urbs_parked_in_full_slots(void)
     yusb_export_cfg_t cfg;
     cfg_(&cfg);
     cfg.max_urbs = 5;   /* 3 for IN, 1 kept for OUT, 1 for control */
+    cfg.max_held = 5;
     yusb_export_t *x = create_with(&cfg, &ops);
     import(x, NULL);
     /* Interrupt reads that never complete take every IN slot; two more are
@@ -509,16 +510,25 @@ static void test_export_unlink_reaches_urbs_parked_in_full_slots(void)
     }
     CHECK(seen == 3);
     CHECK(yusb_export_counters(x)->unlinked == 2);
-    /* Held set full: the stream stops (backpressure), then resumes. */
+    /* Held set full: the next read fails with -ENOMEM at once and the
+     * stream goes on; its later unlink gets RET_UNLINK(0) after it. */
+    have = 0;
     len = 0;
     for (uint32_t seq = 10; seq < 10 + 5 + 1; ++seq) len += put_submit(in + len, seq, 1, 3, 64, NULL);
+    len += put_unlink(in + len, 103, 15);
     uint8_t *buf;
-    CHECK(feed(x, in, len) == len);   /* staged; 5 held, the sixth waits */
-    CHECK(yusb_export_rx_space(x, &buf) == 0 && hc.n == 5);
+    CHECK(feed(x, in, len) == len);   /* 10..14 held, 15 refused */
+    CHECK(yusb_export_rx_space(x, &buf) > 0 && hc.n == 5);
+    drain(x);
+    pos = 0;
+    CHECK(next_msg(&pos, &m, seq_in, NULL, NULL) && m.h.command == YUSB_RET_SUBMIT && m.h.seqnum == 15 &&
+          m.h.status == -YUSB_ENOMEM && m.h.actual_length == 0);
+    CHECK(next_msg(&pos, &m, seq_in, NULL, NULL) && m.h.command == YUSB_RET_UNLINK && m.h.seqnum == 103 &&
+          m.h.status == 0);
+    CHECK(!next_msg(&pos, &m, seq_in, NULL, NULL));
     yusb_export_complete(x, hc.urbs[1], 0, 8, 0);
     drain(x);
     CHECK(hc.n == 6 && hc.urbs[5]->seqnum == 10);
-    CHECK(yusb_export_rx_space(x, &buf) > 0);
     finish(x);
 }
 
@@ -553,6 +563,193 @@ static void test_export_write_passes_reads_parked_on_every_slot(void)
     uint8_t *buf;
     CHECK(hc_has(20) && hc.ncancel == 1 && yusb_export_rx_space(x, &buf) > 0);
     finish(x);
+}
+
+/* rr7: more reads than the IN slots and max_urbs together; the write and
+ * the unlink behind them are still parsed (reads are held, not waited on). */
+static void test_export_reads_beyond_slots_do_not_stop_the_stream(void)
+{
+    yusb_hc_ops_t ops = ops_();
+    yusb_export_cfg_t cfg;
+    yusb_export_defaults(&cfg);
+    cfg.max_urbs = 4;
+    cfg.max_urb_bytes = 4096;
+    yusb_export_t *x = create_with(&cfg, &ops);
+    import(x, NULL);
+    static uint8_t in[10 * 48 + 64];
+    size_t len = 0;
+    for (uint32_t k = 0; k < 7; ++k) len += put_submit(in + len, 10 + k, 1, 1, 512, NULL);
+    len += put_submit(in + len, 20, 0, 2, 64, NULL);
+    memset(in + len, 0x5a, 64);
+    len += 64;
+    len += put_unlink(in + len, 21, 16);   /* a held read */
+    CHECK(feed(x, in, len) == len);
+    uint8_t *buf;
+    CHECK(hc_has(20) && yusb_export_rx_space(x, &buf) > 0);
+    unsigned reads = 0;
+    for (unsigned i = 0; i < hc.n; ++i) reads += hc.urbs[i]->dir_in;
+    CHECK(reads == 2);   /* max_urbs - 2 at the device, 5 held */
+    yusb_export_complete(x, hc.urbs[2], 0, 64, 0);
+    have = 0;
+    drain(x);
+    size_t pos = 0;
+    msg_t m;
+    CHECK(next_msg(&pos, &m, none_in, NULL, NULL) && m.h.command == YUSB_RET_UNLINK && m.h.seqnum == 21 &&
+          m.h.status == -YUSB_ECONNRESET);
+    CHECK(next_msg(&pos, &m, none_in, NULL, NULL) && m.h.seqnum == 20 && m.h.status == 0);
+    finish(x);
+}
+
+/* live.c: random reads (parked for good), writes, control reads and
+ * unlinks at max_urbs 3, 4 and 16 with automatic and tight pools. The
+ * device completes writes, control and cancels only. Every byte must be
+ * parsed and every write reach the device. */
+static struct {
+    yusb_xurb_t *u[1024];
+    unsigned n;
+    yusb_xurb_t *cancelled[1024];
+    unsigned nc, writes;
+} lv;
+
+static uint32_t lv_rng;
+static uint32_t lv_rnd(void)
+{
+    lv_rng ^= lv_rng << 13;
+    lv_rng ^= lv_rng >> 17;
+    lv_rng ^= lv_rng << 5;
+    return lv_rng;
+}
+
+static int lv_type(void *c, unsigned d, unsigned a)
+{
+    (void)c; (void)d;
+    return a == 0x81 || a == 0x83 || a == 0x02 || a == 0x04 ? (int)YUSB_XFER_BULK : -1;
+}
+
+static int lv_submit(void *c, unsigned d, yusb_xurb_t *u)
+{
+    (void)c; (void)d;
+    if (lv.n < 1024) lv.u[lv.n++] = u;
+    if (!u->dir_in && u->type == YUSB_XFER_BULK && u->length) lv.writes++;
+    return 0;
+}
+
+static void lv_cancel(void *c, unsigned d, yusb_xurb_t *u)
+{
+    (void)c; (void)d;
+    if (lv.nc < 1024) lv.cancelled[lv.nc++] = u;
+}
+
+static void lv_backend(yusb_export_t *x)
+{
+    for (int round = 0; round < 64; ++round) {
+        bool any = false;
+        for (unsigned i = 0; i < lv.nc; ++i)
+            for (unsigned k = 0; k < lv.n; ++k)
+                if (lv.u[k] == lv.cancelled[i]) {
+                    lv.u[k] = lv.u[--lv.n];
+                    yusb_export_complete(x, lv.cancelled[i], -YUSB_ECONNRESET, 0, 0);
+                    any = true;
+                    break;
+                }
+        lv.nc = 0;
+        for (unsigned k = 0; k < lv.n;) {
+            yusb_xurb_t *u = lv.u[k];
+            if (u->dir_in && u->type != YUSB_XFER_CONTROL) { ++k; continue; }   /* parked read */
+            lv.u[k] = lv.u[--lv.n];
+            yusb_export_complete(x, u, 0, u->dir_in ? 0 : u->length, 0);
+            any = true;
+        }
+        have = 0;
+        drain(x);
+        if (!any) break;
+    }
+}
+
+static bool lv_trial(unsigned max_urbs, size_t pool, unsigned seed)
+{
+    static uint8_t stream[1 << 20];
+    lv_rng = seed * 2654435761u + 1;
+    memset(&lv, 0, sizeof(lv));
+    yusb_export_cfg_t cfg;
+    yusb_export_defaults(&cfg);
+    cfg.max_urbs = (uint16_t)max_urbs;
+    cfg.max_urb_bytes = 4096;
+    cfg.pool_bytes = pool;
+    yusb_hc_ops_t ops = {.claim = h_claim, .release = h_release, .endpoint_type = lv_type,
+                         .submit = lv_submit, .cancel = lv_cancel};
+    yusb_export_dev_t dev = dev_();
+    yusb_export_t *x = yusb_export_create(&cfg, &ops, &dev, 1);
+    if (!x) return false;
+    size_t len = YUSB_REQ_IMPORT_SIZE;
+    yusb_req_import_encode("1-1", stream);
+    uint32_t seq = 1, reads[256];
+    unsigned nreads = 0, writes = 0, steps = 20 + lv_rnd() % 160;
+    for (unsigned k = 0; k < steps; ++k) {
+        unsigned kind = lv_rnd() % 10;
+        yusb_usbip_hdr_t h;
+        if (kind < 4) {
+            h = yusb_cmd_submit(seq, DEVID, 1, lv_rnd() & 1 ? 1 : 3, YUSB_URB_DIR_IN, 1 + lv_rnd() % 4096, 0, NULL);
+            reads[nreads++] = seq++;
+        } else if (kind < 7) {
+            uint32_t l = 1 + lv_rnd() % 4096;
+            h = yusb_cmd_submit(seq++, DEVID, 0, lv_rnd() & 1 ? 2 : 4, 0, l, 0, NULL);
+            yusb_usbip_encode(&h, stream + len);
+            memset(stream + len + 48, 0x5a, l);
+            len += 48 + l;
+            writes++;
+            continue;
+        } else if (kind < 8) {
+            h = yusb_cmd_submit(seq++, DEVID, 1, 0, YUSB_URB_DIR_IN, 18, 0, get_device);
+        } else if (nreads) {
+            h = yusb_cmd_unlink(seq++, DEVID, reads[lv_rnd() % nreads]);
+        } else {
+            continue;
+        }
+        yusb_usbip_encode(&h, stream + len);
+        len += 48;
+    }
+    size_t off = 0;
+    for (int stall = 0; off < len && stall < 8;) {
+        uint8_t *b;
+        size_t space = yusb_export_rx_space(x, &b);
+        if (space) {
+            size_t n = len - off < space ? len - off : space, cap = 1 + lv_rnd() % 3000;
+            if (n > cap) n = cap;
+            memcpy(b, stream + off, n);
+            if (yusb_export_rx_done(x, n, 0) < 0) break;
+            off += n;
+            stall = 0;
+        } else {
+            stall++;
+        }
+        lv_backend(x);
+    }
+    lv_backend(x);
+    uint8_t *b;
+    bool ok = off == len && yusb_export_rx_space(x, &b) > 0 && lv.writes == writes;
+    if (!ok)
+        fprintf(stderr, "liveness: max_urbs %u pool %zu seed %u: parsed %zu/%zu, writes %u/%u\n", max_urbs, pool,
+                seed, off, len, lv.writes, writes);
+    yusb_export_close(x);
+    lv_backend(x);
+    for (unsigned k = 0; k < lv.n; ++k) yusb_export_complete(x, lv.u[k], -YUSB_ECONNRESET, 0, 0);
+    CHECK(yusb_export_idle(x));
+    yusb_export_destroy(x);
+    have = 0;
+    return ok;
+}
+
+static void test_export_stream_never_stops_at_a_read(void)
+{
+    const unsigned urbs[] = {3, 4, 16};
+    const size_t pools[] = {0, 1032 + 4104, 1032 + 4104 + 1032, 1032 + 4104 + 4104};
+    for (unsigned u = 0; u < 3; ++u)
+        for (unsigned p = 0; p < 4; ++p) {
+            unsigned fails = 0;
+            for (unsigned seed = 1; seed <= 150 && fails < 3; ++seed) fails += !lv_trial(urbs[u], pools[p], seed);
+            CHECK(fails == 0);
+        }
 }
 
 /* N4: four writes, each followed by a read; the writes complete and the
@@ -1051,6 +1248,8 @@ int main(void)
     test_export_unknown_unlinks();
     test_export_unlink_reaches_urbs_parked_in_full_slots();
     test_export_write_passes_reads_parked_on_every_slot();
+    test_export_reads_beyond_slots_do_not_stop_the_stream();
+    test_export_stream_never_stops_at_a_read();
     test_export_pinned_reads_do_not_fragment_writes_out();
     test_export_serial_device_at_mcu_sizing();
     test_export_pool_sizes_buffers_per_urb();
