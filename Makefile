@@ -12,7 +12,7 @@ export TMPDIR := $(abspath .scratch/tmp)
 export PLAYWRIGHT_BROWSERS_PATH := $(abspath .scratch/cache/playwright)
 
 .PHONY: venv lint type test verify docs docs-serve browser-install verify-browser simulate \
-	benchmark-control benchmark-media benchmark-telemetry benchmark-usb verify-usb-kernel verify-firmware firmware-bench verify-net \
+	benchmark-control benchmark-media benchmark-telemetry benchmark-usb verify-usb-kernel verify-firmware firmware-bench ywp-bench ywp-fuzz verify-net \
 	media-send media-recv clean
 
 ROLE ?= recv
@@ -83,6 +83,20 @@ firmware-bench:
 		$(IR_CORE)/ir_core.c $(IR_CORE)/ir_program.c $(IR_CORE)/ir_encode.c \
 		-o .scratch/firmware-bench/host-ir-bench
 	.scratch/firmware-bench/host-ir-bench
+
+# Native YWP/1 library (native/ywp, ADR 0027). Host-only cost as JSON on
+# stdout, and longer libFuzzer runs than `make verify` does (FUZZ_SECONDS
+# per target); the grown decode corpus is then checked against Python.
+YWP := native/ywp
+FUZZ_SECONDS ?= 300
+ywp-bench:
+	mkdir -p .scratch/ywp-bench
+	cc -std=c11 -O2 -D_DEFAULT_SOURCE -I $(YWP)/include tests/native_ywp/c/bench.c \
+		$(wildcard $(YWP)/src/*.c) -o .scratch/ywp-bench/bench
+	.scratch/ywp-bench/bench
+
+ywp-fuzz: venv
+	YWP_FUZZ_SECONDS=$(FUZZ_SECONDS) $(BIN)/python -m pytest -q tests/native_ywp/test_ywp_fuzz.py
 
 simulate: venv
 	$(BIN)/python -m yoke.simulation --json

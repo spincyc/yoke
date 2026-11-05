@@ -2,7 +2,8 @@
 
 Each test drives real ``Node`` state machines through the real wire
 codec on the virtual ``SimNet`` bus (tests/simnet.py). No sockets, no
-wall clock; every run is reproducible from the net seed.
+wall clock; every run is reproducible from the net seed. Every scenario
+also runs with native C nodes (``implementation``; tests/native_ywp).
 
 Failure model (doc/design/ARCHITECTURE.md):
   intent lost, consumer offline, conflicting intents, dup/reorder/replay,
@@ -18,6 +19,7 @@ import itertools
 
 import pytest
 
+from tests import simnet
 from tests.simnet import T0, FaultPolicy, SimNet
 from yoke.core.frames import canonical_bytes, encode
 from yoke.core.types import (
@@ -32,6 +34,30 @@ from yoke.core.types import (
 )
 
 CLI = "cli-sim"
+
+
+@pytest.fixture(scope="session")
+def native_library(tmp_path_factory: pytest.TempPathFactory) -> object:
+    from tests.native_ywp.simnet_native import build_library
+
+    return build_library(tmp_path_factory.mktemp("ywp-native"))
+
+
+@pytest.fixture(autouse=True, params=("python", "c", "c-consumers", "c-producers"))
+def implementation(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> str:
+    """Each scenario runs unchanged with the reference nodes and with native C
+    nodes (ADR 0027): all native, native consumers with Python producers, and
+    native producers with Python consumers. The checks are the same."""
+    if request.param != "python":
+        from tests.native_ywp.simnet_native import native_factory
+
+        library = request.getfixturevalue("native_library")
+        monkeypatch.setattr(
+            simnet, "NODE_FACTORY", native_factory(library, request.param)
+        )
+    return str(request.param)
 
 
 def mesh(

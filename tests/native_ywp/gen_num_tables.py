@@ -1,0 +1,190 @@
+"""Generate native/ywp/src/ywp_num_pow.h, the constant tables of ywp_num.c.
+
+Run ``python tests/native_ywp/gen_num_tables.py`` after changing this file;
+``test_ywp_num.py`` checks that the checked-in header equals ``render()``.
+Everything emitted is checked here with exact integer arithmetic first.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from pathlib import Path
+
+TARGET = (
+    Path(__file__).resolve().parents[2] / "native" / "ywp" / "src" / "ywp_num_pow.h"
+)
+
+# 5^q for POW_MIN <= q <= POW_MAX. Below POW_MIN, (2^64 - 1) * 10^q is under
+# 2^-1075 and rounds to zero; Schubfach needs 10^-k for k >= -324.
+POW_MIN = -342
+POW_MAX = 324
+
+# Python rounds to infinity from here up (ties go to the even infinity).
+OVERFLOW = 2**1024 - 2**970
+
+
+def floor_log(base: int, num: int, den: int) -> int:
+    """floor(log_base(num / den)) for positive integers, exactly."""
+    k = 0
+    while num >= den * base:
+        den *= base
+        k += 1
+    while num < den:
+        num *= base
+        k -= 1
+    return k
+
+
+def exact_logs() -> dict[str, tuple[Callable[[int], int], range]]:
+    def fl2_10(x: int) -> int:
+        return floor_log(2, 10**x, 1) if x >= 0 else floor_log(2, 1, 10**-x)
+
+    def fl10_2(x: int) -> int:
+        return floor_log(10, 2**x, 1) if x >= 0 else floor_log(10, 1, 2**-x)
+
+    def fl10_34_2(x: int) -> int:
+        num, den = 3 * 2 ** max(x, 0), 4 * 2 ** max(-x, 0)
+        return floor_log(10, num, den)
+
+    return {
+        "FL2_10": (fl2_10, range(POW_MIN, POW_MAX + 1)),
+        "FL10_2": (fl10_2, range(-1100, 1100)),
+        "FL10_34_2": (fl10_34_2, range(-1100, 1100)),
+    }
+
+
+# floor(log_b(a^x)) as (x * MUL + ADD) >> SHIFT (floor), exact on the ranges
+# of exact_logs(); every product fits in 32 bits.
+LOG_CONSTANTS = {
+    "FL2_10": (1741647, 0, 19),
+    "FL10_2": (78913, 0, 18),
+    "FL10_34_2": (631305, -261663, 21),
+}
+
+
+def check_logs() -> None:
+    for name, (exact, span) in exact_logs().items():
+        mul, add, shift = LOG_CONSTANTS[name]
+        for x in span:
+            value = x * mul + add
+            assert -(2**31) <= value < 2**31, (name, x)
+            assert value >> shift == exact(x), (name, x)
+
+
+def pow5_128(q: int) -> int:
+    """5^q scaled by a power of two into [2^127, 2^128), truncated."""
+    if q >= 0:
+        n: int = 5**q
+        b = n.bit_length() - 1
+        t = n << (127 - b) if b <= 127 else n >> (b - 127)
+    else:
+        d: int = 5**-q
+        t = (1 << (127 + d.bit_length())) // d
+    assert 2**127 <= t < 2**128
+    return t
+
+
+def _first_hit(a: int, mod: int, lo: int, hi: int) -> int | None:
+    """Least x >= 0 with lo <= a x mod `mod` <= hi (0 <= lo <= hi < mod)."""
+    a %= mod
+    if lo == 0:
+        return 0
+    if a == 0:
+        return None
+    x = -(-lo // a)
+    if a * x <= hi:
+        return x
+    y = _first_hit(mod % a, a, (-hi) % a, (-lo) % a)
+    return None if y is None else -(-(lo + mod * y) // a)
+
+
+def _any_hit(a: int, mod: int, lo: int, hi: int, x0: int, x1: int) -> bool:
+    """Some x in [x0, x1] with lo <= a x mod `mod` <= hi?"""
+    b = a * x0 % mod
+    lo, hi = (lo - b) % mod, (hi - b) % mod
+    spans = [(lo, hi)] if lo <= hi else [(lo, mod - 1), (0, hi)]
+    for start, end in spans:
+        y = _first_hit(a, mod, start, end)
+        if y is not None and y <= x1 - x0:
+            return True
+    return False
+
+
+def fallback_exponents() -> set[int]:
+    """Exponents q at which el_round in ywp_num.c can leave its rounding
+    undecided, over every w <= 10^19 (19 digits, or 19 nines plus one).
+
+    Model of el_round: P = (w << lz) T(q), the cut c below the rounding bit
+    (normal: 53 bits under the top bit; subnormal: fixed), undecided when T
+    is inexact, bit c of P is clear and P mod 2^c >= 2^c - (w << lz). Checked
+    here on the superset window [2^c - 2^64, 2^c) of P mod 2^(c + 1).
+    """
+    hits = set()
+    for q in [*range(POW_MIN, 0), *range(56, 309)]:
+        t = pow5_128(q)
+        mul, add, shift = LOG_CONSTANTS["FL2_10"]
+        for lz in range(64):
+            lo, hi = 2 ** (63 - lz), min(10**19, 2 ** (64 - lz) - 1)
+            if lo > hi:
+                continue
+            split = -(-(2 ** (191 - lz)) // t)  # w >= split: P >= 2^191
+            for top, w0, w1 in (
+                (190, lo, min(hi, split - 1)),
+                (191, max(lo, split), hi),
+            ):
+                x = ((q * mul + add) >> shift) - 127 - lz
+                c = top - 53 if top + x >= -1022 else -1075 - x
+                if w0 > w1 or c >= 192:
+                    continue
+                mod = 2 ** (c + 1 - lz)
+                window = (max(0, 2 ** (c - lz) - 2 ** (64 - lz)), 2 ** (c - lz) - 1)
+                if _any_hit(t % mod, mod, *window, w0, w1):
+                    hits.add(q)
+    return hits
+
+
+def render() -> str:
+    check_logs()
+    lines = [
+        "/* Generated by tests/native_ywp/gen_num_tables.py; do not edit. */",
+        "#pragma once",
+        "#include <stdint.h>",
+        "",
+        "/* floor(log_b(a^x)) = (x * MUL + ADD) >> SHIFT, checked exhaustively",
+        " * by the generator over the ranges ywp_num.c uses. */",
+    ]
+    for name, (mul, add, shift) in LOG_CONSTANTS.items():
+        lines.append(f"#define YWP_{name}_MUL {mul}")
+        lines.append(
+            f"#define YWP_{name}_ADD ({add})"
+            if add < 0
+            else f"#define YWP_{name}_ADD {add}"
+        )
+        lines.append(f"#define YWP_{name}_SHIFT {shift}u")
+    digits = str(OVERFLOW)
+    lines += [
+        "",
+        f"/* 2^1024 - 2^970 ({len(digits)} digits): the least value Python rounds",
+        " * to infinity. */",
+        f'#define YWP_OVERFLOW_DIGITS "{digits}"',
+        "",
+        f"#define YWP_POW_MIN ({POW_MIN})",
+        f"#define YWP_POW_MAX {POW_MAX}",
+        "",
+        "/* {high, low} 64-bit halves of floor(5^q * 2^(127 - floor(log2 5^q))),",
+        " * row q - YWP_POW_MIN; exact for 0 <= q <= 55. */",
+        "static const uint64_t ywp_num_pow5[YWP_POW_MAX - YWP_POW_MIN + 1][2] = {",
+    ]
+    for q in range(POW_MIN, POW_MAX + 1):
+        t = pow5_128(q)
+        lines.append(f"    {{0x{t >> 64:016x}u, 0x{t & (2**64 - 1):016x}u}}, /* {q} */")
+    lines += ["};", ""]
+    return "\n".join(lines)
+
+
+def main() -> None:
+    TARGET.write_text(render())
+
+
+if __name__ == "__main__":
+    main()
