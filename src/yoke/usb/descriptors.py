@@ -178,6 +178,10 @@ def parse_configuration(raw: bytes) -> Configuration:
     header: tuple[int, int, int, int, int, int, int] | None = None
     endpoints: list[Endpoint] = []
     hid: list[int] = []
+    # (bInterfaceNumber, address) of every endpoint so far, in descriptor
+    # order: alternate settings of one interface may reuse an address, two
+    # interfaces of one configuration may not (they would share a pipe).
+    owners: list[tuple[int, int]] = []
 
     def finish() -> None:
         if header is None:
@@ -218,6 +222,14 @@ def parse_configuration(raw: bytes) -> Configuration:
                 raise DescriptorError(f"endpoint {address:#04x} has wMaxPacketSize 0")
             if any(e.address == address for e in endpoints):
                 raise DescriptorError(f"duplicate endpoint {address:#04x}")
+            number = header[0]
+            other = next((n for n, a in owners if a == address and n != number), None)
+            if other is not None:
+                raise DescriptorError(
+                    f"duplicate endpoint {address:#04x} "
+                    f"in interfaces {other} and {number}"
+                )
+            owners.append((number, address))
             endpoints.append(endpoint)
         elif dtype == ch9.DT_HID and header is not None and len(body) >= 9:
             for start in range(6, 6 + 3 * body[5], 3):

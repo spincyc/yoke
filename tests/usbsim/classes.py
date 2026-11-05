@@ -30,8 +30,10 @@ class MassStorageHost:
         bulk_in: int = 0x81,
         bulk_out: int = 0x02,
         interface: int = 0,
+        timeout: float = 5.0,
     ) -> None:
         self.host = host
+        self.timeout = timeout
         self.bulk_in = bulk_in
         self.bulk_out = bulk_out
         self.interface = interface
@@ -47,10 +49,10 @@ class MassStorageHost:
 
     def _csw(self) -> CommandStatus:
         try:
-            raw = self.host.transfer_in(self.bulk_in, 13)
+            raw = self.host.transfer_in(self.bulk_in, 13, self.timeout)
         except StallError:
             self.host.clear_halt(self.bulk_in)
-            raw = self.host.transfer_in(self.bulk_in, 13)
+            raw = self.host.transfer_in(self.bulk_in, 13, self.timeout)
         signature, tag, residue, status = CSW.unpack(raw)
         if signature != b"USBS" or tag != self.tag:
             raise AssertionError(f"bad CSW {raw.hex()}")
@@ -65,16 +67,16 @@ class MassStorageHost:
         cbw = CBW.pack(
             b"USBC", self.tag, length, flags, 0, len(cb), cb.ljust(16, b"\0")
         )
-        self.host.transfer_out(self.bulk_out, cbw)
+        self.host.transfer_out(self.bulk_out, cbw, timeout=self.timeout)
         data = b""
         if data_in:
             try:
-                data = self.host.transfer_in(self.bulk_in, data_in)
+                data = self.host.transfer_in(self.bulk_in, data_in, self.timeout)
             except StallError:
                 self.host.clear_halt(self.bulk_in)
         elif data_out:
             try:
-                self.host.transfer_out(self.bulk_out, data_out)
+                self.host.transfer_out(self.bulk_out, data_out, timeout=self.timeout)
             except StallError:
                 self.host.clear_halt(self.bulk_out)
         return data, self._csw()

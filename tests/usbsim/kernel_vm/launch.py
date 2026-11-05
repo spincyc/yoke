@@ -10,6 +10,10 @@ drivers carry every byte:
       -> yoke.usb.worker (production code) -> /dev/raw-gadget on dummy_udc.0
       -> dummy_hcd.0 host -> usb-storage -> /dev/sdX (checksummed I/O)
 
+The same steps then run with the native worker (``yoke-gadget-worker``),
+and the native export core (``yusb-export-sim``) is imported by the guest
+kernel through vhci-hcd. ``make verify-usb-kernel`` builds both first.
+
 Skips cleanly (exit 0, "SKIP: reason") without Linux/KVM/QEMU, a matching
 kernel image and modules, or a static busybox. Exits 1 when the guest
 reports a failure or does not finish. No root is needed on the host.
@@ -37,7 +41,12 @@ GUEST_MODULES = (
     "kernel/drivers/usb/gadget/libcomposite",
     "kernel/drivers/usb/gadget/function/usb_f_mass_storage",
     "kernel/drivers/usb/usbip/usbip-host",
+    "kernel/drivers/usb/usbip/vhci-hcd",
     "kernel/drivers/usb/storage/usb-storage",
+)
+NATIVE = (
+    WORKTREE / ".scratch/native/yoke-gadget-worker",
+    WORKTREE / ".scratch/native/yusb-export-sim",
 )
 BUSYBOX = (Path("/usr/lib/initcpio/busybox"), Path("/usr/bin/busybox"))
 TOOLS = (Path("/usr/bin/mount"), Path("/usr/bin/kmod"), Path("/usr/bin/switch_root"))
@@ -260,13 +269,17 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--kernel", type=Path, default=Path("/boot/vmlinuz-linux"))
     parser.add_argument("--release", default=os.uname().release)
-    parser.add_argument("--timeout", type=float, default=600.0)
+    parser.add_argument("--timeout", type=float, default=900.0)
     parser.add_argument("--out", type=Path, default=WORKTREE / ".scratch/kernel-vm")
     args = parser.parse_args(argv)
     reason = preflight(args.kernel, args.release)
     if reason is not None:
         print(f"SKIP: {reason}")
         return 0
+    missing = [str(path) for path in NATIVE if not path.is_file()]
+    if missing:
+        print(f"FAIL: native binaries missing (run make native-usb): {missing}")
+        return 1
     initramfs = build_initramfs(args.out, args.release)
     events = run_vm(args.kernel, initramfs, args.timeout, args.out / "console.log")
     for event in events:

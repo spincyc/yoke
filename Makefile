@@ -13,6 +13,7 @@ export PLAYWRIGHT_BROWSERS_PATH := $(abspath .scratch/cache/playwright)
 
 .PHONY: venv lint type test verify docs docs-serve browser-install verify-browser simulate \
 	benchmark-control benchmark-media benchmark-telemetry benchmark-usb verify-usb-kernel verify-firmware firmware-bench ywp-bench ywp-fuzz verify-net \
+	native-usb fuzz-usb tsan-usb benchmark-usbtrace \
 	media-send media-recv clean
 
 ROLE ?= recv
@@ -119,8 +120,65 @@ benchmark-usb: venv
 # Opt-in real-kernel loopback of the gadget worker under QEMU/KVM (no root):
 # dummy_hcd + usbip-host + Raw Gadget + usb-storage. Skips cleanly without
 # KVM, QEMU, the running kernel's image/modules or busybox.
-verify-usb-kernel: venv
+verify-usb-kernel: venv native-usb
 	$(BIN)/python tests/usbsim/kernel_vm/launch.py
+
+# Native USB core (ADR 0027, native/README.md): the tier-2 gadget worker, its
+# simulation build (Raw Gadget calls served by tests/usbsim/rpc.py) and the
+# export server with a simulated disk. Host compiler; see native/README.md for
+# a native build on the ZERO 3E.
+NATIVE_OUT := .scratch/native
+NATIVE_CC ?= cc
+NATIVE_CFLAGS ?= -std=c11 -O2 -g -Wall -Wextra -Werror -Wshadow -Wstrict-prototypes
+NATIVE_INC := -Inative/yusb/include -Inative/yusb/linux -Inative/yusb/sim -Inative/third_party/lz4
+NATIVE_CORE := $(wildcard native/yusb/src/*.c) native/third_party/lz4/lz4.c
+NATIVE_LINUX := $(filter-out %/sys_linux.c,$(wildcard native/yusb/linux/*.c))
+NATIVE_HEADERS := $(wildcard native/yusb/*/*.h) native/third_party/lz4/lz4.h
+
+native-usb: $(NATIVE_OUT)/yoke-gadget-worker $(NATIVE_OUT)/yoke-gadget-worker-sim \
+	$(NATIVE_OUT)/yusb-export-sim
+$(NATIVE_OUT)/yoke-gadget-worker: $(NATIVE_CORE) $(NATIVE_LINUX) native/yusb/linux/sys_linux.c $(NATIVE_HEADERS)
+	mkdir -p $(NATIVE_OUT)
+	$(NATIVE_CC) $(NATIVE_CFLAGS) $(NATIVE_INC) $(filter %.c,$^) -o $@ -lpthread
+$(NATIVE_OUT)/yoke-gadget-worker-sim: $(NATIVE_CORE) $(NATIVE_LINUX) native/yusb/sim/sys_rpc.c $(NATIVE_HEADERS)
+	mkdir -p $(NATIVE_OUT)
+	$(NATIVE_CC) $(NATIVE_CFLAGS) $(NATIVE_INC) $(filter %.c,$^) -o $@ -lpthread
+$(NATIVE_OUT)/yusb-export-sim: $(NATIVE_CORE) native/yusb/sim/simdev.c native/yusb/sim/export_server.c $(NATIVE_HEADERS)
+	mkdir -p $(NATIVE_OUT)
+	$(NATIVE_CC) $(NATIVE_CFLAGS) $(NATIVE_INC) $(filter %.c,$^) -o $@
+
+# libFuzzer over every network-facing parser (USB/IP codec, descriptors, the
+# proxy and export streams, YX framing) and the control socket. Bounded:
+# FUZZ_SECONDS per target; seeds in native/yusb/fuzz/corpus/<target>/, working
+# corpora under .scratch/fuzz. Exits non-zero on the first crash.
+FUZZ_SECONDS ?= 60
+FUZZ_TARGETS := usbip desc proxy proxyyx export yx control
+fuzz-usb:
+	mkdir -p .scratch/fuzz
+	set -e; for t in $(FUZZ_TARGETS); do \
+		clang -g -O1 -std=c11 -fsanitize=fuzzer,address,undefined $(NATIVE_INC) \
+			native/yusb/fuzz/fuzz_$$t.c $(NATIVE_CORE) native/yusb/sim/simdev.c \
+			native/yusb/linux/control.c -o .scratch/fuzz/fuzz_$$t; \
+		mkdir -p .scratch/fuzz/corpus_$$t native/yusb/fuzz/corpus/$$t; \
+		.scratch/fuzz/fuzz_$$t .scratch/fuzz/corpus_$$t native/yusb/fuzz/corpus/$$t \
+			-max_total_time=$(FUZZ_SECONDS) -rss_limit_mb=2048 -max_len=20000 \
+			-artifact_prefix=.scratch/fuzz/crash_$$t- 2>.scratch/fuzz/$$t.log; \
+		tail -1 .scratch/fuzz/$$t.log; \
+	done
+
+# ThreadSanitizer over the native gadget worker in the simulator: the usbsim
+# scenarios and the control-socket tests against a -fsanitize=thread build
+# (tests/usbsim/native.py honours YOKE_NATIVE_SANITIZER). Not part of verify.
+TSAN_CC ?= clang
+tsan-usb: venv
+	YOKE_NATIVE_SANITIZER=thread CC=$(TSAN_CC) $(BIN)/python -m pytest -q \
+		tests/native_usb/test_native_usbsim.py tests/native_usb/test_native_control.py
+
+# Replay usbmon traces (synthetic now, real captures later) per ADR 0028 lever.
+USBTRACE_OPTIONS ?= --markdown
+benchmark-usbtrace: venv
+	$(BIN)/python tools/usbtrace/synth.py --out-dir .scratch/usbtrace
+	$(BIN)/python tools/usbtrace/replay.py .scratch/usbtrace --json-out .scratch/usbtrace/replay.json $(USBTRACE_OPTIONS)
 
 # First pass make verify, then use one command on each host. Multicast sends
 # to GROUP; set INTERFACE to each host's local IPv4 address. For unicast use

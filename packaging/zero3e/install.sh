@@ -10,7 +10,7 @@
 #
 #   install.sh device --node-id ID --host IPV4 --busid BUSID [--busid ...]
 #              [--port 3240] [--root DIR]
-#   install.sh computer [--root DIR]
+#   install.sh computer [--native-worker PATH] [--root DIR]
 #   install.sh vhci-lab [--root DIR]
 #
 # --root DIR stages files below DIR without creating accounts, changing
@@ -45,16 +45,18 @@ device | computer | vhci-lab) ;;
 esac
 
 root=""
+native_worker=""
 node_id=""
 host=""
 port=3240
 busids=""
 while [ $# -gt 0 ]; do
 	case "$1" in
-	--root | --node-id | --host | --port | --busid)
+	--root | --node-id | --host | --port | --busid | --native-worker)
 		[ $# -ge 2 ] || fail "$1 needs a value"
 		case "$1" in
 		--root) root=$2 ;;
+		--native-worker) native_worker=$2 ;;
 		--node-id) node_id=$2 ;;
 		--host) host=$2 ;;
 		--port) port=$2 ;;
@@ -90,6 +92,11 @@ if [ "$role" = device ]; then
 	done
 elif [ -n "$node_id$host$busids" ]; then
 	fail "--node-id, --host and --busid apply to the device role only"
+fi
+if [ -n "$native_worker" ]; then
+	[ "$role" = computer ] || fail "--native-worker applies to the computer role only"
+	[ -f "$native_worker" ] && [ -x "$native_worker" ] ||
+		fail "--native-worker must be the built yoke-gadget-worker (see native/README.md)"
 fi
 
 put() { # put SOURCE DEST MODE: copy with @PORT@ substituted
@@ -159,6 +166,21 @@ computer)
 		/etc/udev/rules.d/70-yoke-raw-gadget.rules 0644
 	put "$here/computer/modules-load.d/yoke-raw-gadget.conf" \
 		/etc/modules-load.d/yoke-raw-gadget.conf 0644
+	dropin="$units/yoke-gadget.service.d/20-native-worker.conf"
+	if [ -n "$native_worker" ]; then
+		# ADR 0027: the native worker replaces the Python one in the data path.
+		# The drop-in only selects it ($YOKE_GADGET_WORKER); the binary path is
+		# yoke.usb.worker's --native-binary default.
+		install -d -m 0755 "$root/usr/local/libexec/yoke"
+		install -m 0755 "$native_worker" "$root/usr/local/libexec/yoke/yoke-gadget-worker"
+		put "$here/computer/yoke-gadget.service.d/20-native-worker.conf" "$dropin" 0644
+	elif [ -e "$root$dropin" ]; then
+		# Re-run without --native-worker: back to the Python worker. The
+		# binary stays; it is unused without the drop-in.
+		rm -f "$root$dropin"
+		rmdir "$root$units/yoke-gadget.service.d" 2>/dev/null || true
+		echo "removed $dropin: the Python gadget worker is selected again"
+	fi
 	;;
 vhci-lab)
 	put "$here/vhci-lab/yoked.service.d/20-usbip-vhci.conf" \

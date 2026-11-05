@@ -148,6 +148,15 @@ class UrbResult:
 Callback = Callable[["Urb"], None]
 
 
+def control_data(result: UrbResult) -> bytes | None:
+    """A control URB's IN data or b"", None on STALL; raise on other errors."""
+    if result.status == -usbip.EPIPE:
+        return None
+    if result.status != 0:
+        raise UsbipError(f"control transfer failed with status {result.status}")
+    return result.data
+
+
 class Urb:
     """One submitted URB (or one unlink request)."""
 
@@ -394,27 +403,30 @@ class UsbipConnection:
         A transfer error other than STALL raises :class:`UsbipError`. On
         timeout the URB is unlinked and :class:`TimeoutError` propagates.
         """
-        # Linux treats an IN request with wLength 0 as OUT (usb_submit_urb
-        # warns "BOGUS control dir" otherwise).
-        direction = DIR_IN if setup.has_in_data else DIR_OUT
-        urb = self.submit(
-            0,
-            direction,
-            setup.length,
-            data=data if direction == DIR_OUT else None,
-            setup=setup.pack(),
-        )
+        urb = self.submit_control(setup, data)
         try:
             result = urb.wait(timeout)
         except TimeoutError:
             with contextlib.suppress(UsbipError, TimeoutError):
                 self.cancel([urb], timeout=timeout)
             raise
-        if result.status == -usbip.EPIPE:
-            return None
-        if result.status != 0:
-            raise UsbipError(f"control transfer failed with status {result.status}")
-        return result.data
+        return control_data(result)
+
+    def submit_control(
+        self, setup: Setup, data: bytes = b"", callback: Callback | None = None
+    ) -> Urb:
+        """Submit one control URB; :func:`control_data` interprets its result."""
+        # Linux treats an IN request with wLength 0 as OUT (usb_submit_urb
+        # warns "BOGUS control dir" otherwise).
+        direction = DIR_IN if setup.has_in_data else DIR_OUT
+        return self.submit(
+            0,
+            direction,
+            setup.length,
+            data=data if direction == DIR_OUT else None,
+            setup=setup.pack(),
+            callback=callback,
+        )
 
     def _read_loop(self) -> None:
         header = bytearray(HEADER_SIZE)

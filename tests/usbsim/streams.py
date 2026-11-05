@@ -213,7 +213,7 @@ class TcpRelay:
                         break
                     continue
                 data = src.recv(65536)
-            except OSError:
+            except (OSError, ValueError):  # ValueError: closed by reset_all()
                 break
             if not data:
                 break
@@ -238,5 +238,7 @@ class TcpRelay:
 
     def close(self) -> None:
         self._stopped = True
+        with contextlib.suppress(OSError):
+            self._listener.shutdown(socket.SHUT_RDWR)  # wakes accept()
         self._listener.close()
         self.reset_all()

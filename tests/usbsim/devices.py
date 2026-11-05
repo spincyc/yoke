@@ -473,6 +473,7 @@ INVALID_COMMAND_OPCODE: Sense = (0x05, 0x20, 0x00)
 LBA_OUT_OF_RANGE: Sense = (0x05, 0x21, 0x00)
 INVALID_FIELD_IN_CDB: Sense = (0x05, 0x24, 0x00)
 LUN_NOT_SUPPORTED: Sense = (0x05, 0x25, 0x00)
+WRITE_ERROR: Sense = (0x03, 0x0C, 0x00)
 
 GET_MAX_LUN = 0xFE
 BULK_ONLY_RESET = 0xFF
@@ -529,6 +530,11 @@ class MassStorage(_SimDevice):
 
     :attr:`bot_resets` counts Bulk-Only Mass Storage Resets; the inherited
     :attr:`resets` keeps counting port resets.
+
+    :attr:`refuse_data_out` makes the next that many data-out phases fail
+    (BOT 1.0 section 6.7.3, a device that cannot take the host's data): the
+    first data packet is refused by STALL, the CSW reports a failed command
+    with nothing processed, and the halt clears with CLEAR_FEATURE.
     """
 
     BULK_IN: ClassVar[int] = 0x81
@@ -547,6 +553,7 @@ class MassStorage(_SimDevice):
         self._command: _Command | None = None
         self._pending_csw = b""
         self._invalid = False
+        self.refuse_data_out = 0
         super().__init__(
             _Spec(
                 speed=Speed.HIGH,
@@ -620,6 +627,14 @@ class MassStorage(_SimDevice):
         if self._phase is _Phase.STATUS_AFTER_HALT:
             return Verdict.NAK  # no new CBW until the CSW has been sent
         if self._phase is _Phase.DATA_OUT:
+            if self.refuse_data_out:
+                self.refuse_data_out -= 1
+                command = self._command
+                assert command is not None
+                command.status = STATUS_FAILED
+                self.sense = WRITE_ERROR
+                self._send_csw(command, command.expected - command.received)
+                return Verdict.STALL
             self._receive(packet, self.pipes[address].packet_size)
         else:
             self._accept_cbw(packet)

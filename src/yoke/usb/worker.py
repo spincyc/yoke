@@ -17,6 +17,7 @@ import os
 import signal
 import socket
 import stat
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -439,6 +440,32 @@ def production_factory(
     return factory
 
 
+NATIVE_BINARY = "/usr/local/libexec/yoke/yoke-gadget-worker"
+"""Where ``packaging/zero3e/install.sh computer --native-worker`` installs it."""
+
+EXIT_CONFIG = 78
+"""sysexits EX_CONFIG: the native worker binary is missing or not executable.
+A restart cannot fix it, so the unit can list it in RestartPreventExitStatus."""
+
+
+def native_command(args: argparse.Namespace) -> list[str]:
+    """The same options for ``yoke-gadget-worker`` (ADR 0027, native/README.md)."""
+    command = [args.native_binary, "--udc", args.udc, "--socket", args.socket]
+    command += ["--raw-gadget", args.raw_gadget, "--power-ma", str(args.power_ma)]
+    command += ["--max-in-endpoints", str(args.max_in_endpoints)]
+    command += ["--max-out-endpoints", str(args.max_out_endpoints)]
+    command += ["--in-depth", str(args.in_depth), "--out-window", str(args.out_window)]
+    command += ["--log-level", args.log_level]
+    for flag, value in (
+        ("--gadget-driver", args.gadget_driver),
+        ("--target", args.target),
+        ("--source", args.source),
+    ):
+        if value:
+            command += [flag, value]
+    return command
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m yoke.usb.worker",
@@ -464,6 +491,14 @@ def _parser() -> argparse.ArgumentParser:
         "--source", help="standalone bench mode: local IPv4 to connect from"
     )
     parser.add_argument("--log-level", default="INFO")
+    parser.add_argument(
+        "--implementation",
+        choices=("python", "native"),
+        default=os.environ.get("YOKE_GADGET_WORKER", "python"),
+        help="native: exec the C worker with the same options (default: "
+        "$YOKE_GADGET_WORKER or python)",
+    )
+    parser.add_argument("--native-binary", default=NATIVE_BINARY)
     return parser
 
 
@@ -478,6 +513,17 @@ def _parse_target(text: str, source: str | None = None) -> Target:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.implementation == "native":
+        command = native_command(args)
+        try:
+            os.execv(command[0], command)  # replaces this process; same unit
+        except OSError as exc:
+            print(
+                f"yoke.usb.worker: cannot run native worker {command[0]!r} "
+                f"(--native-binary): {exc.strerror or exc}",
+                file=sys.stderr,
+            )
+            return EXIT_CONFIG
     logging.basicConfig(
         level=args.log_level, format="%(levelname)s %(name)s: %(message)s"
     )

@@ -1,0 +1,24 @@
+LZ4 (BSD-2-Clause, see LICENSE), vendored unmodified for the YX payload
+codec (native/yusb/src/yx.c, ADR 0028).
+
+Upstream:  https://github.com/lz4/lz4
+Tag:       v1.10.0
+Tarball:   https://github.com/lz4/lz4/releases/download/v1.10.0/lz4-1.10.0.tar.gz
+sha256:    537512904744b35e232912055ccf8ec66d768639ff3abe5788d90d792ec5f48b
+           (matches the published lz4-1.10.0.tar.gz.sha256 release asset)
+
+Files, copied byte for byte from lib/ in the tarball:
+  lz4.c      9396f7de527bc8435de9c7569fb7998e56545a84b4f3c2d808c0235c01774539
+  lz4.h      26b82efc53d1570f3b54eef02e9c4764c1ad374ff03cac04e2ced5ea4d4c552f
+  xxhash.h   aefdd236f35130495c18764cabed3f7b216906855fc5e6a9025cd2040bc84444
+  xxhash.c   b667033dc735fb5ea5648e0a61a2e065e5ef5bbda53669730063bd856c643c48
+  LICENSE    8b58c446121a109ccf32edc094bba3010a3d85e4ee3702950db55e4d3e87736c
+
+Build notes:
+  - lz4.c is the only translation unit to compile.
+  - xxhash.c is NOT a translation unit. yx.c defines XXH_INLINE_ALL before
+    including xxhash.h, and this xxHash (0.6.5) then #includes xxhash.c
+    to get static copies, so no XXH symbol is exported. Do not add
+    xxhash.c to a source list.
+  - LZ4_MEMORY_USAGE (default 14, a 16 KiB compression state) may be set
+    lower on small targets; it changes compressed bytes, never the format.

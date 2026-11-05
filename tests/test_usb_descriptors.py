@@ -80,6 +80,57 @@ def test_malformed_configurations_are_rejected(raw: bytes) -> None:
         parse_configuration(raw)
 
 
+DUPLICATE_ENDPOINTS = {
+    "within one alternate setting": (
+        build.interface(0, endpoints=2, cls=0xFF)
+        + build.endpoint(0x81, 2, 512)
+        + build.endpoint(0x81, 2, 512),
+        1,
+        "duplicate endpoint 0x81",
+    ),
+    "across interfaces": (
+        build.interface(0, endpoints=1, cls=0xFF)
+        + build.endpoint(0x02, 2, 512)
+        + build.interface(1, endpoints=2, cls=0xFF)
+        + build.endpoint(0x81, 2, 512)
+        + build.endpoint(0x02, 2, 512),
+        2,
+        "duplicate endpoint 0x02 in interfaces 0 and 1",
+    ),
+    "across an interface and another's alternate setting": (
+        build.interface(0, endpoints=1, cls=0xFF)
+        + build.endpoint(0x81, 3, 8, 10)
+        + build.interface(1, endpoints=0, cls=0xFF)
+        + build.interface(2, endpoints=0, cls=0xFF)
+        + build.interface(2, alternate=1, endpoints=1, cls=0xFF)
+        + build.endpoint(0x81, 2, 512),
+        3,
+        "duplicate endpoint 0x81 in interfaces 0 and 2",
+    ),
+}
+
+
+@pytest.mark.parametrize("case", sorted(DUPLICATE_ENDPOINTS))
+def test_duplicate_endpoint_addresses_are_rejected(case: str) -> None:
+    body, interfaces, message = DUPLICATE_ENDPOINTS[case]
+    with pytest.raises(DescriptorError) as raised:
+        parse_configuration(build.configuration(body, interfaces=interfaces))
+    assert str(raised.value) == message
+
+
+def test_alternate_settings_of_one_interface_may_reuse_addresses() -> None:
+    body = (
+        build.interface(0, endpoints=1, cls=0xFF)
+        + build.endpoint(0x81, 2, 64)
+        + build.interface(1, endpoints=0, cls=0xFF)
+        + build.interface(0, alternate=1, endpoints=2, cls=0xFF)
+        + build.endpoint(0x81, 2, 512)
+        + build.endpoint(0x02, 2, 512)
+    )
+    config = parse_configuration(build.configuration(body, interfaces=2))
+    assert [e.address for e in config.interfaces[0][1].endpoints] == [0x81, 0x02]
+
+
 @pytest.mark.parametrize(
     ("speed", "device", "body", "match"),
     [

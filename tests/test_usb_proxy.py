@@ -9,6 +9,7 @@ behavior (the ⚠ list in doc/design/USB-DATAPATH.md stays open).
 
 from __future__ import annotations
 
+import struct
 import threading
 import time
 from collections.abc import Iterator
@@ -22,6 +23,8 @@ from tests.usbsim.classes import CdcHost, HidHost, MassStorageHost
 from tests.usbsim.device import DeviceModel, Verdict
 from tests.usbsim.devices import (
     ALL_DEVICES,
+    GET_SCRATCH,
+    SET_SCRATCH,
     CdcAcm,
     CompositeDevice,
     DisconnectingDevice,
@@ -187,6 +190,60 @@ def test_mass_storage_bot_round_trip_and_failed_command(bot_sizing: bool) -> Non
         assert ok.status == 0 and sense[2] & 0x0F == 0x05 and sense[12] == 0x20
         assert rig.proxy is not None and rig.proxy.counters.remote_stalls >= 1
         assert rig.host.violations == []
+
+
+def bot_write_refused_then_recovers(
+    storage: MassStorageHost, device: MassStorage
+) -> None:
+    """The write(-behind) error path, shared with the native worker's test.
+
+    The device refuses a 128 KiB WRITE(10)'s data-out phase by STALL: the
+    host sees the failure in the CSW (and, unless every packet was already
+    acknowledged, as a STALL it clears). The next READ and WRITE succeed,
+    so no stale data-out plan swallows their CBWs.
+    """
+    payload = bytes((i * 13) & 0xFF for i in range(256 * 512))
+    before = bytes(device.disk[20 * 512 : 276 * 512])
+    device.refuse_data_out = 1
+    cb = struct.pack(">BBIBHB", 0x2A, 0, 20, 0, 256, 0)
+    _, status = storage.command(cb, data_out=payload)
+    assert (status.status, status.residue) == (1, len(payload))
+    assert bytes(device.disk[20 * 512 : 276 * 512]) == before
+    sense, ok = storage.command(bytes([0x03, 0, 0, 0, 18, 0]), data_in=18)
+    assert ok.status == 0 and sense[2] & 0x0F == 0x03  # MEDIUM ERROR
+    assert storage.read10(0, 16) == bytes(device.disk[: 16 * 512])
+    storage.write10(20, payload)
+    assert bytes(device.disk[20 * 512 : 276 * 512]) == payload
+    assert storage.read10(20, 256) == payload
+
+
+def test_mass_storage_refused_write_then_read_and_write_succeed() -> None:
+    # out_window > 1 is excluded on purpose: it delays a data-out STALL onto
+    # the next OUT transaction, the next CBW (documented, USB-DATAPATH.md).
+    device = MassStorage()
+    with rig_for(device) as rig:
+        rig.host.attach()
+        rig.host.enumerate("linux")
+        bot_write_refused_then_recovers(MassStorageHost(rig.host, timeout=2.0), device)
+        assert rig.proxy is not None and rig.proxy.counters.remote_stalls >= 1
+        assert rig.host.violations == []
+
+
+def test_out_request_waiting_at_the_reset_gate_finishes_before_the_next_setup() -> None:
+    """An OUT request with data is no longer owed once its data is read (the
+    UDC completed the status stage), so a later SETUP must not abandon it
+    while it waits for the remote reset; the next SETUP follows in order."""
+    device = CompositeDevice()
+    with rig_for(device) as rig:
+        rig.host.attach()
+        rig.host.enumerate("linux")  # the remote is dirty: a reset will follow
+        rig.usbipd.reset_delay = 0.5
+        rig.host.reset()  # the remote port reset is now in flight for 0.5 s
+        data = bytes(range(16))
+        rig.host.control(Setup(0x40, SET_SCRATCH, 0, 0, len(data)), data)
+        assert rig.host.control(Setup(0xC0, GET_SCRATCH, 0, 0, 64)) == data
+        assert device.scratch == data
+        assert rig.proxy is not None and rig.proxy.counters.remote_resets >= 1
 
 
 def test_cdc_acm_line_coding_notification_and_packet_exact_echo() -> None:

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 import struct
+import threading
 from dataclasses import dataclass, field
 
 from yoke.usb import ch9
@@ -106,7 +107,12 @@ Decision = (
 
 @dataclass
 class ControlState:
-    """Mutable presentation state the event thread owns."""
+    """Mutable presentation state the event thread owns.
+
+    ``halted`` holds the endpoint addresses the proxy halted locally after a
+    remote STALL; GET_STATUS(endpoint) reports them. The endpoint pumps
+    change it too, so it is only touched through the locked methods below.
+    """
 
     configuration: int = 0
     alternates: dict[int, int] = field(default_factory=dict)
@@ -114,6 +120,27 @@ class ControlState:
     descriptor_misses: dict[tuple[int, int], tuple[bytes | None, int]] = field(
         default_factory=dict
     )
+    _halt_lock: threading.Lock = field(
+        default_factory=threading.Lock, repr=False, compare=False
+    )
+
+    def set_halted(self, address: int, halted: bool) -> None:
+        with self._halt_lock:
+            if halted:
+                self.halted.add(address)
+            else:
+                self.halted.discard(address)
+
+    def is_halted(self, address: int) -> bool:
+        with self._halt_lock:
+            return address in self.halted
+
+    def reset(self) -> None:
+        """Bus reset or configuration change: unconfigured, nothing halted."""
+        self.configuration = 0
+        self.alternates = {}
+        with self._halt_lock:
+            self.halted.clear()
 
     def active_endpoints(self, presentation: Presentation) -> set[int]:
         config = presentation.configuration(self.configuration)
@@ -183,7 +210,7 @@ def decide(
             if address & 0x0F == 0:
                 return Reply(b"\0\0")
             if address in state.active_endpoints(presentation):
-                return Reply(bytes([int(address in state.halted), 0]))
+                return Reply(bytes([int(state.is_halted(address)), 0]))
         return Stall("unknown status recipient")
     if request in (ch9.CLEAR_FEATURE, ch9.SET_FEATURE):
         if recipient == ch9.RECIP_ENDPOINT and setup.value == ch9.FEATURE_ENDPOINT_HALT:
