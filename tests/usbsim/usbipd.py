@@ -259,10 +259,12 @@ class _Connection:
         if cmd.devid != self.devid:
             self.violation("CMD_UNLINK devid mismatch")
             return
+        mode = self.server.unlink_mode
+        if mode == "ignore":
+            return  # a stuck stub: CMD_UNLINK is never answered
         with self.lock:
             urb = self.pending.pop(cmd.unlink_seqnum, None)
         status = 0
-        mode = self.server.unlink_mode
         if urb is not None and self.device.cancel(urb):
             self.server.stats.unlinked += 1
             if mode == "late-submit":
@@ -296,7 +298,7 @@ class FakeUsbipd:
         reset_delay: float = 0.0,
         unlink_mode: str = "cancel",
     ) -> None:
-        if unlink_mode not in ("cancel", "late-submit", "lost-completion"):
+        if unlink_mode not in ("cancel", "late-submit", "lost-completion", "ignore"):
             raise ValueError(f"unknown unlink mode {unlink_mode!r}")
         self.unlink_mode = unlink_mode
         self.exports = {
@@ -402,6 +404,9 @@ class FakeUsbipd:
     def stop(self) -> None:
         """Simulate a daemon stop: close the listener and every connection."""
         if self._listener is not None:
+            # close() alone does not wake a thread blocked in accept().
+            with contextlib.suppress(OSError):
+                self._listener.shutdown(socket.SHUT_RDWR)
             self._listener.close()
             self._listener = None
         with self._lock:

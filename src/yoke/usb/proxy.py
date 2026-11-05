@@ -44,6 +44,7 @@ from yoke.usb.client import (
     Urb,
     UsbipConnection,
     UsbipError,
+    control_data,
 )
 from yoke.usb.descriptors import Configuration, Endpoint, Presentation
 from yoke.usb.gadget import (
@@ -51,6 +52,7 @@ from yoke.usb.gadget import (
     EventType,
     GadgetBackend,
     GadgetError,
+    GadgetEvent,
     GadgetHaltClearedError,
     GadgetInterruptedError,
     GadgetShutdownError,
@@ -78,6 +80,8 @@ TRANSACTION_ERRORS = frozenset(
 )
 GONE = frozenset({-usbip.ESHUTDOWN, -usbip.ENODEV})
 CANCELLED = frozenset({-usbip.ECONNRESET, -usbip.ENOENT})
+BOT_RESET_REQUEST_TYPE = 0x21  # class, interface, host to device
+BOT_RESET = 0xFF  # Bulk-Only Mass Storage Reset (BOT 1.0 section 3.1)
 
 
 class TeardownError(RuntimeError):
@@ -86,6 +90,18 @@ class TeardownError(RuntimeError):
 
 class _Stop(Exception):  # noqa: N818 - a pump unwind signal, not an error
     """Internal: unwind a pump."""
+
+
+class _Abandoned(Exception):  # noqa: N818 - a control-flow unwind, not an error
+    """Internal: a gadget event ended the control request being handled.
+
+    ``bus`` is set for a bus reset or disconnect, which leaves a SETUP that
+    has not been answered on ep0 owed to Raw Gadget.
+    """
+
+    def __init__(self, *, bus: bool) -> None:
+        super().__init__("control request abandoned")
+        self.bus = bus
 
 
 @dataclass
@@ -113,12 +129,44 @@ class Counters:
 
 
 class _BotLink:
-    """Bulk-Only Transport transfer sizes shared by an interface's pumps."""
+    """Bulk-Only Transport transfer sizes shared by an interface's pumps.
 
-    def __init__(self) -> None:
+    ``in_sizes`` are the IN URB sizes the IN pump submits next (data, then
+    the CSW); ``out_sizes`` are the OUT pump's planned data-out reads. A CBW
+    plans both. :meth:`discard` ends a plan that a data-out STALL, the
+    host's clear-halt or a Bulk-Only Mass Storage Reset cut short, so the
+    next 31-byte CBW is parsed instead of read as data.
+    """
+
+    def __init__(self, interface: int) -> None:
+        self.interface = interface
         self.lock = threading.Lock()
         self.in_sizes: deque[int] = deque()
+        self.out_sizes: deque[int] = deque()
+        self.epoch = 0  # bumped by discard(); a read planned before it is stale
         self.wake: Callable[[], None] = lambda: None
+
+    def plan_out(self, sizes: list[int]) -> None:
+        with self.lock:
+            self.out_sizes.extend(sizes)
+
+    def pop_out(self) -> tuple[int | None, int]:
+        """The next planned data-out read size (or None) and the plan epoch."""
+        with self.lock:
+            size = self.out_sizes.popleft() if self.out_sizes else None
+            return size, self.epoch
+
+    def current(self, epoch: int) -> bool:
+        with self.lock:
+            return self.epoch == epoch
+
+    def discard(self) -> None:
+        """Drop planned data-out reads; keep only the final IN size (the CSW)."""
+        with self.lock:
+            self.out_sizes.clear()
+            while len(self.in_sizes) > 1:
+                self.in_sizes.popleft()
+            self.epoch += 1
 
     def push_in(self, sizes: list[int]) -> None:
         with self.lock:
@@ -226,11 +274,16 @@ class _Pump:
             if self.stopping:
                 raise _Stop from exc
             self.proxy._fault(f"halt {self.address:#04x}: {exc}")
+        else:
+            self.proxy._control.set_halted(self.address, True)
         self.proxy.counters.local_stalls += 1
 
     def _host_cleared(self) -> None:
         """The UDC returned a started request with EPIPE: the host cleared
         this endpoint's halt (dwc3). Mirror it on the device, then retry."""
+        if self.bot is not None and not self.endpoint.is_in:
+            self.bot.discard()
+        self.proxy._control.set_halted(self.address, False)
         self.proxy.counters.host_clear_halts += 1
         later = self._take_inflight()
         self._cancel(later)
@@ -463,7 +516,6 @@ class _OutPump(_Pump):
         self, proxy: Proxy, endpoint: Endpoint, handle: int, bot: _BotLink | None
     ) -> None:
         super().__init__(proxy, endpoint, handle, bot)
-        self.read_sizes: deque[int] = deque()
         self.bot_in_packet = 512
 
     def _read(self, buf: bytearray, size: int) -> int:
@@ -508,6 +560,8 @@ class _OutPump(_Pump):
             counters.late_out_stalls += 1
         self._cancel(later)
         self._local_halt()
+        if self.bot is not None:
+            self.bot.discard()  # the command's data phase is over
         self._clear_remote()
         self.remote_halted = True
 
@@ -527,9 +581,17 @@ class _OutPump(_Pump):
                     while not self.stopping and not self.inflight[0].done:
                         self.cond.wait()
                     continue
-            planned = bool(self.read_sizes)
-            size = self.read_sizes.popleft() if planned else self.size
+            planned_size, epoch = (
+                self.bot.pop_out() if self.bot is not None else (None, 0)
+            )
+            size = self.size if planned_size is None else planned_size
             count = self._read(buf, size)
+            # A plan discarded during the read (reset, clear-halt) is stale.
+            planned = (
+                planned_size is not None
+                and self.bot is not None
+                and self.bot.current(epoch)
+            )
             with self.cond:
                 late = any(
                     u.done and u.result and u.result.status for u in self.inflight
@@ -572,7 +634,7 @@ class _OutPump(_Pump):
             ]
             self.bot.push_in([*sizes, csw])
         else:
-            self.read_sizes.extend(chunk_sizes(length, limit))
+            self.bot.plan_out(chunk_sizes(length, limit))
             self.bot.push_in([csw])
 
 
@@ -606,9 +668,19 @@ class Proxy:
         self._udc_endpoints: list[UdcEndpoint] = []
         self._stopping = False
         self._stop_lock = threading.Lock()
+        # The fetch thread only fetches gadget events; the ep0 thread handles
+        # them, so a bus event can abandon a request it is still forwarding.
         self._event_thread = threading.Thread(
-            target=self._event_main, name="usb-gadget-events", daemon=True
+            target=self._fetch_main, name="usb-gadget-events", daemon=True
         )
+        self._ep0_thread = threading.Thread(
+            target=self._event_main, name="usb-gadget-ep0", daemon=True
+        )
+        self._events: deque[GadgetEvent] = deque()
+        self._event_cond = threading.Condition()
+        self._fetch_ended = False
+        self._owed = False  # a SETUP taken but not yet answered on ep0
+        self._must_finish = False  # SET_CONFIGURATION/SET_INTERFACE in progress
         self._remote_dirty = True
         self._reset_done = threading.Event()
         self._reset_done.set()
@@ -630,6 +702,7 @@ class Proxy:
             self.rejected = f"UDC lacks endpoints: {', '.join(missing)}"
             self._end(self.rejected, error=True)
         self._event_thread.start()
+        self._ep0_thread.start()
 
     def _unsupported_endpoints(self) -> list[str]:
         if not self._udc_endpoints:
@@ -689,12 +762,21 @@ class Proxy:
     def _stop_locked(self) -> None:
         self._stopping = True
         self._end("stopped")
+        # Close the USB/IP connection first, as the native worker does: the
+        # stub kills every URB when its socket closes, so teardown never
+        # waits for one RET_UNLINK per outstanding URB (which a busy or stuck
+        # stub may not send in time).
+        self.conn.close()
+        with self._event_cond:
+            self._event_cond.notify_all()
         timeout = self.policy.stop_timeout
         problems = []
-        if self._event_thread.is_alive() and not self._interrupt_join(
-            self._event_thread, timeout
+        for thread, name in (
+            (self._ep0_thread, "ep0 thread"),
+            (self._event_thread, "event thread"),
         ):
-            problems.append("event thread")
+            if thread.is_alive() and not self._interrupt_join(thread, timeout):
+                problems.append(name)
         try:
             self._stop_pumps(list(self._pumps.values()))
         except TeardownError as exc:
@@ -703,7 +785,6 @@ class Proxy:
             thread.join(timeout)
             if thread.is_alive():
                 problems.append("remote reset thread")
-        self.conn.close()
         if problems:
             self.error = f"teardown unconfirmed: {'; '.join(problems)}"
             raise TeardownError(self.error)
@@ -733,39 +814,100 @@ class Proxy:
 
     # --- event thread ----------------------------------------------------
 
-    def _event_main(self) -> None:
+    def _fetch_main(self) -> None:
+        """Fetch gadget events into the queue the ep0 thread handles."""
         backend = self.backend
-        while not self._stopping:
+        try:
+            while not self._stopping:
+                try:
+                    event = backend.fetch_event()
+                except GadgetInterruptedError:
+                    continue
+                except GadgetError as exc:
+                    if not self._stopping:
+                        self._end(f"gadget event error: {exc}", error=True)
+                    return
+                with self._event_cond:
+                    self._events.append(event)
+                    self._event_cond.notify_all()
+        finally:
+            with self._event_cond:
+                self._fetch_ended = True
+                self._event_cond.notify_all()
+
+    def _event_main(self) -> None:
+        while True:
+            with self._event_cond:
+                while not (self._events or self._stopping or self._fetch_ended):
+                    self._event_cond.wait()
+                if self._stopping or not self._events:
+                    return
+                event = self._events.popleft()
             try:
-                event = backend.fetch_event()
-            except GadgetInterruptedError:
-                continue
-            except GadgetError as exc:
-                if not self._stopping:
-                    self._end(f"gadget event error: {exc}", error=True)
-                return
-            try:
-                if event.type is EventType.CONTROL:
-                    assert event.setup is not None
-                    self._on_control(event.setup)
-                elif event.type is EventType.RESET:
-                    self._on_bus_reset("default")
-                elif event.type is EventType.DISCONNECT:
-                    self.counters.disconnects += 1
-                    self._on_bus_reset("disconnected")
-                elif event.type is EventType.SUSPEND:
-                    self.suspended = True
-                elif event.type is EventType.RESUME:
-                    self.suspended = False
-                elif event.type is EventType.CONNECT:
-                    self.state = "attached"
+                self._dispatch(event)
+            except _Abandoned as abandoned:
+                # Raw Gadget keeps an unanswered SETUP pending across bus
+                # reset and disconnect, stalling every later SETUP: release it.
+                if abandoned.bus and self._owed and not self._stopping:
+                    self._stall("bus reset or disconnect abandoned the request")
             except TeardownError as exc:
                 self._end(str(exc), error=True)
                 return
             except ConnectionLostError as exc:
                 self._remote_lost(exc)
+            finally:
+                self._owed = False
+                self._must_finish = False
+
+    def _dispatch(self, event: GadgetEvent) -> None:
+        if event.type is EventType.CONTROL:
+            assert event.setup is not None
+            self._owed = True
+            self._on_control(event.setup)
+        elif event.type is EventType.RESET:
+            self._on_bus_reset("default")
+        elif event.type is EventType.DISCONNECT:
+            self.counters.disconnects += 1
+            self._on_bus_reset("disconnected")
+        elif event.type is EventType.SUSPEND:
+            self.suspended = True
+        elif event.type is EventType.RESUME:
+            self.suspended = False
+        elif event.type is EventType.CONNECT:
+            self.state = "attached"
+
+    def _notify_events(self, _urb: Urb | None = None) -> None:
+        with self._event_cond:
+            self._event_cond.notify_all()
+
+    def _await(self, ready: Callable[[], bool], timeout: float) -> bool:
+        """Wait (ep0 thread) until ``ready()``; False on timeout.
+
+        Raises :class:`_Abandoned` when a queued event ends the request: a
+        bus reset or disconnect, or a new SETUP while this one is still owed
+        its ep0 answer (the host gave up on it), except for SET_CONFIGURATION
+        and SET_INTERFACE. Any other flow finishes first (an OUT request whose
+        data was read must still reach the device), and the new SETUP is
+        handled next, in arrival order (proxy.c e0_control).
+        """
+        deadline = time.monotonic() + timeout
+        with self._event_cond:
+            while not ready():
+                if self._stopping:
+                    raise _Abandoned(bus=False)
+                kinds = {e.type for e in self._events}
+                if kinds & {EventType.RESET, EventType.DISCONNECT}:
+                    raise _Abandoned(bus=True)
+                if EventType.CONTROL in kinds and self._owed and not self._must_finish:
+                    raise _Abandoned(bus=False)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                self._event_cond.wait(remaining)
+        return True
 
     def _ep0(self, action: Callable[[], object]) -> None:
+        self._owed = False
         try:
             action()
         except GadgetError as exc:
@@ -785,6 +927,15 @@ class Proxy:
 
     def _on_control(self, setup: Setup) -> None:
         self.counters.control += 1
+        if (
+            setup.request_type == BOT_RESET_REQUEST_TYPE
+            and setup.request == BOT_RESET
+            and setup.length == 0
+        ):
+            # Bulk-Only Mass Storage Reset: the command in progress is gone.
+            for link in {p.bot for p in self._pumps.values() if p.bot is not None}:
+                if link.interface == setup.index & 0xFF:
+                    link.discard()
         if not self._speed_checked:
             self._speed_checked = True
             self._link_speed = self.backend.link_speed()
@@ -812,18 +963,34 @@ class Proxy:
         elif isinstance(decision, SetInterface):
             self._set_interface(setup, decision.interface, decision.alternate)
         elif isinstance(decision, EndpointHalt):
+            if not decision.halt:
+                self._control.set_halted(decision.address, False)
             self._forward(setup, False)
 
     def _gate(self) -> None:
         """Wait for an in-flight remote reset before touching the device."""
-        self._reset_done.wait(self.policy.control_timeout)
+        self._await(self._reset_done.is_set, self.policy.control_timeout)
         self._remote_dirty = True
 
     def _remote_control(self, setup: Setup, data: bytes = b"") -> bytes | None:
+        """Forward one control request; a bus event abandons the wait.
+
+        An abandoned URB is left to complete (or die with the connection)
+        and its answer is ignored, as the native worker orphans it.
+        """
         self._gate()
         self.counters.forwarded += 1
         try:
-            return self.conn.control(setup, data, timeout=self.policy.control_timeout)
+            timeout = self.policy.control_timeout
+            urb = self.conn.submit_control(setup, data, callback=self._notify_events)
+            if not self._await(lambda: urb.done, timeout):
+                with contextlib.suppress(UsbipError, TimeoutError):
+                    self.conn.cancel([urb], timeout=timeout)
+                raise TimeoutError(f"URB {urb.seqnum} timed out")
+            if urb.error is not None:
+                raise urb.error
+            assert urb.result is not None
+            return control_data(urb.result)
         finally:
             self._kick_parked()
 
@@ -836,6 +1003,7 @@ class Proxy:
     def _forward(self, setup: Setup, cache: bool) -> None:
         data = b""
         if not setup.is_in and setup.length:
+            self._owed = False  # the UDC completes the status stage with the data
             try:
                 data = self.backend.ep0_read(setup.length)
             except GadgetError as exc:
@@ -882,7 +1050,7 @@ class Proxy:
             return None
         kinds = {(e.is_in, e.transfer_type) for e in setting.endpoints}
         if {(True, ch9.XFER_BULK), (False, ch9.XFER_BULK)} <= kinds:
-            return _BotLink()
+            return _BotLink(number)
         return None
 
     def _enable_interface(
@@ -935,7 +1103,7 @@ class Proxy:
             if handle is not None:
                 with contextlib.suppress(GadgetError):
                     self.backend.ep_disable(handle)
-            self._control.halted.discard(address)
+            self._control.set_halted(address, False)
 
     def _quiesce_all(self) -> None:
         self._stop_pumps(list(self._pumps.values()))
@@ -944,8 +1112,7 @@ class Proxy:
     def _on_bus_reset(self, state: str) -> None:
         self.counters.bus_resets += 1
         self._quiesce_all()
-        self._control.configuration = 0
-        self._control.alternates = {}
+        self._control.reset()
         self.state = state
         self.suspended = False
         self._speed_checked = False
@@ -968,6 +1135,7 @@ class Proxy:
             self._log(f"remote reset failed: {exc}")
         finally:
             self._reset_done.set()
+            self._notify_events()
 
     def _start(self, pumps: list[_Pump]) -> None:
         for pump in pumps:
@@ -975,6 +1143,7 @@ class Proxy:
             pump.thread.start()
 
     def _set_configuration(self, setup: Setup, value: int) -> None:
+        self._must_finish = True
         self._quiesce_all()
         try:
             result = self._remote_control(setup)
@@ -983,8 +1152,7 @@ class Proxy:
                 raise
             self._stall(f"remote SET_CONFIGURATION failed: {exc}")
             return
-        self._control.configuration = 0
-        self._control.alternates = {}
+        self._control.reset()
         if result is None:
             self._stall("remote refused SET_CONFIGURATION")
             return
@@ -1010,6 +1178,7 @@ class Proxy:
         self._ep0(lambda: self.backend.ep0_read(0))
 
     def _set_interface(self, setup: Setup, number: int, alternate: int) -> None:
+        self._must_finish = True
         config = self.presentation.configuration(self._control.configuration)
         assert config is not None
         current = config.alt(number, self._control.alternates.get(number, 0))

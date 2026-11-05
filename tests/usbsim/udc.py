@@ -133,6 +133,10 @@ class FakeRawGadgetKernel:
         self._blocked: set[int] = set()
         self._ep0_late = False
         self._bus_epoch = 0
+        # Test hook: an EP0_READ with a data stage returns to the gadget this
+        # many seconds after the host saw its status stage complete, so the
+        # host's next SETUP can be delivered first (as on a loaded board).
+        self.ep0_read_delay = 0.0
         self.link_speed = Speed.UNKNOWN
         self.usb_state = "not attached"
         self.address = 0
@@ -364,6 +368,10 @@ class FakeRawGadgetKernel:
             arg[HEADROOM : HEADROOM + len(data)] = data
             self._ep0_result = ControlResult("ack")
             self.cond.notify_all()
+            if self.ep0_read_delay:
+                until = time.monotonic() + self.ep0_read_delay
+                while (left := until - time.monotonic()) > 0:
+                    self.cond.wait(left)
             return len(data)
         self._ep0_result = ControlResult("ack")
         self.cond.notify_all()

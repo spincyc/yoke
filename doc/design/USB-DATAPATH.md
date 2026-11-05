@@ -1,16 +1,20 @@
 # USB data path: computer-side gadget proxy
 
-Status: implemented in software and verified in simulation only, 2026-11-04.
-No hardware has been touched. Items marked ⚠ are bench-unverified hardware
-or kernel claims. Decisions: [ADR 0021](../decisions/0021-userspace-usbip-client-and-raw-gadget-presentation.md)
-(architecture) and [ADR 0022](../decisions/0022-gadget-worker-process-and-metadata-driver.md)
-(process split, driver, simulation).
+Status: implemented in software and verified in simulation and a
+real-kernel VM only, 2026-11-05. No hardware has been touched. Items marked
+⚠ are bench-unverified hardware or kernel claims. Decisions:
+
+- [ADR 0021](../decisions/0021-userspace-usbip-client-and-raw-gadget-presentation.md): architecture;
+- [ADR 0022](../decisions/0022-gadget-worker-process-and-metadata-driver.md): process split, driver, simulation;
+- [ADR 0027](../decisions/0027-tiered-usb-product-line-and-native-c-data-path.md): tiers and the native C worker;
+- [ADR 0028](../decisions/0028-negotiated-usbip-payload-extension.md): the negotiated payload extension.
 
 ```text
 USB device ─ device-side box: stock usbipd/usbip-host (TCP 3240)
                ⇅ USB/IP 1.1.1 over Ethernet
-computer-side box: yoke.usb.worker ── Raw Gadget ── DWC3 OTG port ─ computer
-                   ↑ metadata-only control socket
+computer-side box: yoke.usb.worker or yoke-gadget-worker (native)
+                   ── Raw Gadget ── DWC3 OTG port ─ computer
+                   ↑ metadata-only control socket (same schema for both)
                    yoke agent: usb-gadget driver
 ```
 
@@ -24,11 +28,55 @@ computer-side box: yoke.usb.worker ── Raw Gadget ── DWC3 OTG port ─ co
 | `yoke.usb.client` | Import handshake; URB multiplexer (one reader thread) | socket |
 | `yoke.usb.gadget` | Backend-neutral presentation interface | none |
 | `yoke.usb.rawgadget` | Raw Gadget ioctls ⚠ | `/dev/raw-gadget`, sysfs |
-| `yoke.usb.proxy` | Event thread, endpoint pumps, reset/disconnect/suspend handling | threads |
+| `yoke.usb.proxy` | Event fetch thread, ep0 thread, endpoint pumps, reset/disconnect/suspend handling | threads |
 | `yoke.usb.session` | Import, fetch descriptors, start presenting | — |
 | `yoke.usb.worker` | Route following, reconnect backoff, control server, CLI | process |
 | `yoke.usb.control` | Route/status schema shared with the agent | Unix socket |
 | `yoke.drivers.gadget` | `usb-gadget` agent driver; never imports payload modules | Unix socket, sysfs |
+| `native/yusb/src` | The same roles in portable C11, sans-I/O; also the device-side export core and YX (ADR 0028) | none |
+| `native/yusb/linux` | `yoke-gadget-worker`: Raw Gadget backend, session threads, control socket, CLI | threads, `/dev/raw-gadget`, sockets |
+
+## Native worker (ADR 0027)
+
+`yoke-gadget-worker` replaces `python -m yoke.usb.worker` in the data path.
+Layout, build, the recorded differences from the Python reference and the
+footprints are in `native/README.md`.
+
+- **Same contract.** It takes the same command line and speaks the same
+  ADR 0022 control-socket schema. Its strict parser makes the same
+  decisions as `control.py` (tested differentially), refuses a few inputs
+  the agent never sends (non-ASCII, a non-integer schema, duplicate keys,
+  scoped IPv6), and names an error category rather than the reference's
+  text. The `usb-gadget` driver supervises either worker unchanged, and the
+  generation fence holds the same way.
+- **Selecting it.**
+  - `install.sh computer --native-worker PATH` installs the binary to
+    `/usr/local/libexec/yoke/` and a unit drop-in that only sets
+    `Environment=YOKE_GADGET_WORKER=native`, keeping the unit's `ExecStart`
+    and sandbox; re-running without the flag removes the drop-in. A missing
+    binary exits 78 (EX_CONFIG), which the unit does not restart.
+  - `python -m yoke.usb.worker --implementation native` (or
+    `YOKE_GADGET_WORKER=native`) executes it with the same options.
+- **Structure.** The portable core is event-driven: every blocking step of
+  the reference is a named state (control flow `E0_*`, pump waits `W_*`).
+  The Linux backend supplies one thread per endpoint and ep0, an event
+  thread, a receive thread and a timer thread, around one lock. Only the
+  main thread takes SIGTERM/SIGINT. The control socket serves up to 8
+  clients at once, each with one 2 s deadline.
+  - A transfer's completion resubmits and sends from the same thread, in one
+    `sendmsg` per batch.
+  - Payloads are received straight into their URB buffers. A known-length
+    payload is read with `MSG_WAITALL`.
+  - Cancellation is `pthread_kill(SIGUSR1)` with EINTR, never retried, and
+    repeated every 20 ms until the ioctl returns (⚠ dwc3).
+- **UDC driver name.** It is inferred from
+  `/sys/class/udc/<udc>/device/driver` (`dwc3` → `dwc3-gadget`, as the
+  Python worker); `--gadget-driver` overrides it.
+- **Admission.** It binds `--source` (or the route's `source`) before
+  connecting, as ADR 0024 admission needs.
+- **Defaults that differ, measured below.** BOT URBs are 32 KiB
+  (`--max-transfer`; the reference uses 64 KiB). `--bot-write-behind N`
+  and `--yx ...` are opt-in levers from ADR 0028.
 
 ## Request handling
 
@@ -40,10 +88,22 @@ computer-side box: yoke.usb.worker ── Raw Gadget ── DWC3 OTG port ─ co
 | SET_ADDRESS | Local (normally the UDC answers it); never forwarded |
 | SET_CONFIGURATION | Quiesce pumps, forward (stub calls `usb_set_configuration`), enable endpoints, VBUS_DRAW, CONFIGURE, acknowledge |
 | SET_INTERFACE | Quiesce that interface, forward, enable the new alternate setting; a remote refusal restores the old pumps and STALLs |
-| GET_CONFIGURATION / GET_INTERFACE / GET_STATUS | Local; status reports bus power and no remote wakeup |
+| GET_CONFIGURATION / GET_INTERFACE / GET_STATUS | Local; device status reports bus power and no remote wakeup; endpoint status reports a halt the proxy set after a remote STALL, until the host clears it |
 | CLEAR/SET_FEATURE(ENDPOINT_HALT) | Normally answered by the UDC ⚠; if delegated, forwarded |
 | SET_FEATURE(REMOTE_WAKEUP), SYNCH_FRAME, SET_DESCRIPTOR | STALL (not advertised / no isochronous) |
 | Class and vendor requests | Forwarded. IN data or STALL is returned. For OUT requests *with data* the UDC completes the status stage when the data arrives, so a remote STALL reaches the computer as success and is only counted (`late_out_stalls`; see the class table under Limits) |
+| Bulk-Only Mass Storage Reset (0x21/0xFF) | Forwarded; on receipt the interface's planned data-out reads and remaining data-in sizes are dropped (the CSW entry stays), as after a data-out STALL or a host clear-halt |
+
+**Overlapping SETUPs.** Every ep0 answer belongs to the newest SETUP the
+UDC delivered. A new SETUP abandons the current request (which is then
+unlinked) while ep0 still owes it its answer; a SET_CONFIGURATION or
+SET_INTERFACE still runs to completion, without an answer, so the endpoints
+match the device. A request whose status stage the UDC already completed
+(OUT with data once the data arrived, or a backend's pre-acknowledged
+SET_CONFIGURATION) always finishes, and later SETUPs wait for it. After a bus reset or disconnect, a SETUP still owed is
+released with an ep0 STALL, because Raw Gadget keeps it pending and refuses
+every later SETUP until ep0 answers ⚠ (dwc3 EP0_STALL right after a reset is
+a bench item).
 
 ## Data transfers
 
@@ -230,8 +290,12 @@ the host. Inside the VM:
   `dummy_udc.0`, driven by the real `usb-gadget` driver over the control
   socket.
 - The guest's `usb-storage` reads and writes it.
+- The same steps run again with the native worker.
+- The native export core (`yusb-export-sim`, a simulated disk) is then
+  imported by the guest kernel's `vhci-hcd`, as `usbip attach` would import
+  it, and is read and written through `usb-storage`.
 
-Results on 2026-11-04 (kernel 7.2.14, 2 vCPUs):
+Results on 2026-11-04 (kernel 7.2.14, 2 vCPUs), Python worker:
 
 | Check | Result |
 |---|---|
@@ -244,6 +308,82 @@ Results on 2026-11-04 (kernel 7.2.14, 2 vCPUs):
 | Worker SIGTERM | exit 0 in 0.11 s (blocked ioctls interrupted) |
 | Negative control: same worker with `fcntl.ioctl` | teardown unconfirmed, exit 1 (as the review predicted) |
 | `dmesg` WARN/BUG/BOGUS | none |
+
+Results on 2026-11-05 (same VM, `make verify-usb-kernel`, about 80 s):
+
+| Check | Python worker | Native worker |
+|---|---|---|
+| 8 MiB checksummed read/write, data in the source file (three times) | pass, high-speed | pass, high-speed |
+| Driver evidence | ACTIVE, `configured` | ACTIVE, `configured` |
+| Detach through the driver: device gone, export released | 0.001 s | 0.01 s |
+| Remote loss presented | 0.15 s | 0.15 s |
+| Re-enumerated after a usbipd restart | 1.52 s | 1.53 s |
+| SIGTERM with threads blocked in ioctls | exit 0, 0.02 s | exit 0, 0.00 s |
+| Export core via `vhci-hcd`: 8 MiB read and write match the server's disk; detach | n/a | pass |
+| `dmesg` WARN/BUG/BOGUS | none | none |
+
+**Python teardown (fixed 2026-11-05).** Once in about ten runs, the Python
+worker's detach right after the perf workload reported "teardown
+unconfirmed: endpoint 0x81: unlink unconfirmed"; the generation fence held
+and the driver raised DriverError. The Python worker now tears down as the
+native one does: it closes the USB/IP connection first (the stub kills every
+URB on close) instead of waiting for each unlink
+(`test_teardown_does_not_wait_for_unlinks_a_stub_never_confirms`).
+
+### Performance (VM/x86, Python vs native)
+
+Measured by `make verify-usb-kernel`, QEMU/KVM on a Core Ultra 9 285K host,
+2 vCPUs:
+
+- **Workload:** O_DIRECT, 32 MiB sequential in 1 MiB requests, and 300
+  random 4 KiB reads.
+- **CPU:** the worker process's own CPU from per-thread `schedstat`, its
+  ioctls and copies included.
+- **The bus is not the limit:** dummy_hcd has no bus limit, and the source
+  disk alone reads at 146 MB/s with a 0.39 ms median 4 KiB read.
+
+| Worker, BOT URB size | Read MB/s | Write MB/s | CPU ms/MiB read | CPU ms/MiB write | 4 KiB read median (p99) |
+|---|---|---|---|---|---|
+| Python, 64 KiB (reference default) | 97.2 | 74.3 | 0.82 | 0.83 | 0.645 ms (0.654) |
+| Native, 64 KiB | 97.0 | 73.9 | 0.28 | 0.29 | 0.640 ms (0.648) |
+| **Native, 32 KiB (native default)** | **108.6** | 74.0 | 0.36 | 0.37 | 0.640 ms (0.667) |
+| Native, 16 KiB | 74.2 | 46.4 | 0.31 | 0.45 | 0.641 ms (0.650) |
+| Python, 512 B (per-URB cost, generic bulk) | 3.7 | 3.3 | 16.4 | 25.5 | 1.54 ms |
+| Native, 512 B | 3.8 | 2.0 | 5.0 | 8.0 | 1.53 ms |
+| Export core via vhci (server CPU) | 1499 | 1857 | 0.29 | 0.21 | 0.039 ms |
+
+**Reading the table:**
+
+- **CPU.** The native worker spends about 3× less CPU per MiB with BOT
+  URBs, and 3.2× less per URB with packet-sized URBs.
+- **URB size.** 32 KiB URBs overlap the device, network and gadget legs
+  better than 64 KiB (+12% read). 16 KiB needs more URBs than the 8 BOT
+  slots hold for a 120 KiB command, so it is slower.
+- **Latency** is set by the two dummy_hcd buses, not by either worker.
+- **512-byte writes.** Native reaches 2.0 MB/s against 3.3, with
+  write-behind off. This is open; `--bot-write-behind` pipelines that phase.
+
+**Optimizations in the native worker:**
+
+- payloads are received straight into URB buffers, with one `MSG_WAITALL`
+  per known-length payload, and sent with one batched `sendmsg` from the
+  completing thread (no user-space copies);
+- the timer thread is woken only when a deadline moves earlier, which took
+  CPU per MiB from 0.43 to 0.28 ms;
+- 32 KiB BOT URBs give +12% read.
+
+**Cortex-A55 headroom (inference, not measured).** A ZERO 3E core at
+1.8 GHz is taken as 6× slower than this host for both user code and memory
+copies. At a high-speed bulk ceiling of about 40 MB/s:
+
+- the native worker would use about 0.36 × 6 × 40 ≈ 86 ms of CPU per second
+  (9% of one core) for BOT;
+- the Python worker about 0.82 × 6 × 40 ≈ 200 ms (20%);
+- with packet-sized URBs (5.0 against 16.4 ms/MiB per x86), the native
+  worker would still sustain about 30 MB/s per A55 core, Python about
+  10 MB/s.
+
+Bench step 6 measures the real figure.
 
 The first run measured 2.3 MB/s because the minimal usbipd lacked
 `TCP_NODELAY`: Nagle plus delayed ACK added about 40 ms per command. Stock
@@ -309,7 +449,10 @@ descriptor reads stay under 1 ms.
    after enumeration. This also checks that the board runs from that port
    alone.
 4. **Standalone worker** (no agent): run
-   `python -m yoke.usb.worker --udc fcc00000.usb --target <device-box-ip>:3240/<busid> --source <computer-box-vlan-ip>`.
+   `python -m yoke.usb.worker --udc fcc00000.usb --target <device-box-ip>:3240/<busid> --source <computer-box-vlan-ip>`,
+   then the same with the native worker: build it on the box
+   (`native/README.md`) and run
+   `sudo .scratch/native/yoke-gadget-worker` with the same options.
    The worker logs the inferred gadget name; if RUN fails with EBUSY,
    pass `--gadget-driver dwc3-gadget`. Expected:
    - `/sys/class/udc/fcc00000.usb/state` reaches `configured` and
@@ -356,13 +499,80 @@ device's refusal surfaces on the next transaction.
 | Vendor | any OUT request with data | a failure is visible only in the device's later state |
 | Audio, DFU, printer | SET_CUR, DNLOAD, and similar | same as vendor; not tested |
 
+A Raw Gadget change that defers the status stage of a control OUT request
+with data would let a remote STALL reach the computer. It was not
+attempted (2026-11-05) for four reasons:
+
+- it would make the product depend on a patched kernel module on the
+  ZERO 3E;
+- the dwc3 behavior it would rely on is itself unverified (⚠);
+- only the per-class effects in the table above are at stake;
+- the bench comes first.
+
+It stays open work, to be evaluated with captures of the affected classes.
+
 ### Other limits
 
 - **Remote wakeup** is not supported (no Raw Gadget ioctl), so the presented
   device never advertises it.
-- **Packet-per-URB forwarding** costs per-packet Python overhead for non-BOT
-  bulk devices. A native worker behind `GadgetBackend` is the path to full
-  high-speed throughput.
+- **Packet-per-URB forwarding.** Each packet costs one URB round trip for
+  non-BOT bulk devices. The native worker cuts the CPU per URB about 3×,
+  but throughput stays round-trip bound (`depth × packet / RTT`).
+
+## USB/IP payload extension (ADR 0028)
+
+The extension is optional and negotiated. It applies only when both ends
+run the Yoke cores; a stock `usbipd` or `usbip attach` sees plain USB/IP.
+
+- **Levers.** BOT write-behind (proxy only, works with stock peers),
+  zero/repeat-block elimination, adaptive LZ4 with incompressible bypass,
+  and a block cache with hash references. All are off by default until
+  captures from real devices justify them. Control and interrupt transfers
+  are never encoded.
+- **Measured end to end in software.** The native worker and the export
+  core move zeros, text and random data with each lever set over TCP; the
+  bytes match and compressible payloads shrink on the wire
+  (`tests/native_usb/test_native_export.py`).
+- **Encoder speed on x86 at -O2:** LZ4 on text 756 MB/s, with
+  FILL/bypass paths at gigabytes per second.
+
+Replay model on the synthetic traces (`make benchmark-usbtrace`; analytic
+upper bounds, not hardware). MB/s at 0.2 ms RTT; 1G figures for YX and
+read-ahead apply only to a future native exporter, since tier 2's stock
+`usbip-host` speaks plain USB/IP:
+
+| Trace | Plain 100M / 1G | Best levers 100M / 1G | Wire ratio |
+|---|---|---|---|
+| Zero-heavy disk | 11.3 / 32.9 | 36.6 / 36.6* (all) | 3.93 |
+| Text files | 10.9 / 29.7 | 20.8 / 30.7* (all); write-behind alone 32.8 on 1G (tier 2) | 1.77 |
+| JPEG/video | 11.2 / 32.9 | 11.5 / 35.4* (read-ahead; LZ4 bypassed) | 0.90 |
+| HID | interrupt reports, never encoded | — | — |
+| Audio | isochronous, unsupported (ADR 0021) | — | — |
+
+Compression pays only on 100 Mbit links (tier 1.5) with compressible data.
+On GbE (tier 2) the link outruns high-speed USB; only latency hiding
+helps there.
+
+## Trace capture (`tools/usbtrace`)
+
+`tools/usbtrace/README.md` documents the trace format and the commands:
+
+- **Format.** pcap with `LINKTYPE_USB_LINUX_MMAPPED`, the format Wireshark
+  and tcpdump read.
+- **Capture.** `capture.py` runs with the board's own `python3` as root
+  (`modprobe usbmon`, then `--bus N --devnum M`) and records full payloads
+  through the usbmon binary interface. It asks for a 32 MiB ring; kernels
+  that cap the ring at 1200 KiB answer EINVAL, and it then retries at
+  1200 KiB and prints the size it got (watch the drop count: about 30 ms of
+  buffering at that size).
+- **Replay.** `replay.py` gives analytic upper bounds, not measurements. It
+  splits bulk transfers at the native worker's 32 KiB (`--max-urb`). Rows are
+  labelled by the tiers that can use them: YX and read-ahead need a yusb
+  exporter (tiers 1 and 1.5, or a future native exporter); tier 2's stock
+  `usbip-host` gets only plain and write-behind. Tier 1 is full-speed
+  (about 1 MB/s), so the 100M figures describe tier 1.5. A `captured_fraction` below
+  1 flags a truncated capture; YX rows scale the uncaptured bytes and report
+  them separately.
 - **Host clear-halt visibility.** dwc3 reports a host CLEAR_FEATURE(HALT)
   only through started requests (EPIPE). A device that keeps a halt until
   it sees that specific request is released by the parked-pump retry, not

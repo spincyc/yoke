@@ -12,6 +12,12 @@
 # The agent's usb-gadget driver connects to /run/yoke-gadget/control.sock
 # (group yoke). Remove --socket and add --target HOST:PORT/BUSID for a
 # standalone bench run without the agent.
+# Native worker (ADR 0027): build it (native/README.md), then
+# `packaging/zero3e/install.sh computer --native-worker PATH` installs it to
+# /usr/local/libexec/yoke and adds yoke-gadget.service.d/20-native-worker.conf,
+# which sets Environment=YOKE_GADGET_WORKER=native: the ExecStart below then
+# executes it with the same options. Re-running `install.sh computer`
+# without the option removes the drop-in.
 [Unit]
 Description=yoke USB gadget worker (USB/IP to Raw Gadget)
 After=network-online.target
@@ -28,6 +34,9 @@ ExecStart=/opt/yoke/current/venv/bin/python -m yoke.usb.worker \
     --udc fcc00000.usb --socket /run/yoke-gadget/control.sock --power-ma 500
 Restart=always
 RestartSec=1
+# 78 (EX_CONFIG): a configuration error, e.g. YOKE_GADGET_WORKER=native
+# without the native binary installed. Restarting cannot fix it.
+RestartPreventExitStatus=78
 # A stopped worker closes /dev/raw-gadget: the computer sees a disconnect.
 KillSignal=SIGTERM
 TimeoutStopSec=10s

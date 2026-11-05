@@ -24,7 +24,7 @@ from typing import Any
 
 import pytest
 
-from tests.usbsim.classes import MassStorageHost
+from tests.usbsim.classes import CBW, MassStorageHost
 from tests.usbsim.device import DeviceModel
 from tests.usbsim.devices import CompositeDevice, Loopback, MassStorage
 from tests.usbsim.harness import Rig, make_rig
@@ -40,8 +40,9 @@ from yoke.usb.client import ConnectionLostError, recv_exact
 from yoke.usb.control import ControlClient, Route, Target, WorkerStatus
 from yoke.usb.gadget import HEADROOM, GadgetError, GadgetInterruptedError
 from yoke.usb.policy import ProxyPolicy
-from yoke.usb.proxy import Proxy
-from yoke.usb.worker import BuildTicket, Worker
+from yoke.usb.proxy import Proxy, _BotLink
+from yoke.usb.worker import EXIT_CONFIG, BuildTicket, Worker
+from yoke.usb.worker import main as worker_main
 
 MEDIA = {"host": "192.168.7.10", "port": 3240, "busids": ["1-1"]}
 
@@ -459,3 +460,144 @@ def test_exporter_enforces_control_length_and_warns_on_direction() -> None:
     wait_for(lambda: usbipd.active_connections == 0)
     assert any("BOGUS control dir" in v for v in usbipd.violations)
     assert any("BOGUS control len" in v for v in usbipd.violations)
+
+
+# --- 2026-11-05 lane A review ---------------------------------------------------
+
+WRITE_128K = struct.pack(">BBIBHB", 0x2A, 0, 20, 0, 256, 0)  # two 64 KiB BOT URBs
+
+
+def test_bot_link_discard_keeps_only_the_csw() -> None:
+    link = _BotLink(0)
+    link.push_in([65536, 65536, 512])
+    link.plan_out([65536, 65536])
+    _, epoch = link.pop_out()
+    link.discard()
+    assert list(link.in_sizes) == [512] and not link.out_sizes
+    assert not link.current(epoch) and link.pop_out() == (None, epoch + 1)
+    link.in_sizes.clear()
+    link.discard()
+    assert not link.in_sizes
+
+
+def test_bot_plan_is_discarded_after_a_data_out_stall() -> None:
+    """Port of repro.c test_bot_stale_plan: WRITE with 128 KiB data-out, the
+    first 64 KiB URB stalled, clear-halt, CSW, then a READ CBW, which must
+    plan IN URBs instead of being read as the stale second data URB."""
+    device = MassStorage()
+    device.refuse_data_out = 1
+    with rig_for(device) as rig:
+        assert rig.proxy is not None
+        storage = MassStorageHost(rig.host, timeout=2.0)
+        pump = rig.proxy._pumps[0x02]
+        storage.tag += 1
+        cbw = CBW.pack(b"USBC", storage.tag, 131072, 0, 0, 10, WRITE_128K.ljust(16))
+        rig.host.transfer_out(0x02, cbw)
+        with pytest.raises(StallError):
+            rig.host.transfer_out(0x02, bytes(131072))
+        assert pump.bot is not None
+        wait_for(lambda: pump.bot is not None and not pump.bot.out_sizes)
+        rig.host.clear_halt(0x02)
+        status = storage._csw()
+        assert (status.status, status.residue) == (1, 131072)
+        assert storage.read10(0, 8) == bytes(device.disk[: 8 * 512])
+        assert rig.proxy.counters.remote_stalls >= 1
+
+
+def test_bot_reset_discards_a_plan_whose_read_is_in_progress() -> None:
+    """Trigger (c): the class reset ends a data-out plan, including the planned
+    read the OUT pump already has queued (no clear-halt EPIPE here)."""
+    device = MassStorage()
+    with rig_for(device, clear_halt_cancels=False) as rig:
+        assert rig.proxy is not None
+        storage = MassStorageHost(rig.host, timeout=2.0)
+        handle = rig.proxy._handles[0x02]
+        storage.tag += 1
+        cbw = CBW.pack(b"USBC", storage.tag, 131072, 0, 0, 10, WRITE_128K.ljust(16))
+        rig.host.transfer_out(0x02, cbw)
+        wait_for(
+            lambda: (
+                (r := rig.kernel._eps[handle].request) is not None
+                and r.capacity == 65536
+            )
+        )  # the planned data-out read is queued
+        storage.reset_recovery()  # the host abandons the WRITE
+        assert storage.read10(0, 8) == bytes(device.disk[: 8 * 512])
+        storage.write10(4, bytes(range(256)) * 4)
+        assert bytes(device.disk[4 * 512 : 6 * 512]) == bytes(range(256)) * 4
+
+
+def test_get_status_reports_a_locally_halted_endpoint_until_cleared() -> None:
+    device = MassStorage()
+    with rig_for(device, udc_handles_standard=False) as rig:
+        assert rig.proxy is not None
+        storage = MassStorageHost(rig.host)
+        assert rig.host.get_status(ch9.RECIP_ENDPOINT, 0x81) == b"\0\0"
+        storage.tag += 1
+        bad = bytes([0xFF]) + bytes(5)  # unknown opcode: data-in fails by STALL
+        rig.host.transfer_out(
+            0x02, CBW.pack(b"USBC", storage.tag, 64, 0x80, 0, 6, bad.ljust(16))
+        )
+        with pytest.raises(StallError):
+            rig.host.transfer_in(0x81, 64)
+        assert rig.host.get_status(ch9.RECIP_ENDPOINT, 0x81) == b"\x01\0"
+        assert rig.host.get_status(ch9.RECIP_ENDPOINT, 0x02) == b"\0\0"
+        rig.host.clear_halt(0x81)  # delegated: the proxy handles it
+        assert rig.host.get_status(ch9.RECIP_ENDPOINT, 0x81) == b"\0\0"
+        rig.proxy._control.set_halted(0x81, True)
+        rig.host.reset()  # a bus reset clears every halt bit
+        wait_for(lambda: rig.proxy is not None and rig.proxy.counters.bus_resets >= 3)
+        assert not rig.proxy._control.halted
+
+
+VENDOR_IN = Setup(0xC0, 0x01, 0, 0, 64)
+
+
+@pytest.mark.parametrize("event", ["reset", "disconnect"])
+def test_first_reenumeration_after_a_bus_event_mid_forward_succeeds(
+    event: str,
+) -> None:
+    """Reviewer reproducer (test_review_ep0.py, Python half): the host gives up
+    on a forwarded request, then resets or disconnects before the remote
+    answers. Raw Gadget keeps that SETUP owed, so the proxy stalls it."""
+    device = CompositeDevice()
+    with rig_for(device) as rig:
+        assert rig.proxy is not None
+        rig.usbipd.service_delay = 0.3  # the remote answers slowly
+        result = rig.kernel.host_control(VENDOR_IN, b"", 0.02)
+        assert result.outcome == "timeout"  # the host gave up; SETUP still owed
+        getattr(rig.host, event)()
+        time.sleep(0.05)
+        rig.usbipd.service_delay = 0.0
+        time.sleep(0.8)  # the remote answer arrives and is ignored
+        if event == "disconnect":
+            rig.host.attach()
+        rig.host.enumerate("linux")  # the first attempt
+        assert any("abandoned the request" in line for line in rig.logs)
+        assert rig.proxy.error is None
+
+
+def test_teardown_does_not_wait_for_unlinks_a_stub_never_confirms() -> None:
+    """Teardown closes the connection (the stub kills every URB on close)
+    instead of unlinking each outstanding URB, as the native worker does."""
+    device = Loopback()
+    with rig_for(device, unlink_mode="ignore") as rig:
+        assert rig.proxy is not None
+        wait_for(lambda: len(device.pipes[0x81].urbs) == rig.policy.in_depth_bulk)
+        begun = time.monotonic()
+        rig.proxy.stop()
+        assert time.monotonic() - begun < 0.5
+        assert rig.proxy.state == "stopped" and rig.proxy.error is None
+        assert rig.usbipd.stats.unlinks == 0
+
+
+def test_missing_native_binary_exits_with_ex_config(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    missing = tmp_path / "yoke-gadget-worker"
+    code = worker_main(
+        ["--udc", "u", "--implementation", "native", "--native-binary", str(missing)]
+    )
+    assert code == EXIT_CONFIG == 78
+    err = capsys.readouterr().err
+    assert err.count("\n") == 1 and str(missing) in err and "Traceback" not in err
