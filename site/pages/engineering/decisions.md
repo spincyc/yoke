@@ -34,6 +34,7 @@ is normative for control behavior.
 | [0024 — USB/IP data-plane admission and ZERO 3E device-box privileges](../../../doc/decisions/0024-usbip-data-plane-admission-and-device-box-privileges.md) |  |
 | [0025 — IR endpoint on ESP32 RMT with an iTach API subset](../../../doc/decisions/0025-esp32-rmt-ir-endpoint-itach-subset.md) |  |
 | [0026 — ESP32 endpoint health, recovery, storage and boot-security path](../../../doc/decisions/0026-esp32-endpoint-health-recovery-and-storage.md) |  |
+| [0027 — Tiered USB product line and a native C data path](../../../doc/decisions/0027-tiered-usb-product-line-and-native-c-data-path.md) | tiers 1, 1.5, 2 and 3 |
 
 Protocol behavior changes require updating the normative protocol and
 recording the decision before implementation. See
