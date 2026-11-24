@@ -367,7 +367,7 @@ def test_status_table_rendering() -> None:
     assert code == 0
     lines = table.splitlines()
     header = lines[0].split()
-    assert header == ["ID", "ROLE", "KIND", "STATE", "PAIRING", "NAME"]
+    assert header == ["ID", "ROLE", "KIND", "STATE", "PAIRING", "NAME", "DETAIL"]
     cam_row = next(line for line in lines if line.startswith("cam-1"))
     assert "producer" in cam_row
     assert "hdmi" in cam_row
@@ -1138,3 +1138,165 @@ def test_rebase_sequence_refuses_while_agent_holds_state(tmp_path: Path) -> None
     with statefile.lock(state_path):
         assert main(["agent", "--config", str(cfg), "--rebase-sequence"]) == 4
     assert statefile.load(state_path).seq == 2**62
+
+
+def test_open_flag_rejects_psk_file_and_ignores_default_psk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    psk_file = tmp_path / "psk"
+    psk_file.write_bytes(KEY)
+    psk_file.chmod(0o600)
+
+    def forbidden(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("default PSK should not be loaded under --open")
+
+    monkeypatch.setattr("yoke.cli.resolve_psk", forbidden)
+    monkeypatch.setattr("yoke.cli.open_multicast_socket", forbidden)
+    assert main(["--open", "--psk-file", str(psk_file), "status"]) == 2
+    assert "either --psk-file or --open" in capsys.readouterr().err
+
+    class EmptySocket:
+        def settimeout(self, timeout: float | None) -> None:
+            pass
+
+        def recvfrom(self, size: int) -> Any:
+            raise TimeoutError
+
+        def sendto(self, *args: Any) -> None:
+            raise AssertionError("status must not send")
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(
+        "yoke.cli.open_multicast_socket", lambda *a, **kw: EmptySocket()
+    )
+    assert main(["--open", "status", "--watch=0.001", "--json"]) == 0
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["authentication"] == "open-unauthenticated"
+    assert "UNAUTHENTICATED" in captured.err
+
+
+def test_telemetry_cli_open_flag_overrides_default_psk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import yoke.config as config_mod
+    import yoke.telemetry.runtime as runtime_mod
+
+    psk_file = tmp_path / "psk"
+    psk_file.write_bytes(KEY)
+    psk_file.chmod(0o600)
+    assert main(["--open", "--psk-file", str(psk_file), "metrics", "--once"]) == 2
+    assert "either --psk-file or --open" in capsys.readouterr().err
+
+    seen_psk: list[bytes] = []
+
+    class DummyMonitor:
+        def __init__(self, cfg: Any) -> None:
+            seen_psk.append(cfg.psk)
+
+        def __enter__(self) -> DummyMonitor:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            pass
+
+        def finish(self) -> Any:
+            from yoke.telemetry.model import Snapshot
+
+            return Snapshot(
+                uptime_seconds=1.0,
+                authentication="open-unauthenticated",
+                devices=(),
+                observer={},
+            )
+
+    def forbidden(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("resolve_psk called despite --open")
+
+    monkeypatch.setattr(config_mod, "resolve_psk", forbidden)
+    monkeypatch.setattr(runtime_mod, "Monitor", DummyMonitor)
+    assert main(["--open", "metrics", "--once", "--window=0", "--format=json"]) == 0
+    assert seen_psk == [b""]
+    assert "UNAUTHENTICATED" in capsys.readouterr().err
+
+
+def test_status_surfaces_driver_status_and_drop_counts() -> None:
+    body: dict[str, Any] = {
+        "role": "consumer",
+        "kind": "usb",
+        "name": "USB Computer",
+        "state": "active",
+        "err": None,
+        "pairing": {"producer": "usb-02", "version": [1, "op-a"]},
+        "media": None,
+        "driver_status": {"detail": "presenting 046d:c52b\x1b[31m"},
+    }
+    good = encode(FrameType.ANN, "usb-01", 1, TS, body, PSK)
+    wrong_key = ann_producer(origin="usb-02", psk=b"wrong-site-secret-01")
+    net_json = FakeNet([(1000.1, good), (1000.2, wrong_key)])
+    code, out_json = run_status(net_json.recv, net_json.clock, PSK, 2.5, json_mode=True)
+    assert code == 0
+    payload = json.loads(out_json)
+    assert payload["nodes"][0]["driver_status"] == {
+        "detail": "presenting 046d:c52b\x1b[31m"
+    }
+    assert payload["counts"]["bad-sig"] == 1
+
+    net_tbl = FakeNet([(1000.1, good), (1000.2, wrong_key)])
+    code, table = run_status(net_tbl.recv, net_tbl.clock, PSK, 2.5)
+    assert code == 0
+    assert "presenting 046d:c52b\\x1b[31m" in table
+    assert "\x1b" not in table
+    assert "dropped frames: bad-sig=1" in table
+
+
+def test_run_intent_reports_drop_counts_on_missing_consumer_and_timeout() -> None:
+    wrong_key = ann_consumer(psk=b"wrong-site-secret-01")
+    net = FakeNet([(1000.1, wrong_key)])
+    outcome = run_intent(net.io(), "pair", "tv-den", "cam-1")
+    assert outcome.exit_code == 1
+    assert any("bad-sig=1" in line for line in outcome.err)
+    assert "dropped: bad-sig=1" in outcome.err[-1]
+
+
+def test_main_pair_sequences_are_strictly_monotonic_across_clock_step(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    sent: list[bytes] = []
+    mono = [1000.0]
+
+    class FakeSock:
+        def settimeout(self, timeout: float | None) -> None:
+            pass
+
+        def sendto(self, raw: bytes, addr: tuple[str, int]) -> None:
+            sent.append(raw)
+
+        def recvfrom(self, size: int) -> Any:
+            mono[0] += 3.0
+            raise TimeoutError
+
+        def close(self) -> None:
+            pass
+
+    wall_ns = iter(
+        [
+            1_755_000_000_000_000_000,
+            1_755_000_000_000_000_000,  # duplicate
+            1_754_999_999_000_000_000,  # backward step
+            1_754_999_998_000_000_000,
+            1_754_999_997_000_000_000,
+        ]
+    )
+    monkeypatch.setattr("yoke.cli.open_multicast_socket", lambda *a, **kw: FakeSock())
+    monkeypatch.setattr("yoke.cli.resolve_psk", lambda *a: (PSK, None))
+    monkeypatch.setattr("yoke.cli.time.monotonic", lambda: mono[0])
+    monkeypatch.setattr("yoke.cli.time.time", lambda: TS)
+    monkeypatch.setattr("yoke.cli.time.time_ns", lambda: next(wall_ns))
+    code = main(["pair", "cam-1", "tv-den"])
+    assert code == 1
+    seqs = [decode(raw, PSK).seq for raw in sent]
+    assert len(seqs) >= 3
+    assert seqs == sorted(seqs) and len(set(seqs)) == len(seqs)
+    capsys.readouterr()

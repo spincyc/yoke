@@ -192,8 +192,9 @@ void yoke_box_network(void)
 
 bool box_heap_fits(size_t need)
 {
-    return heap_caps_get_free_size(MALLOC_CAP_INTERNAL) >= need + BOX_HEAP_RESERVE &&
-           heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) >= need;
+    const uint32_t caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+    return box_heap_budget_ok(heap_caps_get_free_size(caps),
+                              heap_caps_get_largest_free_block(caps), need);
 }
 
 /* ---- status ---- */
@@ -235,11 +236,11 @@ void yoke_box_status(cJSON *body)
     cJSON_AddBoolToObject(usb, "open", config.open);
     cJSON_AddBoolToObject(usb, "started", started);
     cJSON_AddBoolToObject(usb, "clock_synced", box_clock_synced());
-    /* Sessions budget internal RAM; heap_free also counts any PSRAM. */
-    cJSON_AddNumberToObject(usb, "heap_internal_free",
-                            (double)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    /* Sessions budget 8-bit internal RAM; heap_free also counts any PSRAM. */
+    const uint32_t caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+    cJSON_AddNumberToObject(usb, "heap_internal_free", (double)heap_caps_get_free_size(caps));
     cJSON_AddNumberToObject(usb, "heap_internal_min_free",
-                            (double)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
+                            (double)heap_caps_get_minimum_free_size(caps));
     if (!started) return;
     if (bridge) {
         bridge->status(usb);

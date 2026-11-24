@@ -53,6 +53,7 @@ static nvs_handle_t trust;
 static SemaphoreHandle_t lock;
 static yoke_journal_t journal;
 static uint32_t boot_count;
+static int64_t floor_epoch;
 static void (*restart_guard)(void);
 static void (*status_hook)(cJSON *body);
 static esp_task_wdt_user_handle_t wdt_user;
@@ -113,8 +114,14 @@ static const char *load_journal(void)
 static esp_err_t save_clock(void)
 {
     int64_t now = (int64_t)time(NULL);
+    if (!yoke_ota_clock_epoch_valid(floor_epoch, now)) {
+        ESP_LOGW(TAG, "Refusing to persist implausible clock epoch %" PRId64 " (floor %" PRId64 ")",
+                 now, floor_epoch);
+        return ESP_OK;
+    }
     esp_err_t err = nvs_set_i64(trust, "epoch", now);
     if (err == ESP_OK) err = nvs_commit(trust);
+    if (err == ESP_OK) floor_epoch = now;
     return err;
 }
 
@@ -288,7 +295,8 @@ esp_err_t yoke_ota_init(void)
     int64_t epoch = 0;
     err = nvs_get_i64(trust, "epoch", &epoch);
     if (err != ESP_OK) return err;
-    if (epoch < 1704067200LL || epoch > 7258118400LL) return ESP_ERR_INVALID_ARG;
+    if (!yoke_ota_clock_epoch_valid(0, epoch)) return ESP_ERR_INVALID_ARG;
+    floor_epoch = epoch;
     struct timeval tv = {.tv_sec = (time_t)epoch};
     if (settimeofday(&tv, NULL) != 0) return ESP_FAIL;
     err = load_pem("server_cert", &server_cert, &server_cert_len);

@@ -33,3 +33,9 @@ int64_t box_time_restore(box_time_kept_t *kept, bool reset_kept_rtc, int64_t flo
     if (!valid) return -1;
     return unix_s > floor_s ? unix_s : floor_s;
 }
+
+bool box_time_sntp_acceptable(int64_t boot_floor, int64_t candidate)
+{
+    return candidate >= 1704067200LL && candidate <= 7258118400LL &&
+           (boot_floor <= 0 || candidate >= boot_floor - BOX_TIME_KEPT_BEHIND);
+}

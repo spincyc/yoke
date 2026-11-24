@@ -46,6 +46,11 @@ const char *yoke_ota_boot_state(bool pending_verify, bool journal_pending,
     return "idle";
 }
 
+bool yoke_ota_clock_epoch_valid(int64_t floor_epoch, int64_t candidate)
+{
+    return candidate >= floor_epoch && candidate >= 1704067200LL && candidate <= 7258118400LL;
+}
+
 #define JOURNAL_MAGIC_V 0x4a544f59u      /* "YOTJ" little-endian */
 #define JOURNAL_MAGIC_LEGACY 0x594f5401u
 #define HEADER 12u

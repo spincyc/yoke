@@ -281,9 +281,13 @@ esp_err_t yoke_usbd_start(void)
     if (err == ESP_OK) tud_disconnect();
     const esp_timer_create_args_t timer = {.callback = queue_tick, .name = "usbd-tick"};
     if (err == ESP_OK) err = esp_timer_create(&timer, &tick_timer);
-    if (err == ESP_OK) err = esp_timer_start_periodic(tick_timer, TICK_US);
-    /* Watched only once the tick that feeds it runs. */
+    /* Register the watchdog user before starting the tick that resets it. */
     if (err == ESP_OK) err = esp_task_wdt_add_user("usb-device", &wdt_user);
+    if (err == ESP_OK) err = esp_timer_start_periodic(tick_timer, TICK_US);
+    if (err != ESP_OK && wdt_user) {
+        (void)esp_task_wdt_delete_user(wdt_user);
+        wdt_user = NULL;
+    }
     installed = err == ESP_OK;
     return err;
 }

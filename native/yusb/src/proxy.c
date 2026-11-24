@@ -290,8 +290,14 @@ static bot_t *bot_for(yusb_proxy_t *p, const yusb_config_t *c, const yusb_alt_t 
     for (unsigned i = 0; i < a->num_endpoints; ++i) {
         const yusb_endpoint_t *e = yusb_alt_endpoint(c, a, i);
         if (yusb_ep_type(e) != YUSB_XFER_BULK) continue;
-        if (yusb_ep_is_in(e)) bulk_in = true;
-        else bulk_out = true;
+        if (yusb_ep_is_in(e)) {
+            if (yusb_packet_size(e->max_packet) > p->policy.max_transfer ||
+                yusb_transfer_size(e->max_packet) > p->policy.max_transfer)
+                return NULL;
+            bulk_in = true;
+        } else {
+            bulk_out = true;
+        }
     }
     if (!bulk_in || !bulk_out) return NULL;
     for (unsigned i = 0; i < sizeof(p->bots) / sizeof(p->bots[0]); ++i) {
@@ -322,9 +328,14 @@ static int enable_interface(yusb_proxy_t *p, const yusb_config_t *c, unsigned nu
         if (handle < 0) return handle;
         unsigned idx = pump_index(e->address);
         p->handles[idx] = handle;
-        if (pump_create(p, a, e, handle, bot)) return YUSB_ERR_NOMEM;
+        if (pump_create(p, a, e, handle, bot)) {
+            p->ops.ep_disable(p->ops.ctx, handle);
+            p->handles[idx] = -1;
+            return YUSB_ERR_NOMEM;
+        }
         *created |= 1u << idx;
-        if (yusb_ep_is_in(e) && !in_packet) in_packet = yusb_packet_size(e->max_packet);
+        if (yusb_ep_type(e) == YUSB_XFER_BULK && yusb_ep_is_in(e) && !in_packet)
+            in_packet = yusb_packet_size(e->max_packet);
     }
     for (unsigned i = 0; i < a->num_endpoints && in_packet; ++i) {
         pump_t *u = &p->pumps[pump_index(yusb_alt_endpoint(c, a, i)->address)];
@@ -360,6 +371,7 @@ static void finish_set_configuration(yusb_proxy_t *p, const urb_result_t *r)
         return;
     }
     yusb_control_reset(&p->control);
+    memset(p->bots, 0, sizeof(p->bots));
     if (r->status == -YUSB_EPIPE) {
         e0_stall(p, "remote refused SET_CONFIGURATION");
         return;
@@ -402,8 +414,13 @@ static void finish_set_interface(yusb_proxy_t *p, const urb_result_t *r)
         /* The device keeps its previous alternate setting: restore it. */
         disable_endpoints(p, old);
         int rc = enable_interface(p, c, number, previous, &created);
-        if (rc) px_fault(p, "UDC could not restore alternate setting: error %d", rc);
-        start_pumps(p, created);
+        if (rc) {
+            px_fault(p, "UDC could not restore alternate setting: error %d", rc);
+            free_pumps(p, created);
+            disable_endpoints(p, created);
+        } else {
+            start_pumps(p, created);
+        }
         e0_stall(p, "remote refused SET_INTERFACE");
         return;
     }
@@ -412,6 +429,7 @@ static void finish_set_interface(yusb_proxy_t *p, const urb_result_t *r)
     if (rc) {
         px_fault(p, "UDC could not enable alternate setting: error %d", rc);
         free_pumps(p, created);
+        disable_endpoints(p, created);
         e0_stall(p, "UDC endpoint enable failed");
         return;
     }
@@ -423,6 +441,10 @@ static void finish_set_interface(yusb_proxy_t *p, const urb_result_t *r)
 
 static void e0_submit(yusb_proxy_t *p)
 {
+    if (p->e0.setup.length > p->policy.ep0_max) {
+        e0_stall(p, "control request longer than ep0_max");
+        return;
+    }
     p->remote_dirty = true;
     p->counters.forwarded++;
     p->e0.flow = E0_REMOTE;
@@ -515,7 +537,8 @@ static void bot_reset(yusb_proxy_t *p, unsigned interface)
 {
     for (unsigned i = 0; i < YUSB_MAX_PUMPS; ++i) {
         pump_t *u = &p->pumps[i];
-        if (u->used && !u->in && u->bot && u->bot->interface == interface) pump_bot_abort(p, u);
+        if (u->used && u->run == P_RUN && !u->in && u->bot && u->bot->interface == interface)
+            pump_bot_abort(p, u);
     }
 }
 
@@ -687,6 +710,7 @@ static void bus_reset(yusb_proxy_t *p, const char *state)
     }
     stop_pumps(p, used_pumps(p));
     yusb_control_reset(&p->control);
+    memset(p->bots, 0, sizeof(p->bots));
     p->bus_quiesce = true;
     p->state = state;
     p->suspended = false;
@@ -788,8 +812,8 @@ uint64_t yusb_proxy_poll(yusb_proxy_t *p, uint64_t now_ms)
         cl_poll(p);
         for (unsigned i = 0; i < YUSB_MAX_PUMPS; ++i)
             if (p->pumps[i].used) pump_poll(p, &p->pumps[i]);
-        if (p->e0.flow == E0_GATE) px_deadline(p, p->e0.gate_deadline);
-        if (p->phase == YUSB_PHASE_STOPPING) px_deadline(p, p->stop_deadline);
+        if (p->e0.flow == E0_GATE && now_ms < p->e0.gate_deadline) px_deadline(p, p->e0.gate_deadline);
+        if (p->phase == YUSB_PHASE_STOPPING && now_ms < p->stop_deadline) px_deadline(p, p->stop_deadline);
     }
     settle(p);
     return p->next_deadline;
@@ -880,6 +904,7 @@ yusb_footprint_t yusb_proxy_footprint(const yusb_policy_t *policy, const yusb_bu
                cl_tx_segments(policy, nurbs) * sizeof(yusb_iov_t) + stage +
                ybuf_round(&layout, ybuf_offset(&layout) + policy->ep0_max);
     yusb_yx_params_t offer = {YUSB_YX_VERSION, policy->yx_levers, policy->yx_cache_blocks};
+    yusb_yx_agree(&offer, &offer, &offer);
     if (yusb_yx_framed(&offer)) {
         /* Segment scratch at create; at import, the most an agreement under
          * this offer allocates: the late-payload buffer and both codecs. */

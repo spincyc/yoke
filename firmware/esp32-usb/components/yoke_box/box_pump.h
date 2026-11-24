@@ -28,6 +28,7 @@ enum {
  * bytes to send (its own progress pumps again: a readable socket must not
  * be watched meanwhile). Otherwise CLOSED or FAILED. */
 int box_pump(int fd, const box_core_io_t *io, void *core, uint64_t now_ms);
-/* TCP_NODELAY (USB/IP is request/response; see USB-DATAPATH.md) and
- * nonblocking mode. 0, or -1 with errno. */
+/* TCP_NODELAY (USB/IP is request/response; see USB-DATAPATH.md), fast LAN
+ * TCP keepalive (so an idle rebooted or unplugged peer clears the session
+ * instead of holding it forever), and nonblocking mode. 0, or -1 with errno. */
 int box_pump_prepare(int fd);

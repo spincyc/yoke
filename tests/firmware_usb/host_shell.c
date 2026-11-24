@@ -6,6 +6,7 @@
  * MODEL ONLY: no lwIP, multicast, SNTP or task scheduling. */
 #include <assert.h>
 #include <errno.h>
+#include <setjmp.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,6 +20,7 @@
 #include "esp_task_wdt.h"
 #include "esp_timer.h"
 #include "esp_vfs_eventfd.h"
+#include "freertos/task.h"
 #include "lwip/sockets.h"
 #include "mbedtls/sha256.h"
 #include "nvs.h"
@@ -30,8 +32,12 @@
 
 /* ---- the network stack ---- */
 
-static bool network_up, udp_fails;
-static unsigned sockets_made, listens, sends, receives;
+static bool network_up, udp_fails, tcp_bind_fails;
+static unsigned sockets_made, udp_opens, listens, sends, receives;
+static unsigned udp_closes, tcp_closes, shutdowns;
+static int last_shutdown_fd = -1;
+static uint32_t last_udp_bind_addr;
+static uint16_t last_udp_bind_port;
 static uint8_t inbound[YWP_MAX_FRAME];
 static size_t inbound_len;
 static int inbound_left = -1; /* datagrams until EAGAIN; -1: never stops */
@@ -41,13 +47,34 @@ int stub_socket(int domain, int type, int protocol)
 {
     (void)domain; (void)protocol;
     assert(network_up); /* lwIP's mailboxes exist only after esp_netif_init */
-    if (type == SOCK_DGRAM && udp_fails) return -1;
+    if (type == SOCK_DGRAM && udp_fails) {
+        errno = ENOMEM;
+        return -1;
+    }
     sockets_made++;
-    return type == SOCK_DGRAM ? UDP_FD : TCP_FD;
+    if (type == SOCK_DGRAM) {
+        udp_opens++;
+        return UDP_FD;
+    }
+    return TCP_FD;
 }
 int stub_bind(int fd, const struct sockaddr *address, socklen_t size)
 {
-    (void)fd; (void)address; (void)size;
+    assert(size >= sizeof(struct sockaddr_in));
+    struct sockaddr_in sin;
+    memcpy(&sin, address, sizeof(sin));
+    if (fd == TCP_FD && tcp_bind_fails) {
+        errno = EADDRINUSE;
+        return -1;
+    }
+    if (fd == UDP_FD) {
+        assert(sin.sin_family == AF_INET);
+        /* YWP/1 control sockets must bind the multicast group, never INADDR_ANY. */
+        assert(sin.sin_addr.s_addr == inet_addr(YWP_CONTROL_GROUP));
+        assert(sin.sin_port == htons(YWP_CONTROL_PORT));
+        last_udp_bind_addr = sin.sin_addr.s_addr;
+        last_udp_bind_port = sin.sin_port;
+    }
     return 0;
 }
 int stub_listen(int fd, int backlog)
@@ -98,9 +125,18 @@ ssize_t stub_sendto(int fd, const void *buffer, size_t size, int flags,
     sends++;
     return (ssize_t)size;
 }
+int stub_shutdown(int fd, int how)
+{
+    assert((fd == UDP_FD || fd == TCP_FD) && how == SHUT_RDWR);
+    shutdowns++;
+    last_shutdown_fd = fd;
+    return 0;
+}
 int stub_close(int fd)
 {
     assert(fd == UDP_FD || fd == TCP_FD);
+    if (fd == UDP_FD) udp_closes++;
+    else tcp_closes++;
     return 0;
 }
 
@@ -163,8 +199,10 @@ static struct {
     double number;
 } members[64];
 static size_t nmembers;
+static unsigned state_adds;
 static cJSON *record(const char *name, const char *text, double number)
 {
+    if (!strcmp(name, "state")) state_adds++;
     size_t i = 0;
     while (i < nmembers && strcmp(members[i].name, name)) ++i;
     if (i == nmembers) {
@@ -235,10 +273,14 @@ esp_err_t yoke_usbh_start(const yoke_usbh_sink_t *sink, void *ctx)
     usb_sink = sink;
     return ESP_OK;
 }
-const uint8_t *yoke_usbh_device_descriptor(void) { return NULL; }
-const uint8_t *yoke_usbh_config_descriptor(void) { return NULL; }
-unsigned yoke_usbh_speed(void) { return 0; }
-unsigned yoke_usbh_address(void) { return 0; }
+static const uint8_t stub_dev_desc[18] = {18, 1, 0x00, 0x02, 0, 0, 0, 64, 0x09, 0x12, 0x01, 0x00,
+                                          0, 1, 0, 0, 0, 1};
+static const uint8_t stub_cfg_desc[18] = {9, 2, 18, 0, 1, 1, 0, 0x80, 50,
+                                          9, 4, 0, 0, 0, 3, 0, 0, 0};
+const uint8_t *yoke_usbh_device_descriptor(void) { return stub_dev_desc; }
+const uint8_t *yoke_usbh_config_descriptor(void) { return stub_cfg_desc; }
+unsigned yoke_usbh_speed(void) { return 2; }
+unsigned yoke_usbh_address(void) { return 1; }
 int yoke_usbh_claim(void) { return -YOKE_USBH_ENODEV; }
 void yoke_usbh_release(void) {}
 int yoke_usbh_endpoint_type(uint8_t endpoint)
@@ -278,7 +320,9 @@ static box_config_t config = {.role = BOX_ROLE_COMPUTER, .node_id = "desk-a",
 static const char *status_text(const char *name)
 {
     nmembers = 0;
+    state_adds = 0;
     box_ywp_status(NULL);
+    assert(state_adds == 1);
     return stub_json_string(name);
 }
 
@@ -428,12 +472,138 @@ static int mode_watch_wakes(void)
     return 0;
 }
 
+/* Drive box_net's task() for one select() iteration via the WDT hook. */
+static jmp_buf net_done;
+static unsigned net_wdt_limit, net_wdt_seen;
+static void (*net_wdt_between)(unsigned seen);
+static void stop_net_task(void)
+{
+    ++net_wdt_seen;
+    if (net_wdt_between) net_wdt_between(net_wdt_seen);
+    if (net_wdt_seen >= net_wdt_limit) longjmp(net_done, 1);
+}
+static void (*net_task_fn)(void *); /* static: survives longjmp */
+static void run_net_task(unsigned iterations, void (*between)(unsigned seen))
+{
+    net_task_fn = NULL;
+    for (unsigned i = 0; i < stub_task_count && !net_task_fn; ++i)
+        if (!strcmp(stub_tasks[i].name, "yoke-net")) net_task_fn = stub_tasks[i].fn;
+    assert(net_task_fn);
+    net_wdt_seen = 0;
+    net_wdt_limit = iterations + 1;
+    net_wdt_between = between;
+    stub_wdt_hook = stop_net_task;
+    if (!setjmp(net_done)) net_task_fn(NULL);
+    stub_wdt_hook = NULL;
+    net_wdt_between = NULL;
+}
+
+/* Cross-core box_net_close(): direct before task start; after start it
+ * unwatches, shuts down, wakes yoke-net, and closes only on yoke-net. */
+static int mode_deferred_close(void)
+{
+    network_up = true;
+    stub_time_us = 1000000;
+    assert(box_net_init() == ESP_OK);
+    /* Before box_net_start(): closes directly. */
+    box_net_watch(TCP_FD, true, false, yoke_usbh_post, ready, NULL);
+    box_net_close(TCP_FD);
+    assert(tcp_closes == 1 && shutdowns == 0);
+    (void)drain_wakes();
+    /* After box_net_start(): unwatched, shutdown + wake, deferred close on yoke-net. */
+    assert(box_net_start(&config, &consumer_role, 0x0a000002u) == ESP_OK);
+    box_net_watch(TCP_FD, true, false, yoke_usbh_post, ready, NULL);
+    (void)drain_wakes();
+    box_net_close(TCP_FD);
+    assert(tcp_closes == 1 && shutdowns == 1 && last_shutdown_fd == TCP_FD);
+    /* Duplicate close of the same queued fd is ignored. */
+    box_net_close(TCP_FD);
+    assert(tcp_closes == 1 && shutdowns == 1);
+    /* yoke-net wakes from real eventfd select() (normalized timeval) and closes TCP_FD. */
+    run_net_task(1, NULL);
+    assert(tcp_closes == 2);
+    return 0;
+}
+
+/* Multicast group bind, link-bounce rejoin on identical IPv4, and media
+ * update only when IPv4 actually changes (producer role). */
+static int mode_address_rejoin(void)
+{
+    network_up = true;
+    clock_synced = true;
+    stub_time_us = 1000000;
+    box_config_t prod = config;
+    prod.role = BOX_ROLE_DEVICE;
+    assert(box_ywp_open(&prod, &consumer_role, 0x0a000002u) == ESP_OK);
+    assert(udp_opens == 1 && udp_closes == 0);
+    assert(last_udp_bind_addr == inet_addr(YWP_CONTROL_GROUP));
+    assert(last_udp_bind_port == htons(YWP_CONTROL_PORT));
+    assert(!strcmp(status_text("error"), ""));
+    /* Same IP (DHCP renewal after Ethernet link bounce): reopens/rejoins multicast. */
+    unsigned sends_before = sends;
+    box_ywp_address(0x0a000002u);
+    assert(udp_closes == 1 && udp_opens == 2);
+    assert(last_udp_bind_addr == inet_addr(YWP_CONTROL_GROUP));
+    assert(!strcmp(status_text("error"), ""));
+    /* Producer media did not change, so no extra media-change announcement burst. */
+    assert(sends == sends_before);
+    /* New IP: reopens/rejoins multicast and updates producer media without error. */
+    box_ywp_address(0x0a000003u);
+    assert(udp_closes == 2 && udp_opens == 3);
+    assert(!strcmp(status_text("error"), ""));
+    return 0;
+}
+
+static void listener_retry_step(unsigned seen)
+{
+    if (seen == 2) {
+        /* Iteration 1 dispatched the failing poll -> state is "error". */
+        assert(!strcmp(status_text("state"), "error"));
+        /* Allow bind() to succeed; next poll retries listen_work() and transitions to active. */
+        tcp_bind_fails = false;
+        box_device.poll(0);
+        run_usb_task();
+        assert(listens == 1 && tcp_closes == 2);
+        /* Unwatch fake fd 2000 (> Linux FD_SETSIZE) so select() runs on wake_fd. */
+        box_net_unwatch(TCP_FD);
+    }
+}
+
+/* Failed TCP listener bind closes the leaked fd, reports YWP_ERROR on poll,
+ * and retries listen_work() on subsequent polls until it succeeds. */
+static int mode_listener_retry(void)
+{
+    network_up = true;
+    clock_synced = true;
+    udp_fails = true; /* keep box_ywp_fd() == -1 so select() runs only on wake_fd */
+    tcp_bind_fails = true;
+    stub_time_us = 1000000;
+    box_config_t prod = config;
+    prod.role = BOX_ROLE_DEVICE;
+    assert(box_net_init() == ESP_OK);
+    assert(box_device.start() == ESP_OK && usb_sink);
+    usb_sink->attached(NULL);
+    box_device.online();
+    run_usb_task();
+    /* bind() failed after socket(): listener fd was closed and reset, not leaked. */
+    assert(tcp_closes == 1 && listens == 0);
+    assert(box_net_start(&prod, &box_device, 0x0a000002u) == ESP_OK);
+    /* First poll while bind still fails: retries listen, closes again, reports error. */
+    box_device.poll(0);
+    run_usb_task();
+    assert(tcp_closes == 2 && listens == 0);
+    run_net_task(2, listener_retry_step);
+    assert(!strcmp(status_text("state"), "active"));
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     static const struct { const char *name; int (*run)(void); } modes[] = {
         {"start-order", mode_start_order},       {"clock-gate", mode_clock_gate},
         {"socket-reopen", mode_socket_reopen},   {"receive-bound", mode_receive_bound},
-        {"watch-wakes", mode_watch_wakes},
+        {"watch-wakes", mode_watch_wakes},       {"deferred-close", mode_deferred_close},
+        {"address-rejoin", mode_address_rejoin}, {"listener-retry", mode_listener_retry},
     };
     assert(argc == 2);
     for (size_t i = 0; i < sizeof(modes) / sizeof(modes[0]); ++i)

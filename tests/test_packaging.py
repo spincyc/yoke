@@ -121,6 +121,7 @@ def test_agent_stays_unprivileged_and_helpers_are_narrow(tmp_path: Path) -> None
         "--port 3240"
     ]
     assert "yoke-usbipd.service" in helper["Unit.Before"][0].split()
+    assert "yoke-update-recover.service" in helper["Unit.After"][0].split()
     daemon = directives(units / "yoke-usbipd.service")
     assert daemon["Unit.Requires"] == ["yoke-usbip-admission.service"]
     assert daemon["Service.ExecStart"] == ["/usr/sbin/usbipd --tcp-port 3240"]

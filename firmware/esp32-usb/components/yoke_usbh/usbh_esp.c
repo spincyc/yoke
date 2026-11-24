@@ -21,7 +21,7 @@
 #define DAEMON_STACK 4096
 #define CLIENT_STACK 6144   /* runs the export core: ~2.3 KB deep plus logging */
 #define TASK_PRIORITY 5
-#define POSTS 8
+#define POSTS 32
 #define MAX_INTERFACES 32
 
 typedef struct {
@@ -144,7 +144,7 @@ static esp_err_t start_chunk(slot_t *s)
         x->num_bytes = (int)((s->chunk + s->packet - 1u) / s->packet * s->packet);
         if (!x->num_bytes) x->num_bytes = s->packet;
     } else {
-        memcpy(x->data_buffer, urb->data + s->done, s->chunk);
+        if (s->chunk) memcpy(x->data_buffer, urb->data + s->done, s->chunk);
         x->num_bytes = (int)s->chunk;
         if (urb->zero && s->done + s->chunk == urb->length) x->flags = USB_TRANSFER_FLAG_ZERO_PACK;
     }
@@ -229,7 +229,7 @@ static void transfer_done(usb_transfer_t *x)
         if (!status) status = -YOKE_USBH_EOVERFLOW;
     }
     bool in = control ? urb->setup[0] & 0x80u : urb->endpoint & 0x80u;
-    if (in) memcpy(urb->data + s->done, x->data_buffer + (control ? 8 : 0), actual);
+    if (in && actual) memcpy(urb->data + s->done, x->data_buffer + (control ? 8 : 0), actual);
     s->done += actual;
     bool more = !control && !status && actual == s->chunk && s->done < urb->length;
     if (more && start_chunk(s) == ESP_OK) return;
@@ -244,7 +244,10 @@ int yoke_usbh_submit(yoke_usbh_urb_t *urb)
     bool control = (urb->endpoint & 0x7fu) == 0;
     const uint8_t *ep = control ? NULL : claimed_endpoint(urb->endpoint, NULL);
     if (!control && !ep) return -YOKE_USBH_EINVAL;
+    uint16_t packet = control ? 64u : (uint16_t)(usb_le16(ep + 4) & 0x7ffu);
+    if (!control && (packet == 0 || packet > YOKE_USBH_CHUNK)) return -YOKE_USBH_EINVAL;
     if (control && urb->length > YOKE_USBH_CHUNK) return -YOKE_USBH_EINVAL;
+    if (urb->length && !urb->data) return -YOKE_USBH_EINVAL;
     if (urb->tweak == YOKE_USBH_SET_INTERFACE) {
         /* The library re-claims an interface only once it is released, and
          * releases it only with nothing in flight (the stub's rule too). */
@@ -258,8 +261,7 @@ int yoke_usbh_submit(yoke_usbh_urb_t *urb)
     for (size_t i = 0; i < YOKE_USBH_URBS && !s; ++i)
         if (!slots[i].urb) s = &slots[i];
     if (!s) return -YOKE_USBH_EBUSY;
-    *s = (slot_t){.xfer = s->xfer, .urb = urb,
-                  .packet = control ? 64u : usb_le16(ep + 4) & 0x7ffu};
+    *s = (slot_t){.xfer = s->xfer, .urb = urb, .packet = packet};
     if (start_chunk(s) != ESP_OK) {
         s->urb = NULL;
         (void)apply_tweak(urb, -YOKE_USBH_EPROTO); /* claim the old alternate again */

@@ -885,6 +885,18 @@ class NftablesAdmission:
         self._labels = labels
         self._requested_at = self._clock()
 
+    def _maybe_rerequest(self) -> str | None:
+        if (
+            self._requested is None
+            or self._clock() - self._requested_at < self._rerequest_after
+        ):
+            return None
+        try:
+            self._write(self._requested, self._labels)
+        except DriverError as exc:
+            return str(exc)
+        return None
+
     def status(self) -> tuple[NodeState | None, str]:
         if self._error is not None:
             return NodeState.ERROR, self._error
@@ -893,19 +905,23 @@ class NftablesAdmission:
         try:
             data = _read_private_json(self._status_path, "admission status")
         except FileNotFoundError:
+            err = self._maybe_rerequest()
+            if err is not None:
+                return NodeState.ERROR, err
             return NodeState.PENDING, "admission helper has not reported"
         except (OSError, ValueError, RecursionError) as exc:
             return NodeState.ERROR, f"admission status unreadable: {exc}"
         if not isinstance(data, dict):
             return NodeState.ERROR, "admission status unreadable"
         if data.get("applied") is not True:
+            err = self._maybe_rerequest()
+            if err is not None:
+                return NodeState.ERROR, err
             return NodeState.ERROR, f"admission helper failed: {data.get('error')}"
         if data.get("port") != self._port or data.get("allow") != self._requested:
-            if self._clock() - self._requested_at >= self._rerequest_after:
-                try:
-                    self._write(self._requested, self._labels)
-                except DriverError as exc:
-                    return NodeState.ERROR, str(exc)
+            err = self._maybe_rerequest()
+            if err is not None:
+                return NodeState.ERROR, err
             return (
                 NodeState.PENDING,
                 f"admission allowlist {self._requested} not yet applied",

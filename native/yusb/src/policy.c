@@ -174,9 +174,15 @@ void yusb_decide(const yusb_setup_t *setup, const yusb_presentation_t *p,
         d->cache = true;
         return;
     }
-    if (request == YUSB_REQ_SET_ADDRESS) { d->kind = YUSB_D_ACK; return; }   /* the UDC owns addressing */
+    if (request == YUSB_REQ_SET_ADDRESS) {
+        if (is_in || setup->length) stall(d, "malformed standard request");
+        else d->kind = YUSB_D_ACK;   /* the UDC owns addressing */
+        return;
+    }
     if (request == YUSB_REQ_SET_CONFIGURATION && recipient == YUSB_RECIP_DEVICE) {
-        if (setup->value == 0 || yusb_presentation_config(p, setup->value)) {
+        if (is_in || setup->length) {
+            stall(d, "malformed standard request");
+        } else if (setup->value == 0 || yusb_presentation_config(p, setup->value)) {
             d->kind = YUSB_D_SET_CONFIGURATION;
             d->value = (uint8_t)setup->value;
         } else {
@@ -190,7 +196,9 @@ void yusb_decide(const yusb_setup_t *setup, const yusb_presentation_t *p,
     }
     const yusb_config_t *config = yusb_presentation_config(p, state->configuration);
     if (request == YUSB_REQ_SET_INTERFACE && recipient == YUSB_RECIP_INTERFACE) {
-        if (config && yusb_config_alt(config, setup->index, setup->value)) {
+        if (is_in || setup->length) {
+            stall(d, "malformed standard request");
+        } else if (config && yusb_config_alt(config, setup->index, setup->value)) {
             d->kind = YUSB_D_SET_INTERFACE;
             d->interface = (uint8_t)setup->index;
             d->alternate = (uint8_t)setup->value;
@@ -227,6 +235,10 @@ void yusb_decide(const yusb_setup_t *setup, const yusb_presentation_t *p,
         return;
     }
     if (request == YUSB_REQ_CLEAR_FEATURE || request == YUSB_REQ_SET_FEATURE) {
+        if (is_in || setup->length) {
+            stall(d, "malformed standard request");
+            return;
+        }
         if (recipient == YUSB_RECIP_ENDPOINT && setup->value == YUSB_FEATURE_ENDPOINT_HALT) {
             unsigned address = setup->index & 0x8fu;
             if (!(address & 0x0fu)) { d->kind = YUSB_D_ACK; return; }

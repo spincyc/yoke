@@ -357,6 +357,103 @@ def test_duplicate_endpoints_are_judged_like_the_reference(
         assert isinstance(python, Presentation)
 
 
+@pytest.mark.parametrize(
+    ("name", "speed", "ep_type", "max_packet", "error_cls"),
+    [
+        ("pkt-1025", Speed.HIGH, 3, 1025, DescriptorError),
+        ("reserved-mult", Speed.HIGH, 3, 0x1840, DescriptorError),
+        ("bulk-high-bw", Speed.HIGH, 2, 0x0840, DescriptorError),
+        ("bulk-gt-512-hs", Speed.HIGH, 2, 1024, UnsupportedError),
+        ("bulk-gt-512-fs", Speed.FULL, 2, 1024, UnsupportedError),
+        ("int-high-bw-fs", Speed.FULL, 3, 0x0840, UnsupportedError),
+        ("int-high-bw-ls", Speed.LOW, 3, 0x0808, UnsupportedError),
+        ("int-high-bw-hs-ok", Speed.HIGH, 3, 0x0840, None),
+    ],
+)
+def test_endpoint_wmaxpacketsize_bounds_match_reference(
+    probe: Probe,
+    name: str,
+    speed: Speed,
+    ep_type: int,
+    max_packet: int,
+    error_cls: type[BaseException] | None,
+) -> None:
+    body = descriptors.interface(0, endpoints=1, cls=0xFF) + descriptors.endpoint(
+        0x81, ep_type, max_packet, interval=1 if ep_type == 3 else 0
+    )
+    device = descriptors.device(vendor=0x1209, product=0x78, bcd_usb=0x0200)
+    config = descriptors.configuration(body, interfaces=1)
+    fetch = fixed_answers(device, config)
+    budget = UdcBudget()
+    python_requests, python = python_build(fetch, speed, budget)
+    c_requests, c = c_build(probe, fetch, speed, budget)
+    assert c_requests == python_requests
+    assert_same(python, c, name)
+    if error_cls is not None:
+        assert isinstance(python, error_cls)
+    else:
+        assert isinstance(python, Presentation)
+
+
+@pytest.mark.parametrize("langs_reply", [b"", b"\x04"])
+def test_short_langid_table_never_crashes_and_matches_reference(
+    probe: Probe, langs_reply: bytes
+) -> None:
+    device = descriptors.device(
+        vendor=0x1209, product=0x79, bcd_usb=0x0200, manufacturer=1
+    )
+    config = descriptors.configuration(
+        descriptors.interface(0, endpoints=0, cls=0xFF), interfaces=1
+    )
+
+    def fetch(setup: Setup) -> bytes | None:
+        kind, index = setup.value >> 8, setup.value & 0xFF
+        if setup.request == 6 and kind == 1:
+            return device[: setup.length]
+        if setup.request == 6 and kind == 2 and index == 0:
+            return config[: setup.length]
+        if setup.request == 6 and kind == 3 and index == 0:
+            return langs_reply
+        return None
+
+    budget = UdcBudget()
+    python_requests, python = python_build(fetch, Speed.HIGH, budget)
+    c_requests, c = c_build(probe, fetch, Speed.HIGH, budget)
+    assert c_requests == python_requests
+    assert_same(python, c, f"langs-{len(langs_reply)}")
+    assert isinstance(python, Presentation)
+    assert (0, 0) not in python.strings
+
+
+def test_malformed_standard_no_data_requests_stall_in_both_cores(probe: Probe) -> None:
+    presentation = built(probe, "composite")
+    state = ControlState(configuration=1, alternates={0: 0, 1: 0})
+    bad_setups = [
+        Setup(0x80, 5, 1, 0, 0),  # SET_ADDRESS IN
+        Setup(0x00, 5, 1, 0, 4),  # SET_ADDRESS wLength > 0
+        Setup(0x80, 9, 1, 0, 0),  # SET_CONFIGURATION IN
+        Setup(0x00, 9, 1, 0, 65535),  # SET_CONFIGURATION wLength > 0
+        Setup(0x81, 11, 0, 0, 0),  # SET_INTERFACE IN
+        Setup(0x01, 11, 0, 0, 8192),  # SET_INTERFACE wLength > 0
+        Setup(0x82, 1, 0, 0x82, 0),  # CLEAR_FEATURE IN
+        Setup(0x02, 1, 0, 0x82, 2),  # CLEAR_FEATURE wLength > 0
+        Setup(0x82, 3, 0, 0x82, 0),  # SET_FEATURE IN
+        Setup(0x02, 3, 0, 0x82, 2),  # SET_FEATURE wLength > 0
+    ]
+    alts = bytes(32).hex()
+    for setup in bad_setups:
+        expected = decide(setup, presentation, state, ProxyPolicy())
+        assert (
+            isinstance(expected, Stall)
+            and expected.reason == "malformed standard request"
+        )
+        line = probe.ask(f"decide 1 3 {alts} 0 1 {setup.pack().hex()}")
+        reason = probe.line()
+        assert line.startswith("stall ") and reason == f"reason {expected.reason}", (
+            setup
+        )
+
+
 # --- control routing ---------------------------------------------------------
 
 

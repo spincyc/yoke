@@ -20,6 +20,20 @@ static const uint8_t storage[32] = {
     7, 5, 0x81, 2, 64, 0, 0,
     7, 5, 0x02, 2, 64, 0, 0,
 };
+/* Interrupt IN endpoints with mps=0 and mps=1025 (> POLL_BYTES), then valid 0x83. */
+static const uint8_t bad_then_good_int[39] = {
+    9, 2, 39, 0, 1, 1, 0, 0x80, 50,
+    9, 4, 0, 0, 3, 3, 0, 0, 0,
+    7, 5, 0x81, 3, 0, 0, 10,
+    7, 5, 0x82, 3, 0x01, 0x04, 10,
+    7, 5, 0x83, 3, 8, 0, 10,
+};
+static const uint8_t only_bad_int[32] = {
+    9, 2, 32, 0, 1, 1, 0, 0x80, 50,
+    9, 4, 0, 0, 2, 3, 0, 0, 0,
+    7, 5, 0x81, 3, 0, 0, 10,
+    7, 5, 0x82, 3, 0x01, 0x04, 10,
+};
 static const uint8_t *config = keyboard;
 static yoke_usbh_urb_t *submitted[8];
 static int submissions, claims, claim_result;
@@ -117,10 +131,30 @@ static int mode_quiet_device(void)
     return 0;
 }
 
+static int mode_bad_mps(void)
+{
+    device[14] = device[15] = device[16] = 0;
+    config = bad_then_good_int;
+    selftest_host_init(capture);
+    selftest_host_sink.attached(NULL);
+    assert(submissions == 1 && last()->endpoint == 0x83 && last()->length == 8);
+    assert(selftest_host_status()->poll_endpoint == 0x83);
+    /* If all interrupt IN endpoints have invalid mps, nothing is polled. */
+    line_count = 0;
+    int before = submissions;
+    config = only_bad_int;
+    selftest_host_init(capture);
+    selftest_host_sink.attached(NULL);
+    assert(submissions == before && !selftest_host_status()->poll_endpoint);
+    assert(logged("no interrupt IN endpoint to poll"));
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     assert(argc == 2);
     if (!strcmp(argv[1], "keyboard")) return mode_keyboard();
     if (!strcmp(argv[1], "quiet-device")) return mode_quiet_device();
+    if (!strcmp(argv[1], "bad-mps")) return mode_bad_mps();
     return 2;
 }

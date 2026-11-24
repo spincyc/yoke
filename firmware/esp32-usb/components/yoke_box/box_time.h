@@ -29,3 +29,6 @@ void box_time_keep(box_time_kept_t *kept, int64_t unix_s);
  * floor) when the reset kept RTC memory and the reading is plausible, else
  * -1. The record is consumed either way. */
 int64_t box_time_restore(box_time_kept_t *kept, bool reset_kept_rtc, int64_t floor_s);
+/* Whether an unauthenticated SNTP reading is plausible against the boot
+ * clock floor: within the trust bounds and never far behind boot_floor. */
+bool box_time_sntp_acceptable(int64_t boot_floor, int64_t candidate);

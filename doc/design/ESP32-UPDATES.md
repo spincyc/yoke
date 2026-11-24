@@ -115,7 +115,7 @@ source when adding IR analog input. See Espressif's
 | Request | Result |
 |---|---|
 | `GET /v1/status` | JSON protocol version, running app/version/slot, selected slot, image limits, state, last error, last attempted digest/version, local clock source, `journal_version`, `reset_reason`, `uptime_s`, `boot_count`, `heap_free`, `heap_min_free` (low-water mark), `coredump_present`, and an `ir` object (see IR-ENDPOINT.md) |
-| `PUT /v1/firmware`, `Content-Type: application/octet-stream`, `X-Image-SHA256: <64 lowercase hex>` | Stream raw `yoke-ir-updater.bin`; require complete digest match, valid ESP32-S3 app, matching project name; stage inactive slot, select boot slot, reply 202, restart once IR output is idle |
+| `PUT /v1/firmware`, `Content-Type: application/octet-stream`, `X-Image-SHA256: <64 lowercase hex>` | Stream raw `yoke-ir-updater.bin` (with `curl`, pass `-H 'Expect:'` because ESP-IDF HTTPD does not implement `100-continue`); require complete digest match, valid ESP32-S3 app, matching project name; stage inactive slot, select boot slot, reply 202, restart once IR output is idle |
 | `DELETE /v1/coredump` | Erase a stored core dump after retrieving it over USB (`idf.py coredump-info`); reply with `coredump_present` |
 | `PUT /v1/ir/config`, `Content-Type: application/json` | IR API/learning/allowlist settings; see IR-ENDPOINT.md |
 

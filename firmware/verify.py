@@ -318,6 +318,22 @@ def verify(env: dict[str, str], python: Path, jobs: int) -> None:
             raise RuntimeError(f"{lock.name} changed: the pinned components drifted")
         require_mirror_callbacks(build / "yoke-usb-box.map")
         images[f"USB box ({target})"] = require_app(build / "yoke-usb-box.bin")
+    lock = ROOT / "firmware/esp32-usb/dependencies.lock.esp32s3"
+    pinned = lock.read_bytes()
+    build = SCRATCH / "build-usb-esp32s3-device"
+    sdkconfig = SCRATCH / "sdkconfig-usb-esp32s3-device"
+    idf_build(
+        env,
+        "firmware/esp32-usb",
+        build,
+        sdkconfig,
+        "esp32s3",
+        (*native, "SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.role-device"),
+    )
+    if lock.read_bytes() != pinned:
+        raise RuntimeError(f"{lock.name} changed: the pinned components drifted")
+    require_mirror_callbacks(build / "yoke-usb-box.map")
+    images["USB box (esp32s3 device)"] = require_app(build / "yoke-usb-box.bin")
     check_sdk(env)
     print(f"[firmware] PASS: {count} tests, no skips")
     for name, image in images.items():

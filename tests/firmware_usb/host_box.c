@@ -7,6 +7,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -16,6 +17,7 @@
 #include "box_media.h"
 #include "box_pump.h"
 #include "box_time.h"
+#include "bridge.h"
 
 /* The reference agent's recommended PSK file: 64 hex characters, used as
  * 64 bytes of key. */
@@ -154,9 +156,26 @@ static void pair(int fds[2])
     fds[1] = accept(listener, NULL, NULL);
     close(listener);
     assert(!box_pump_prepare(fds[1]));
-    int nodelay = 0;
+    int nodelay = 0, keepalive = 0;
     socklen_t len = sizeof(nodelay);
-    assert(!getsockopt(fds[1], IPPROTO_TCP, 1 /* TCP_NODELAY */, &nodelay, &len) && nodelay);
+    assert(!getsockopt(fds[1], IPPROTO_TCP, TCP_NODELAY, &nodelay, &len) && nodelay);
+    len = sizeof(keepalive);
+    assert(!getsockopt(fds[1], SOL_SOCKET, SO_KEEPALIVE, &keepalive, &len) && keepalive);
+#ifdef TCP_KEEPIDLE
+    int idle = 0;
+    len = sizeof(idle);
+    assert(!getsockopt(fds[1], IPPROTO_TCP, TCP_KEEPIDLE, &idle, &len) && idle == 5);
+#endif
+#ifdef TCP_KEEPINTVL
+    int intvl = 0;
+    len = sizeof(intvl);
+    assert(!getsockopt(fds[1], IPPROTO_TCP, TCP_KEEPINTVL, &intvl, &len) && intvl == 2);
+#endif
+#ifdef TCP_KEEPCNT
+    int cnt = 0;
+    len = sizeof(cnt);
+    assert(!getsockopt(fds[1], IPPROTO_TCP, TCP_KEEPCNT, &cnt, &len) && cnt == 3);
+#endif
     assert(fcntl(fds[1], F_GETFL) & O_NONBLOCK);
 }
 
@@ -261,6 +280,35 @@ static int mode_clock_rules(void)
     box_time_keep(&kept, now);
     kept.unix_s += 1;                              /* corrupt */
     assert(box_time_restore(&kept, true, now) == -1);
+    /* Unauthenticated SNTP gate: bounds [2024-01-01, 2200-01-01] and never far behind boot_floor. */
+    assert(!box_time_sntp_acceptable(0, 1704067199LL));
+    assert(box_time_sntp_acceptable(0, 1704067200LL));
+    assert(box_time_sntp_acceptable(0, 7258118400LL));
+    assert(!box_time_sntp_acceptable(0, 7258118401LL));
+    assert(!box_time_sntp_acceptable(now, now - BOX_TIME_KEPT_BEHIND - 1));
+    assert(box_time_sntp_acceptable(now, now - BOX_TIME_KEPT_BEHIND));
+    assert(box_time_sntp_acceptable(now, now));
+    assert(box_time_sntp_acceptable(now, 7258118400LL));
+    assert(!box_time_sntp_acceptable(now, 7258118401LL));
+    assert(!box_time_sntp_acceptable(now, 0));
+    return 0;
+}
+
+static int mode_heap_budget(void)
+{
+    /* P4 presentation core (~274 KB across multiple allocations, none > 64 KiB):
+     * fits when 8-bit internal free covers need + reserve and largest block >= 64 KiB. */
+    const size_t p4_need = 274u * 1024u;
+    assert(box_heap_budget_ok(p4_need + BOX_HEAP_RESERVE, BOX_HEAP_BLOCK_CAP, p4_need));
+    assert(box_heap_budget_ok(350u * 1024u, 128u * 1024u, p4_need));
+    assert(!box_heap_budget_ok(p4_need + BOX_HEAP_RESERVE - 1u, 128u * 1024u, p4_need));
+    assert(!box_heap_budget_ok(350u * 1024u, BOX_HEAP_BLOCK_CAP - 1u, p4_need));
+    /* Smaller sessions require a block at least as large as need. */
+    assert(box_heap_budget_ok(64u * 1024u, 16u * 1024u, 16u * 1024u));
+    assert(!box_heap_budget_ok(64u * 1024u, 16u * 1024u - 1u, 16u * 1024u));
+    /* Integer overflow guard on need + BOX_HEAP_RESERVE. */
+    assert(!box_heap_budget_ok(1024u * 1024u, 512u * 1024u, SIZE_MAX));
+    assert(!box_heap_budget_ok(BOX_HEAP_RESERVE - 1u, BOX_HEAP_RESERVE - 1u, 0));
     return 0;
 }
 
@@ -268,6 +316,7 @@ int main(int argc, char **argv)
 {
     assert(argc == 2);
     if (!strcmp(argv[1], "clock-rules")) return mode_clock_rules();
+    if (!strcmp(argv[1], "heap-budget")) return mode_heap_budget();
     if (!strcmp(argv[1], "auth-limit")) return mode_auth_limit();
     if (!strcmp(argv[1], "config")) return mode_config();
     if (!strcmp(argv[1], "media")) return mode_media();

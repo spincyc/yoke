@@ -5,6 +5,7 @@
 #include "esp_attr.h"
 #include "esp_log.h"
 #include "esp_netif_sntp.h"
+#include "esp_sntp.h"
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "yoke_ota.h"
@@ -14,6 +15,7 @@
 static const char *TAG = "yoke-clock";
 static atomic_bool synced;
 static bool initialized;
+static int64_t boot_floor;
 /* A synchronized reading that survives software, panic and watchdog
  * resets (box_time.h); a power-on clears it. */
 RTC_NOINIT_ATTR static box_time_kept_t kept;
@@ -37,6 +39,22 @@ static void on_sync(struct timeval *tv)
     if (!atomic_exchange(&synced, true))
         ESP_LOGI(TAG, "wall clock set by SNTP: %lld", (long long)tv->tv_sec);
     keep(NULL);
+}
+
+/* Strong override of lwIP's weak sntp_sync_time(): reject implausible or
+ * backwards unauthenticated SNTP replies before they can touch the system
+ * clock or later overwrite otatrust/epoch. */
+void sntp_sync_time(struct timeval *tv)
+{
+    if (!tv) return;
+    if (!box_time_sntp_acceptable(boot_floor, (int64_t)tv->tv_sec)) {
+        ESP_LOGW(TAG, "ignoring implausible SNTP time: %lld (floor %lld)", (long long)tv->tv_sec,
+                 (long long)boot_floor);
+        return;
+    }
+    settimeofday(tv, NULL);
+    sntp_set_sync_status(SNTP_SYNC_STATUS_COMPLETED);
+    on_sync(tv);
 }
 
 static bool reset_kept_rtc(void)
@@ -68,6 +86,7 @@ static void restore(void)
 
 esp_err_t box_clock_init(void)
 {
+    boot_floor = now_s();
     restore();
     const esp_timer_create_args_t timer = {.callback = keep, .name = "clock-keep"};
     esp_err_t err = esp_timer_create(&timer, &keep_timer);

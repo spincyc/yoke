@@ -1141,3 +1141,34 @@ def test_unapplied_admission_request_is_rewritten_to_retrigger_helper(
     assert rewritten["generation"] == 3 and rewritten["allow"] == ["10.20.30.4"]
     assert helper(tmp_path) == 0
     assert backend.status() == (None, "; admission 1 consumer address(es)")
+
+
+def test_admission_rerequests_when_status_missing_or_failed(tmp_path: Path) -> None:
+    clock = FakeClock()
+    (tmp_path / "run-yoke").mkdir()
+    (tmp_path / "run-admission").mkdir()
+    request = tmp_path / "run-yoke" / "usbip-admission.json"
+    backend = NftablesAdmission(
+        port=3240,
+        request_path=request,
+        status_path=tmp_path / "run-admission" / "status.json",
+        clock=clock,
+    )
+    backend.apply((("desk-usb", "10.20.30.3"),))
+    assert json.loads(request.read_text())["generation"] == 1
+    assert backend.status()[0] is NodeState.PENDING
+    # Status file still missing after rerequest interval -> rewrite request.
+    clock.now += 5.0
+    assert backend.status()[0] is NodeState.PENDING
+    assert json.loads(request.read_text())["generation"] == 2
+    # Transient helper failure -> reports ERROR, then re-requests after interval.
+    failing = FakeRunner([(("nft",), CommandResult(1, "", "busy"))])
+    assert helper(tmp_path, failing) == 1
+    assert backend.status()[0] is NodeState.ERROR
+    assert json.loads(request.read_text())["generation"] == 2
+    clock.now += 5.0
+    assert backend.status()[0] is NodeState.ERROR
+    assert json.loads(request.read_text())["generation"] == 3
+    # Subsequent helper run recovers cleanly.
+    assert helper(tmp_path) == 0
+    assert backend.status() == (None, "; admission 1 consumer address(es)")

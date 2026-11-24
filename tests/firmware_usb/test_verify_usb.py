@@ -28,3 +28,12 @@ def test_mirror_callbacks_must_be_linked(tmp_path: Path, case: str) -> None:
     else:
         with pytest.raises(RuntimeError):
             verifier["require_mirror_callbacks"](link_map)
+
+
+def test_verify_builds_s3_device_role_image() -> None:
+    """firmware/verify.py must also build-verify the ESP32-S3 device-role image."""
+    source = (ROOT / "firmware/verify.py").read_text()
+    assert "build-usb-esp32s3-device" in source
+    assert "sdkconfig-usb-esp32s3-device" in source
+    assert "SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.role-device" in source
+    assert 'images["USB box (esp32s3 device)"] = require_app(' in source

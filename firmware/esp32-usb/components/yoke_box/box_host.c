@@ -11,6 +11,7 @@ typedef struct {
 } wrapper_t;
 
 static wrapper_t wrappers[YOKE_USBH_URBS];
+static bool local_posted;
 static void (*after)(box_export_t *e);
 static uint64_t (*clock_ms)(void);
 static yusb_log_fn log_fn;
@@ -20,17 +21,35 @@ void box_host_init(void (*serviced)(box_export_t *e), uint64_t (*now_ms)(void), 
     after = serviced;
     clock_ms = now_ms;
     log_fn = log;
+    local_posted = false;
 }
 
 static void finish(wrapper_t *w, int status, uint32_t actual)
 {
     box_export_t *e = w->owner;
     w->owner = NULL;
+    w->local = false;
     if (e->x) yusb_export_complete(e->x, w->xurb, status, actual, clock_ms());
     after(e);
 }
 
-static void finish_local(void *arg) { finish(arg, 0, 0); }
+/* Coalesce local completions into at most one queued post so a burst of
+ * SET_CONFIGURATION URBs on the client task can never fill posts and
+ * self-deadlock. */
+static void drain_local(void *arg)
+{
+    (void)arg;
+    for (bool more = true; more;) {
+        more = false;
+        for (size_t i = 0; i < YOKE_USBH_URBS; ++i) {
+            if (wrappers[i].owner && wrappers[i].local) {
+                finish(&wrappers[i], 0, 0);
+                more = true;
+            }
+        }
+    }
+    local_posted = false;
+}
 
 void box_host_complete(yoke_usbh_urb_t *urb, int status, uint32_t actual)
 {
@@ -70,7 +89,10 @@ static int op_submit(void *ctx, unsigned dev, yusb_xurb_t *xurb)
          * configuration can be selected, and needs no bus request. */
         if (!cfg || xurb->setup.value != cfg[5]) return -YUSB_EPIPE;
         *w = (wrapper_t){.xurb = xurb, .owner = ctx, .local = true};
-        yoke_usbh_post(finish_local, w); /* never re-enter the core */
+        if (!local_posted) {
+            local_posted = true;
+            yoke_usbh_post(drain_local, NULL); /* never re-enter the core */
+        }
         return 0;
     }
     if (xurb->tweak == YUSB_TWEAK_RESET_DEVICE) return -YUSB_EPIPE; /* ⚠ no port reset */

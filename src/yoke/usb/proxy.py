@@ -1012,12 +1012,20 @@ class Proxy:
         try:
             result = self._remote_control(setup, data)
         except TimeoutError:
-            self._stall("remote control request timed out")
+            if self._owed:
+                self._stall("remote control request timed out")
+            else:
+                self.counters.late_out_stalls += 1
+                self._log(f"remote control timeout after local status stage: {setup}")
             return
         except ConnectionLostError:
             raise
         except UsbipError as exc:
-            self._stall(str(exc))
+            if self._owed:
+                self._stall(str(exc))
+            else:
+                self.counters.late_out_stalls += 1
+                self._log(f"remote control error after local status stage: {exc}")
             return
         if cache:
             self._control.descriptor_misses[(setup.value, setup.index)] = (
@@ -1060,18 +1068,24 @@ class Proxy:
         assert setting is not None
         bot = self._bot_links(config, number, alternate)
         pumps: list[_Pump] = []
-        for endpoint in setting.endpoints:
-            handle = self.backend.ep_enable(endpoint.raw)
-            self._handles[endpoint.address] = handle
-            pump: _Pump
-            endpoint_bot = bot if endpoint.transfer_type == ch9.XFER_BULK else None
-            if endpoint.is_in:
-                pump = _InPump(self, endpoint, handle, endpoint_bot)
-                if endpoint_bot is not None:
-                    endpoint_bot.wake = pump.wake
-            else:
-                pump = _OutPump(self, endpoint, handle, endpoint_bot)
-            pumps.append(pump)
+        enabled: list[int] = []
+        try:
+            for endpoint in setting.endpoints:
+                handle = self.backend.ep_enable(endpoint.raw)
+                self._handles[endpoint.address] = handle
+                enabled.append(endpoint.address)
+                pump: _Pump
+                endpoint_bot = bot if endpoint.transfer_type == ch9.XFER_BULK else None
+                if endpoint.is_in:
+                    pump = _InPump(self, endpoint, handle, endpoint_bot)
+                    if endpoint_bot is not None:
+                        endpoint_bot.wake = pump.wake
+                else:
+                    pump = _OutPump(self, endpoint, handle, endpoint_bot)
+                pumps.append(pump)
+        except GadgetError:
+            self._disable_endpoints(enabled)
+            raise
         in_packets = [p.packet_size for p in pumps if isinstance(p, _InPump)]
         for pump in pumps:
             if isinstance(pump, _OutPump) and in_packets:

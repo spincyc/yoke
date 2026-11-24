@@ -117,6 +117,25 @@ def _fmt_version(version: Version) -> str:
     return f"[{version[0]},{version[1]}]"
 
 
+_DIAGNOSTIC_DROPS = ("bad-sig", "stale", "version", "malformed", "oversize")
+
+
+def _drop_summary(counts: dict[str, int] | None) -> str:
+    if not counts:
+        return ""
+    parts = [f"{k}={counts[k]}" for k in _DIAGNOSTIC_DROPS if counts.get(k, 0) > 0]
+    return ", ".join(parts)
+
+
+def _driver_detail(driver_status: Body | None) -> str:
+    if not isinstance(driver_status, dict) or not driver_status:
+        return ""
+    detail = driver_status.get("detail")
+    if isinstance(detail, str):
+        return _display(detail)
+    return _display(_json(driver_status))
+
+
 def run_intent(
     io: IntentIO, op: str, consumer: str, producer: str | None = None
 ) -> IntentOutcome:
@@ -173,9 +192,11 @@ def run_intent(
     announced = consumer_view is not None
     if consumer_view is None:
         n = 0
+        drops = _drop_summary(snooper.counts)
+        drop_note = f" (dropped: {drops})" if drops else ""
         err.append(
             f"warning: consumer {consumer!r} has not announced yet; "
-            "proceeding with pairing version 0"
+            f"proceeding with pairing version 0{drop_note}"
         )
     else:
         if consumer_view.role != Role.CONSUMER.value:
@@ -271,9 +292,11 @@ def run_intent(
     diagnosis = (
         "consumer never announced" if not announced else "consumer announced but no ack"
     )
+    drops = _drop_summary(snooper.counts)
+    drop_note = f"; dropped: {drops}" if drops else ""
     err.append(
         f"no ack from {consumer!r} within {io.deadline:g}s: "
-        f"{diagnosis} ({sends} intents sent)"
+        f"{diagnosis} ({sends} intents sent{drop_note})"
     )
     return IntentOutcome(1, (), tuple(err), version, sends, announced)
 
@@ -304,9 +327,14 @@ def collect(
     return snooper
 
 
-def render_status_table(nodes: dict[str, NodeView], now: float) -> str:
-    """Table of announced nodes; stale/error nodes flagged."""
-    headers = ("ID", "ROLE", "KIND", "STATE", "PAIRING", "NAME")
+def render_status_table(
+    nodes: dict[str, NodeView],
+    now: float,
+    *,
+    counts: dict[str, int] | None = None,
+) -> str:
+    """Table of announced nodes; stale/error nodes and drops flagged."""
+    headers = ("ID", "ROLE", "KIND", "STATE", "PAIRING", "NAME", "DETAIL")
     rows: list[tuple[str, ...]] = [headers]
     for node_id, view in sorted(nodes.items()):
         pairing = "-"
@@ -323,7 +351,15 @@ def render_status_table(nodes: dict[str, NodeView], now: float) -> str:
             flags.append(f"err:{_display(view.err or '?')}")
         state = view.state + (f" [{','.join(flags)}]" if flags else "")
         rows.append(
-            (node_id, view.role, view.kind, state, pairing, _display(view.name))
+            (
+                node_id,
+                view.role,
+                view.kind,
+                state,
+                pairing,
+                _display(view.name),
+                _driver_detail(view.driver_status),
+            )
         )
     widths = [max(len(row[i]) for row in rows) for i in range(len(headers))]
     lines = [
@@ -332,6 +368,9 @@ def render_status_table(nodes: dict[str, NodeView], now: float) -> str:
     ]
     if len(rows) == 1:
         lines.append("(no nodes announced)")
+    drops = _drop_summary(counts)
+    if drops:
+        lines.append(f"dropped frames: {drops}")
     return "\n".join(lines)
 
 
@@ -376,6 +415,7 @@ def run_status(
                     else None
                 ),
                 "media": view.media,
+                "driver_status": view.driver_status,
                 "age_seconds": round(max(0.0, now - view.last_seen), 6),
                 "stale": now - view.last_seen > PEER_TIMEOUT,
             }
@@ -389,7 +429,7 @@ def run_status(
                 "counts": snooper.counts,
             }
         )
-    return 0, render_status_table(snooper.nodes, clock())
+    return 0, render_status_table(snooper.nodes, clock(), counts=snooper.counts)
 
 
 # -- snoop -------------------------------------------------------------------
@@ -480,8 +520,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--open",
         action="store_true",
-        help="allow pair/unpair to send UNAUTHENTICATED intents when no PSK "
-        "is found (isolated labs only)",
+        help="use UNAUTHENTICATED open mode (ignore default PSK; isolated labs only)",
     )
     sub = parser.add_subparsers(dest="command", required=True)
     pair = sub.add_parser("pair", help="pair CONSUMER to PRODUCER")
@@ -626,12 +665,16 @@ def main(argv: list[str] | None = None) -> int:
 
         return run_command(args)
 
-    try:
-        psk, warning = resolve_psk(args.psk_file)
-    except (OSError, ValueError) as exc:
-        return _command_error(args, 2, f"cannot read PSK file: {exc}")
-    if warning is not None:
-        _err(warning)
+    if args.open and args.psk_file is not None:
+        return _command_error(args, 2, "choose either --psk-file or --open")
+    warning: str | None
+    if args.open:
+        psk, warning = b"", OPEN_MODE_WARNING
+    else:
+        try:
+            psk, warning = resolve_psk(args.psk_file)
+        except (OSError, ValueError) as exc:
+            return _command_error(args, 2, f"cannot read PSK file: {exc}")
     origin: str = (
         args.origin
         if args.origin is not None
@@ -656,6 +699,8 @@ def main(argv: list[str] | None = None) -> int:
                 f"no PSK: pass --psk-file FILE (default {DEFAULT_PSK_PATH}), or "
                 "--open to send UNAUTHENTICATED lab intents",
             )
+    if warning is not None:
+        _err(warning)
 
     group: str = args.group
     port: int = args.port
@@ -695,11 +740,18 @@ def main(argv: list[str] | None = None) -> int:
             return raw, time.monotonic()
 
         if command in ("pair", "unpair"):
+            last_seq = 0
+
+            def next_seq() -> int:
+                nonlocal last_seq
+                last_seq = max(last_seq + 1, time.time_ns())
+                return last_seq
+
             io = IntentIO(
                 send=send,
                 recv=recv_until,
                 clock=time.monotonic,
-                seq=time.time_ns,
+                seq=next_seq,
                 psk=psk,
                 origin=origin,
                 wall_clock=time.time,

@@ -78,6 +78,7 @@ def upload_binary(tmp_path_factory: pytest.TempPathFactory) -> Path:
         "project",
         "journal",
         "clock",
+        "clock-floor",
         "selection",
         "journal-codec",
         "health",

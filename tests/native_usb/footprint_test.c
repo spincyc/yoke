@@ -162,10 +162,9 @@ static yusb_end_t proxy_case(const char *name, const yusb_policy_t *policy, long
     yusb_device_info_t info = {.busnum = 1, .devnum = 2, .speed = YUSB_SPEED_HIGH};
     strcpy(info.busid, "1-1");
     yusb_device_info_encode(&info, rep + 8);
-    if (policy->yx_levers) {
-        yusb_yx_params_t acc = {1, policy->yx_levers, policy->yx_cache_blocks};
-        yusb_yx_accept_put(rep + 8, &acc);
-    }
+    yusb_yx_params_t norm = {1, policy->yx_levers, policy->yx_cache_blocks};
+    yusb_yx_agree(&norm, &norm, &norm);
+    if (norm.levers) yusb_yx_accept_put(rep + 8, &norm);
     feed(p, rep, sizeof(rep));
     size_t after_import = live;
     for (int g = 0; g < 64 && yusb_proxy_phase(p) == YUSB_PHASE_FETCH; ++g) {
@@ -184,7 +183,7 @@ static yusb_end_t proxy_case(const char *name, const yusb_policy_t *policy, long
     yusb_end_t end = st.end;
     if (fail < 0) {
         CHECK(end == YUSB_END_NONE && yusb_proxy_phase(p) == YUSB_PHASE_READY);
-        CHECK(st.yx == (policy->yx_levers != 0));
+        CHECK(st.yx == yusb_yx_framed(&norm));
         yusb_proxy_gadget_started(p, NULL, 0, 0);
         size_t before_cfg = live;
         uint8_t setconf[8] = {0, 9, 1, 0, 0, 0, 0, 0};
@@ -223,6 +222,17 @@ int main(void)
         unavailable += end == YUSB_END_YX_UNAVAILABLE;
     }
     CHECK(unavailable >= 3);
+    /* F9: CACHE bit with 0 cache_blocks must normalize in footprint and client. */
+    pol.yx_levers = 0x07;
+    pol.yx_cache_blocks = 0;
+    proxy_case("linux + YX cache 0", &pol, -1);
+    pol.yx_levers = YUSB_YX_CACHE;
+    pol.yx_cache_blocks = 0;
+    proxy_case("linux + YX cache-only 0", &pol, -1);
+    /* F1: small max_transfer (512) BOT footprint parity. */
+    yusb_policy_defaults(&pol);
+    pol.max_transfer = 512;
+    proxy_case("linux max_transfer 512", &pol, -1);
     yusb_policy_defaults(&pol);
     pol.ep0_max = 4096;
     pol.max_transfer = 4096;
@@ -234,6 +244,9 @@ int main(void)
     proxy_case("mcu + YX fill", &pol, -1);
     pol.yx_levers = 0x03;
     proxy_case("mcu + YX fill,lz4", &pol, -1);
+    pol.yx_levers = 0x07;
+    pol.yx_cache_blocks = 0;
+    proxy_case("mcu + YX cache 0", &pol, -1);
     pol.yx_levers = 0x07;
     pol.yx_cache_blocks = 16;
     proxy_case("mcu + YX cache 16", &pol, -1);

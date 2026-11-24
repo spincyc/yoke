@@ -494,6 +494,59 @@ static int mode_parked_reads(void)
     return 0;
 }
 
+/* A burst of SET_CONFIGURATION URBs (more than YOKE_USBH_URBS and old POSTS=8)
+ * must coalesce into at most one queued post in box_host instead of filling
+ * the USB host client task's post queue and self-deadlocking. */
+static int mode_local_burst(void)
+{
+    box_host_init(serviced, now_ms, NULL);
+    yusb_export_dev_t device;
+    box_host_describe(&device);
+    yusb_export_cfg_t cfg;
+    yusb_export_defaults(&cfg);
+    cfg.max_urbs = YOKE_USBH_URBS;
+    cfg.max_urb_bytes = 4096;
+    box_host_bind(&exporter);
+    exporter.x = yusb_export_create(&cfg, &exporter.ops, &device, 1);
+    assert(exporter.x);
+    connect_boxes();
+    uint8_t req[YUSB_REQ_IMPORT_SIZE], rep[YUSB_REP_IMPORT_SIZE];
+    assert(yusb_req_import_encode("1-1", req) == 0);
+    client_send(req, sizeof(req));
+    client_read(rep, sizeof(rep));
+    uint16_t code;
+    uint32_t status;
+    yusb_device_info_t info;
+    assert(!yusb_op_decode(rep, &code, &status) && code == YUSB_OP_REP_IMPORT && !status);
+    assert(!yusb_device_info_decode(rep + YUSB_OP_HEADER_SIZE, &info));
+    uint32_t devid = yusb_devid(&info);
+    const uint8_t set_cfg[8] = {0x00, 9, 1, 0, 0, 0, 0, 0};
+    for (uint32_t seq = 1; seq <= 12; ++seq) {
+        yusb_usbip_hdr_t h = yusb_cmd_submit(seq, devid, YUSB_USBIP_DIR_OUT, 0, 0, 0, 0, set_cfg);
+        uint8_t raw[YUSB_USBIP_HEADER_SIZE];
+        yusb_usbip_encode(&h, raw);
+        assert(send(client_fd, raw, sizeof(raw), 0) == (ssize_t)sizeof(raw));
+    }
+    /* One pump ingests the burst: all local completions share a single post. */
+    size_t queued_before = call_tail - call_head;
+    assert(queued_before == 0);
+    int r = box_pump(exporter.fd, &export_io, exporter.x, now_ms());
+    assert(!(r & (BOX_PUMP_CLOSED | BOX_PUMP_FAILED)));
+    assert(call_tail - call_head == 1);
+    size_t max_queued = call_tail - call_head;
+    for (uint32_t seq = 1; seq <= 12; ++seq) {
+        uint8_t raw[YUSB_USBIP_HEADER_SIZE];
+        client_read(raw, sizeof(raw));
+        if (call_tail - call_head > max_queued) max_queued = call_tail - call_head;
+        yusb_usbip_hdr_t h;
+        assert(!yusb_usbip_decode(raw, &h));
+        assert(h.command == YUSB_RET_SUBMIT && h.seqnum == seq && h.status == 0);
+    }
+    assert(max_queued <= 1);
+    printf("{\"local_burst\": 12}\n");
+    return 0;
+}
+
 static int mode_no_ram(void)
 {
     configure(true, false);
@@ -549,5 +602,6 @@ int main(int argc, char **argv)
     if (!strcmp(argv[1], "no-ram")) return mode_no_ram();
     if (!strcmp(argv[1], "set-config-race")) return mode_set_config_race();
     if (!strcmp(argv[1], "parked-reads")) return mode_parked_reads();
+    if (!strcmp(argv[1], "local-burst")) return mode_local_burst();
     return 2;
 }

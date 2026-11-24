@@ -27,6 +27,7 @@
 static const char *TAG = "yoke-device";
 static box_export_t sessions[SESSIONS];
 static int listener = -1;
+static bool listening_wanted;
 static yusb_export_dev_t device;
 static bool attached;
 static SemaphoreHandle_t admission_lock;
@@ -78,9 +79,10 @@ static void export_cfg(yusb_export_cfg_t *cfg)
 
 static void close_transport(box_export_t *s)
 {
-    box_net_unwatch(s->fd);
-    close(s->fd);
-    s->fd = -1;
+    if (s->fd >= 0) {
+        box_net_close(s->fd);
+        s->fd = -1;
+    }
     yusb_export_close(s->x);
 }
 
@@ -132,6 +134,10 @@ static void accept_one(int fd, uint32_t peer)
         export_cfg(&cfg);
         box_host_bind(s);
         /* Budget first: never a half-created session. */
+        if (!box_heap_fits(yusb_export_footprint(&cfg, NULL)) && cfg.yx.levers) {
+            ESP_LOGW(TAG, "YX export does not fit; falling back to plain USB/IP");
+            cfg.yx.levers = 0;
+        }
         if (!box_heap_fits(yusb_export_footprint(&cfg, NULL))) refused = "not enough RAM";
         else if (box_pump_prepare(fd)) refused = "socket setup failed";
         else if (!(s->x = yusb_export_create(&cfg, &s->ops, &device, 1)))
@@ -165,6 +171,8 @@ static void listener_ready(void *arg)
 static void listen_work(void *arg)
 {
     (void)arg;
+    listening_wanted = true;
+    if (listener >= 0) return;
     int on = 1;
     struct sockaddr_in any = {.sin_family = AF_INET, .sin_port = htons(BOX_USBIP_PORT)};
     listener = socket(AF_INET, SOCK_STREAM, 0);
@@ -172,6 +180,10 @@ static void listen_work(void *arg)
         bind(listener, (struct sockaddr *)&any, sizeof(any)) || listen(listener, 2) ||
         fcntl(listener, F_SETFL, fcntl(listener, F_GETFL, 0) | O_NONBLOCK) < 0) {
         ESP_LOGE(TAG, "USB/IP listener on TCP %u failed: errno %d", BOX_USBIP_PORT, errno);
+        if (listener >= 0) {
+            close(listener);
+            listener = -1;
+        }
         return;
     }
     ESP_LOGI(TAG, "USB/IP server on TCP %u (admitted consumers only)", BOX_USBIP_PORT);
@@ -226,7 +238,14 @@ static void poll_work(void *arg)
     bool imported = false;
     for (size_t i = 0; i < SESSIONS; ++i)
         imported |= sessions[i].x && yusb_export_device(sessions[i].x) >= 0;
-    if (!admission_known) {
+    xSemaphoreTake(admission_lock, portMAX_DELAY);
+    bool known = admission_known;
+    xSemaphoreGive(admission_lock);
+    if (listening_wanted && listener < 0) listen_work(NULL);
+    if (listening_wanted && listener < 0) {
+        state = YWP_ERROR;
+        snprintf(detail, sizeof(detail), "USB/IP listener unavailable");
+    } else if (!known) {
         state = YWP_PENDING;
         snprintf(detail, sizeof(detail), "admission allowlist not yet requested");
     } else if (!attached) {

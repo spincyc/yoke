@@ -26,6 +26,14 @@ static const uint8_t config_desc[39] = {
     7, 5, 0x02, 2, 64, 0, 0,
     7, 5, 0x83, 3, 8, 0, 1,
 };
+/* Malformed device: ep 0x81 has wMaxPacketSize=0, ep 0x02 has 0x0800 (masks to 0). */
+static const uint8_t bad_mps_config_desc[32] = {
+    9, 2, 32, 0, 1, 1, 0, 0x80, 50,
+    9, 4, 0, 0, 2, 0xff, 0, 0, 0,
+    7, 5, 0x81, 2, 0, 0, 0,
+    7, 5, 0x02, 2, 0, 0x08, 0,
+};
+static const uint8_t *active_config_desc = config_desc;
 
 /* ---- the library model ---- */
 
@@ -133,7 +141,7 @@ esp_err_t usb_host_get_active_config_descriptor(usb_device_handle_t dev,
                                                 const usb_config_desc_t **desc)
 {
     (void)dev;
-    *desc = (const usb_config_desc_t *)config_desc;
+    *desc = (const usb_config_desc_t *)active_config_desc;
     return ESP_OK;
 }
 
@@ -350,12 +358,59 @@ static int mode_unplug_replug(void)
     return 0;
 }
 
+static unsigned post_runs;
+static void count_post(void *arg)
+{
+    (void)arg;
+    post_runs++;
+}
+
+/* Raised post queue capacity (32), zero-length NULL-buffer UB guards, and
+ * rejection of zero wMaxPacketSize endpoints before division-by-zero. */
+static int mode_burst_and_guards(void)
+{
+    start();
+    /* 20 concurrent posts exceed the old POSTS=8 limit without dropping. */
+    for (int i = 0; i < 20; ++i) yoke_usbh_post(count_post, NULL);
+    run_client_once();
+    assert(post_runs == 20);
+    /* Zero-length transfers with NULL data must not trigger memcpy(NULL, ..., 0). */
+    yoke_usbh_urb_t zlp_out = {.endpoint = 0x02, .data = NULL, .length = 0};
+    yoke_usbh_urb_t zlp_in = {.endpoint = 0x81, .data = NULL, .length = 0};
+    yoke_usbh_urb_t zlp_ctl = {.endpoint = 0x00, .data = NULL, .length = 0,
+                               .setup = {0x80, 0, 0, 0, 0, 0, 0, 0}};
+    assert(yoke_usbh_submit(&zlp_out) == 0);
+    assert(yoke_usbh_submit(&zlp_in) == 0);
+    assert(yoke_usbh_submit(&zlp_ctl) == 0);
+    device_answers(0x02, USB_TRANSFER_STATUS_COMPLETED, 0);
+    device_answers(0x81, USB_TRANSFER_STATUS_COMPLETED, 0);
+    device_answers(0x00, USB_TRANSFER_STATUS_COMPLETED, 0);
+    run_client_once();
+    assert(completions == 3 && last_status == 0 && last_actual == 0);
+    /* Non-zero length with NULL buffer is rejected cleanly. */
+    yoke_usbh_urb_t bad_null = {.endpoint = 0x02, .data = NULL, .length = 8};
+    assert(yoke_usbh_submit(&bad_null) == -YOKE_USBH_EINVAL);
+    /* Replug with zero/masked-zero wMaxPacketSize endpoints: refused, no div-by-zero. */
+    active_config_desc = bad_mps_config_desc;
+    lib.events[lib.nevents].event = USB_HOST_CLIENT_EVENT_DEV_GONE;
+    lib.events[lib.nevents++].dev_gone.dev_hdl = &the_device;
+    plug(2);
+    run_client_once();
+    assert(detached == 1 && attached == 2 && yoke_usbh_claim() == 0);
+    yoke_usbh_urb_t bad_in = {.endpoint = 0x81, .data = buffer, .length = 8};
+    yoke_usbh_urb_t bad_out = {.endpoint = 0x02, .data = buffer, .length = 8};
+    assert(yoke_usbh_submit(&bad_in) == -YOKE_USBH_EINVAL);
+    assert(yoke_usbh_submit(&bad_out) == -YOKE_USBH_EINVAL);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     static const struct { const char *name; int (*run)(void); } modes[] = {
         {"release-after-completion", mode_release_after_completion},
         {"clear-halt", mode_clear_halt},
         {"unplug-replug", mode_unplug_replug},
+        {"burst-and-guards", mode_burst_and_guards},
     };
     assert(argc == 2);
     for (size_t i = 0; i < sizeof(modes) / sizeof(modes[0]); ++i)

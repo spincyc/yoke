@@ -45,6 +45,7 @@ static bool flooded;          /* the last wake filled its batch */
 static double health_due;
 static SemaphoreHandle_t snapshot_lock;
 static struct {
+    bool has_node, waiting;
     ywp_status_t status;
     size_t peers, footprint, stack_free;
     uint32_t datagrams, polls, datagram_us_max, poll_us_max;
@@ -100,6 +101,8 @@ static void fail(const char *error)
 static void take_snapshot(void)
 {
     xSemaphoreTake(snapshot_lock, portMAX_DELAY);
+    snapshot.has_node = true;
+    snapshot.waiting = false;
     ywp_node_status(node, &snapshot.status);
     snapshot.peers = ywp_node_peer_count(node);
     snapshot.stack_free = uxTaskGetStackHighWaterMark(NULL); /* bytes on ESP-IDF */
@@ -215,17 +218,20 @@ static int open_socket(uint32_t ipv4)
 {
     int fd = socket(AF_INET, SOCK_DGRAM, 0), on = 1;
     uint8_t ttl = 1, loop = 0;
-    struct sockaddr_in any = {.sin_family = AF_INET, .sin_port = htons(YWP_CONTROL_PORT)};
+    /* Bind the multicast group (PROTOCOL.md / ADR 0023): reject unicast. */
+    struct sockaddr_in group = {.sin_family = AF_INET, .sin_port = htons(YWP_CONTROL_PORT),
+                                .sin_addr.s_addr = inet_addr(YWP_CONTROL_GROUP)};
     struct ip_mreq join = {.imr_multiaddr.s_addr = inet_addr(YWP_CONTROL_GROUP),
                            .imr_interface.s_addr = htonl(ipv4)};
     struct in_addr interface = {.s_addr = htonl(ipv4)};
     if (fd < 0 || setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) ||
-        bind(fd, (struct sockaddr *)&any, sizeof(any)) ||
+        bind(fd, (struct sockaddr *)&group, sizeof(group)) ||
         setsockopt(fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &join, sizeof(join)) ||
         setsockopt(fd, IPPROTO_IP, IP_MULTICAST_IF, &interface, sizeof(interface)) ||
         setsockopt(fd, IPPROTO_IP, IP_MULTICAST_TTL, &ttl, sizeof(ttl)) ||
         setsockopt(fd, IPPROTO_IP, IP_MULTICAST_LOOP, &loop, sizeof(loop)) ||
         fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK) < 0) {
+        ESP_LOGW(TAG, "control socket setup failed: errno %d", errno);
         if (fd >= 0) close(fd);
         return -1;
     }
@@ -262,6 +268,9 @@ static void start_node(void)
     ywp_err_t err = YWP_E_OK;
     node = ywp_node_create(&cfg, &crypto, &saved, now(), wall(), &err);
     if (!node) {
+        xSemaphoreTake(snapshot_lock, portMAX_DELAY);
+        snapshot.waiting = false;
+        xSemaphoreGive(snapshot_lock);
         char why[96];
         snprintf(why, sizeof(why), "YWP/1 node not created: %s", ywp_err_name(err));
         fail(why);
@@ -292,6 +301,10 @@ esp_err_t box_ywp_open(const box_config_t *c, const box_bridge_t *r, uint32_t ip
     }
     owned = true;
     waiting = !box_clock_synced();
+    xSemaphoreTake(snapshot_lock, portMAX_DELAY);
+    snapshot.has_node = false;
+    snapshot.waiting = waiting;
+    xSemaphoreGive(snapshot_lock);
     if (waiting) fail("waiting for the wall clock (SNTP, or PUT /v1/usb/clock)");
     else start_node();
     return ESP_OK;
@@ -391,14 +404,18 @@ void box_ywp_poll_done(uint32_t tag, ywp_state_t state, const char *detail)
 
 void box_ywp_address(uint32_t ipv4)
 {
-    if (ipv4 == own_ipv4) return;
+    bool changed = ipv4 != own_ipv4;
     own_ipv4 = ipv4;
     if (!node) return; /* the node starts at this address */
-    ESP_LOGW(TAG, "address changed; rejoining the control group");
+    /* Always rejoin on DHCP renewal (even with the same address) so an
+     * IGMP-snooping switch restores membership after an Ethernet link bounce. */
+    ESP_LOGW(TAG, "%s; rejoining the control group",
+             changed ? "address changed" : "address renewed");
     if (sock >= 0) close(sock);
     sock = open_socket(ipv4);
     if (sock < 0) fail("YWP/1 control socket failed after an address change; retrying");
-    if (producer) {
+    else set_error("");
+    if (producer && changed) {
         char media[96];
         size_t len = box_media_producer(media, sizeof(media), ipv4);
         if (ywp_node_set_media(node, media, len, now()) != YWP_E_OK) fail("producer media refused");
@@ -415,8 +432,9 @@ void box_ywp_status(cJSON *ywp)
     xSemaphoreTake(snapshot_lock, portMAX_DELAY);
     const ywp_status_t *s = &snapshot.status;
     cJSON_AddStringToObject(ywp, "error", snapshot.error);
-    if (!node) cJSON_AddStringToObject(ywp, "state", waiting ? "waiting-for-clock" : "stopped");
-    if (node) {
+    if (!snapshot.has_node) {
+        cJSON_AddStringToObject(ywp, "state", snapshot.waiting ? "waiting-for-clock" : "stopped");
+    } else {
         cJSON_AddStringToObject(ywp, "state", ywp_state_name(s->state));
         cJSON_AddBoolToObject(ywp, "started", s->started);
         cJSON_AddBoolToObject(ywp, "paired", s->pairing.paired);

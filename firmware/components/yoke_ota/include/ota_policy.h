@@ -11,6 +11,10 @@ bool yoke_ota_length_allowed(size_t length, size_t slot_size);
 bool yoke_ota_parse_length(const char *text, size_t limit, size_t *out);
 const char *yoke_ota_boot_state(bool pending_verify, bool journal_pending,
                               bool running_is_target);
+/* Whether a candidate Unix wall-clock epoch may be persisted to otatrust:
+ * within the accepted clock bounds [2024-01-01, 2200-01-01] and never behind
+ * the current trust floor. */
+bool yoke_ota_clock_epoch_valid(int64_t floor_epoch, int64_t candidate);
 
 /* Status journal: evidence for operators, never trust. It is stored as an
  * explicit little-endian byte layout under the NVS key "journal2" with a

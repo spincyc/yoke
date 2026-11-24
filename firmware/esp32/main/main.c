@@ -20,8 +20,10 @@ void app_main(void)
     bool ir_ok = yoke_ir_init() == ESP_OK;
     if (!ir_ok) ESP_LOGE(TAG, "IR outputs or self-test failed");
     yoke_node_serve(IP_NOTE, ir_guard, yoke_ir_status_json, NULL);
-    if (yoke_ir_register_admin(yoke_ota_server()) != ESP_OK)
+    if (yoke_ir_register_admin(yoke_ota_server()) != ESP_OK) {
         ESP_LOGE(TAG, "IR admin endpoint unavailable");
+        ir_ok = false;
+    }
     if (ir_ok && yoke_ir_start() != ESP_OK) {
         ESP_LOGE(TAG, "IR listener task did not start");
         ir_ok = false;

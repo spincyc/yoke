@@ -16,6 +16,8 @@
 #include "yusb_fence.h"
 #include "yusb_proxy.h"
 
+#define CONNECT_TIMEOUT_MS 5000u
+
 static const char *TAG = "yoke-computer";
 
 static struct {
@@ -25,6 +27,7 @@ static struct {
     int fd;                       /* -1 */
     uint32_t socket;              /* fd's generation: readiness posts carry it */
     bool connecting, presented, stopping;
+    uint64_t connect_deadline;    /* ms, UINT64_MAX: none */
     char rejected[96];            /* this controller cannot present the device */
     /* A route that waits for the running session to stop. */
     bool route_waiting, route_detach;
@@ -33,7 +36,7 @@ static struct {
     char route_error[64];
     esp_timer_handle_t timer;
     uint64_t armed;               /* the timer's deadline (ms), UINT64_MAX: none */
-} c = {.fd = -1, .armed = UINT64_MAX};
+} c = {.fd = -1, .connect_deadline = UINT64_MAX, .armed = UINT64_MAX};
 
 static uint64_t now_ms(void) { return (uint64_t)(esp_timer_get_time() / 1000); }
 
@@ -78,8 +81,7 @@ static void ready(void *arg);
 static void close_socket(void)
 {
     if (c.fd < 0) return;
-    box_net_unwatch(c.fd);
-    close(c.fd);
+    box_net_close(c.fd);
     c.fd = -1;
 }
 
@@ -132,6 +134,7 @@ static void connect_target(void)
         return;
     }
     c.connecting = true;
+    c.connect_deadline = now_ms() + CONNECT_TIMEOUT_MS;
     box_net_watch(c.fd, true, true, yoke_usbd_post, ready, (void *)(uintptr_t)c.socket);
 }
 
@@ -140,6 +143,7 @@ static void connected(void)
     int error = 0;
     socklen_t size = sizeof(error);
     c.connecting = false;
+    c.connect_deadline = UINT64_MAX;
     if (getsockopt(c.fd, SOL_SOCKET, SO_ERROR, &error, &size) || error) {
         char why[64];
         snprintf(why, sizeof(why), "connect %.15s:%u: errno %d", c.fence.target.host,
@@ -153,6 +157,12 @@ static void connected(void)
      * they do not fit, the core refuses the configuration ("UDC could not
      * configure") and the session ends cleanly. */
     size_t need = yusb_proxy_footprint(&c.policy, &buffers).create;
+    if (!box_heap_fits(need) && c.policy.yx_levers) {
+        ESP_LOGW(TAG, "YX session needs %u bytes; falling back to plain USB/IP", (unsigned)need);
+        c.policy.yx_levers = 0;
+        c.policy.yx_cache_blocks = 0;
+        need = yusb_proxy_footprint(&c.policy, &buffers).create;
+    }
     c.proxy = box_heap_fits(need) ? yusb_proxy_create(&c.policy, box_gadget_ops(),
                                                       c.fence.target.busid, now_ms())
                                   : NULL;
@@ -160,9 +170,9 @@ static void connected(void)
         char why[96];
         snprintf(why, sizeof(why), "RAM: a session needs %u bytes (+%u reserve), %u internal free",
                  (unsigned)need, BOX_HEAP_RESERVE,
-                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
         close_socket();
-        yusb_fence_build_failed(&c.fence, YUSB_BUILD_REJECTED, why, now_ms());
+        yusb_fence_build_failed(&c.fence, YUSB_BUILD_RETRY, why, now_ms());
         return;
     }
     yusb_fence_built(&c.fence);
@@ -211,6 +221,11 @@ static void service(void)
                  yusb_proxy_teardown_overdue(c.proxy, now_ms())) {
             c.stopping = true; /* the gadget stays bound: the fence holds */
             yusb_fence_hold(&c.fence, "gadget teardown unconfirmed");
+            if (c.route_waiting) {
+                snprintf(c.route_error, sizeof(c.route_error),
+                         "previous gadget teardown unconfirmed");
+                finish_route();
+            }
         }
         if (c.fd >= 0) pump();
         if (yusb_proxy_phase(c.proxy) == phase) break;
@@ -223,9 +238,20 @@ static void service(void)
             yusb_fence_observe(&c.fence, yusb_wstate_from_name(status.state), status.rejected,
                                status.error);
         deadline = yusb_proxy_poll(c.proxy, now_ms());
-    } else if (!c.connecting && c.fence.has_target) {
+    } else if (c.connecting) {
+        uint64_t t = now_ms();
+        if (t >= c.connect_deadline) {
+            c.connecting = false;
+            c.connect_deadline = UINT64_MAX;
+            close_socket();
+            yusb_fence_build_failed(&c.fence, YUSB_BUILD_RETRY, "connect timed out", t);
+            deadline = c.fence.next_attempt_ms;
+        } else {
+            deadline = c.connect_deadline;
+        }
+    } else if (c.fence.has_target) {
         if (yusb_fence_due(&c.fence, false, now_ms())) connect_target();
-        if (!c.connecting) deadline = c.fence.next_attempt_ms;
+        deadline = c.connecting ? c.connect_deadline : c.fence.next_attempt_ms;
     }
     arm_timer(deadline);
 }
@@ -240,6 +266,7 @@ static void ready(void *arg)
 static void tick(void *arg)
 {
     (void)arg;
+    c.armed = UINT64_MAX;
     service();
 }
 
@@ -310,6 +337,7 @@ static void route_work(void *arg)
     if (c.connecting) { /* an attempt at the old target: abandon it */
         close_socket();
         c.connecting = false;
+        c.connect_deadline = UINT64_MAX;
     }
     if (c.proxy && !c.stopping) {
         yusb_proxy_stop(c.proxy, now_ms()); /* finish_route runs when it has stopped */

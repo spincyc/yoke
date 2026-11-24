@@ -131,7 +131,7 @@ static void fatal(session_t *s, const char *fmt, ...)
 /* Send what the core queued; the lock is released around sendmsg. */
 static void flush_locked(session_t *s)
 {
-    while (s->proxy && !s->tx_closed && !s->in_send) {
+    while (s->proxy && !s->tx_closed && !s->stopping && !s->in_send) {
         yusb_iov_t seg[TX_SEGMENTS];
         struct iovec iov[TX_SEGMENTS];
         size_t n = yusb_proxy_tx_iov(s->proxy, seg, TX_SEGMENTS);
@@ -155,6 +155,7 @@ static void flush_locked(session_t *s)
             continue;
         } else {
             if (!s->stopping) yusb_proxy_transport_lost(s->proxy, strerror(err), wk_now_ms());
+            else s->tx_closed = true;
             return;
         }
     }
@@ -165,7 +166,8 @@ static void flush_locked(session_t *s)
 static bool tx_pending(session_t *s)
 {
     yusb_iov_t seg;
-    return s->proxy && !s->tx_closed && !s->in_send && yusb_proxy_tx_iov(s->proxy, &seg, 1);
+    return s->proxy && !s->tx_closed && !s->stopping && !s->in_send &&
+           yusb_proxy_tx_iov(s->proxy, &seg, 1);
 }
 
 /* Leaving the core: send what it queued, run due timers (and send what they
@@ -512,7 +514,7 @@ static void start_gadget(session_t *s, unsigned speed)
     int fd = sys->open(s->cfg.raw_gadget);
     if (fd < 0) {
         pthread_mutex_lock(&s->lock);
-        fatal(s, "GadgetError: open %s: %s", s->cfg.raw_gadget, strerror(-fd));
+        if (!s->stopping) fatal(s, "GadgetError: open %s: %s", s->cfg.raw_gadget, strerror(-fd));
         pthread_mutex_unlock(&s->lock);
         return;
     }
@@ -527,11 +529,13 @@ static void start_gadget(session_t *s, unsigned speed)
     if (rc < 0) {
         sys->close(fd);
         pthread_mutex_lock(&s->lock);
-        if (!strcmp(what, "RUN"))
-            fatal(s, "GadgetError: raw-gadget RUN on %s as %s (wrong gadget name, or another "
-                     "gadget bound?): %s", s->cfg.udc, s->gadget_name, strerror((int)-rc));
-        else
-            fatal(s, "GadgetError: raw-gadget INIT: %s", strerror((int)-rc));
+        if (!s->stopping) {
+            if (!strcmp(what, "RUN"))
+                fatal(s, "GadgetError: raw-gadget RUN on %s as %s (wrong gadget name, or another "
+                         "gadget bound?): %s", s->cfg.udc, s->gadget_name, strerror((int)-rc));
+            else
+                fatal(s, "GadgetError: raw-gadget INIT: %s", strerror((int)-rc));
+        }
         pthread_mutex_unlock(&s->lock);
         return;
     }
@@ -542,6 +546,11 @@ static void start_gadget(session_t *s, unsigned speed)
     if (rc >= 0) count = rg_unpack_eps(raw, (size_t)rc, eps, RG_EPS_MAX);
     else logf_(s, LOG_INFO, "EPS_INFO unavailable: %s", strerror((int)-rc));
     pthread_mutex_lock(&s->lock);
+    if (s->stopping) {
+        pthread_mutex_unlock(&s->lock);
+        sys->close(fd);
+        return;
+    }
     s->rg = fd;
     s->gadget = true;
     yusb_proxy_gadget_started(s->proxy, count ? eps : NULL, count, wk_now_ms());
@@ -559,6 +568,10 @@ static void *io_main(void *arg)
     thread_enter("yw-io");
     int fd = connect_target(s, err, sizeof(err));
     pthread_mutex_lock(&s->lock);
+    if (s->stopping) {
+        if (fd >= 0) close(fd);
+        goto done;
+    }
     if (fd < 0) {
         fatal(s, "%s", err);
         goto done;
@@ -686,14 +699,19 @@ void session_view(session_t *s, session_view_t *v)
 
 static bool join_until(pthread_t thread, uint64_t deadline, pthread_t *kick)
 {
+    uint64_t next_kick = 0;
     for (;;) {
-        if (kick) pthread_kill(*kick, SIGUSR1);
-        struct timespec ts;
-        clock_gettime(CLOCK_REALTIME, &ts);
-        ts.tv_nsec += (long)KILL_PERIOD_MS * 1000000L;
-        if (ts.tv_nsec >= 1000000000L) { ts.tv_sec++; ts.tv_nsec -= 1000000000L; }
-        if (!pthread_timedjoin_np(thread, NULL, &ts)) return true;
-        if (wk_now_ms() >= deadline) return false;
+        if (!pthread_tryjoin_np(thread, NULL)) return true;
+        uint64_t now = wk_now_ms();
+        if (now >= deadline) return false;
+        if (kick && now >= next_kick) {
+            pthread_kill(*kick, SIGUSR1);
+            next_kick = now + KILL_PERIOD_MS;
+        }
+        uint64_t rem = deadline - now;
+        uint64_t step = rem < 5u ? rem : 5u;
+        struct timespec ts = {0, (long)(step * 1000000u)};
+        clock_nanosleep(CLOCK_MONOTONIC, 0, &ts, NULL);
     }
 }
 
@@ -726,6 +744,12 @@ bool session_stop(session_t *s, char *why, size_t cap)
         ts.tv_nsec += 10000000L;
         if (ts.tv_nsec >= 1000000000L) { ts.tv_sec++; ts.tv_nsec -= 1000000000L; }
         pthread_cond_timedwait(&s->wake, &s->lock, &ts);
+    }
+    if (s->in_send) {
+        if (s->sock >= 0) shutdown(s->sock, SHUT_RDWR);
+        pthread_mutex_unlock(&s->lock);
+        snprintf(why, cap, "teardown unconfirmed: transmit did not stop");
+        return false;
     }
     /* 2. The core cancels gadget operations; the service thread repeats
      * SIGUSR1 at blocked ones until they return. */

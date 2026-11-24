@@ -7,12 +7,29 @@
 #include <sys/uio.h>
 
 #define SEGMENTS 16
+#define KEEPALIVE_IDLE_S 5
+#define KEEPALIVE_INTVL_S 2
+#define KEEPALIVE_CNT 3
 
 int box_pump_prepare(int fd)
 {
     int on = 1, flags = fcntl(fd, F_GETFL, 0);
     if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) return -1;
-    return setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
+    if (setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on))) return -1;
+    if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof(on))) return -1;
+#ifdef TCP_KEEPIDLE
+    int idle = KEEPALIVE_IDLE_S;
+    if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof(idle))) return -1;
+#endif
+#ifdef TCP_KEEPINTVL
+    int intvl = KEEPALIVE_INTVL_S;
+    if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &intvl, sizeof(intvl))) return -1;
+#endif
+#ifdef TCP_KEEPCNT
+    int cnt = KEEPALIVE_CNT;
+    if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &cnt, sizeof(cnt))) return -1;
+#endif
+    return 0;
 }
 
 static bool blocked(void) { return errno == EAGAIN || errno == EWOULDBLOCK; }

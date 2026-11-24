@@ -78,9 +78,12 @@ static bool bot_pop(const yusb_proxy_t *p, bot_t *b, uint32_t *size)
     if (!b->count) return false;
     bot_cmd_t *c = &b->cmds[b->head];
     if (c->left) {
-        uint32_t chunk = c->left < p->policy.max_transfer ? c->left : p->policy.max_transfer;
+        if (!c->packet) return false;
+        uint32_t max_chunk = p->policy.max_transfer - p->policy.max_transfer % c->packet;
+        if (!max_chunk) return false;
+        uint32_t chunk = c->left < max_chunk ? c->left : max_chunk;
         c->left -= chunk;
-        *size = (chunk + c->packet - 1) / c->packet * c->packet;
+        *size = (chunk + c->packet - 1u) / c->packet * c->packet;
         return true;
     }
     *size = c->csw;
@@ -103,7 +106,7 @@ size_t pump_footprint(const yusb_policy_t *pol, const ybuf_layout_t *l, bool in)
         if (in) {
             depth = pol->in_depth_bulk > pol->in_depth_interrupt ? pol->in_depth_bulk : pol->in_depth_interrupt;
             slots = bot && pol->bot_in_slots < depth ? pol->bot_in_slots : depth;
-            slot = bot ? pol->max_transfer : packet;
+            slot = bot ? (pol->max_transfer > packet ? pol->max_transfer : packet) : packet;
             stride = ybuf_round(l, off + slot);
         } else {
             slots = pol->out_window > pol->bot_out_window ? pol->out_window : pol->bot_out_window;
@@ -141,7 +144,7 @@ int pump_create(yusb_proxy_t *p, const yusb_alt_t *alt, const yusb_endpoint_t *e
     if (u->in) {
         u->depth = u->type == YUSB_XFER_INT ? pol->in_depth_interrupt : pol->in_depth_bulk;
         u->nslots = u->bot && pol->bot_in_slots < u->depth ? pol->bot_in_slots : u->depth;
-        u->slot_size = u->bot ? pol->max_transfer : u->size;
+        u->slot_size = u->bot ? (pol->max_transfer > u->size ? pol->max_transfer : u->size) : u->size;
         if (pol->coalesce_in && u->depth > 1) {
             u->scratch_block = ybuf_alloc(&p->layout, ybuf_offset(&p->layout) + pol->max_transfer);
             if (u->scratch_block) u->scratch = ybuf_at(&p->layout, u->scratch_block, 0);
@@ -293,6 +296,12 @@ static void in_submit(yusb_proxy_t *p, pump_t *u)
     while (u->count < limit && u->count < u->nslots) {
         uint32_t size = u->size;
         if (u->bot && !bot_pop(p, u->bot, &size)) break;
+        if (size > u->slot_size) {
+            px_fault(p, "endpoint 0x%02x: IN size %u exceeds slot buffer %u",
+                     u->address, (unsigned)size, u->slot_size);
+            dead(p, u);
+            break;
+        }
         unsigned s = ring(u, u->count);
         cl_req_t q = {.ep = u->address & 0x0fu, .dir = YUSB_USBIP_DIR_IN, .length = size,
                       .buf = slot_buf(p, u, s), .interval = u->interval,
@@ -594,6 +603,12 @@ void pump_clear_done(yusb_proxy_t *p, pump_t *u, const urb_result_t *r)
     case W_HCLEAR:
         u->remote_halted = false;
         u->wait = u->hc_resume == W_PARTIAL ? W_PARTIAL : W_NONE;
+        if (!u->in) {
+            u->slots[u->read_slot].state = S_FREE;
+            u->read_slot = u->head;
+            u->read_size = u->size;
+            u->slots[u->read_slot].state = S_READING;
+        }
         retry_io(p, u);
         break;
     case W_PRECLEAR:

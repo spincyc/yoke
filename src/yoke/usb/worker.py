@@ -266,28 +266,43 @@ class Worker:
     def _build(self, target: Target, ticket: BuildTicket) -> None:
         proxy: Proxy | None = None
         failure: tuple[str, str, bool] | None = None
+        teardown_error: str | None = None
+        stale = True
         try:
-            proxy = self._factory(target, ticket)
-        except UnsupportedError as exc:
-            failure = ("rejected", f"unsupported device: {exc}", True)
-        except ImportRejectedError as exc:
-            failure = ("connecting", str(exc), False)
-        except RETRYABLE as exc:
-            failure = ("connecting", f"{type(exc).__name__}: {exc}", False)
-        with self._lock:
-            stale = ticket.aborted or self._generation != ticket.generation
-        if stale and proxy is not None:
-            with contextlib.suppress(TeardownError):
-                proxy.stop()  # the route changed while it was being built
-            proxy = None
-        with self._lock:
-            self._building = None
-            if not stale and proxy is not None:
-                self._proxy = proxy
-                self._backoff = self._retry_min
-                self._state, self._detail = "presenting", ""
-            self._idle.notify_all()
-        if not stale and failure is not None:
+            try:
+                proxy = self._factory(target, ticket)
+            except UnsupportedError as exc:
+                failure = ("rejected", f"unsupported device: {exc}", True)
+            except ImportRejectedError as exc:
+                failure = ("connecting", str(exc), False)
+            except RETRYABLE as exc:
+                failure = ("connecting", f"{type(exc).__name__}: {exc}", False)
+            except Exception as exc:
+                LOG.exception("unexpected error building session")
+                failure = ("connecting", f"{type(exc).__name__}: {exc}", False)
+            with self._lock:
+                stale = ticket.aborted or self._generation != ticket.generation
+            if stale and proxy is not None:
+                try:
+                    proxy.stop()  # the route changed while it was being built
+                except TeardownError as exc:
+                    teardown_error = str(exc)
+                else:
+                    proxy = None
+        finally:
+            with self._lock:
+                self._building = None
+                if teardown_error is not None and proxy is not None:
+                    # Retain the unconfirmed proxy so apply() sees it and
+                    # refuses to adopt a replacement route (ADR 0022).
+                    self._proxy = proxy
+                    self._state, self._detail = "error", teardown_error[:500]
+                elif not stale and proxy is not None:
+                    self._proxy = proxy
+                    self._backoff = self._retry_min
+                    self._state, self._detail = "presenting", ""
+                self._idle.notify_all()
+        if teardown_error is None and not stale and failure is not None:
             self._schedule(failure[0], failure[1], slow=failure[2])
 
     def _schedule(self, state: str, detail: str, *, slow: bool = False) -> None:

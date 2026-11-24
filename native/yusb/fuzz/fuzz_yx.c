@@ -221,7 +221,8 @@ static void negotiate(const uint8_t *in, size_t n, uint8_t limit_levers, uint16_
         check(yusb_yx_offer_get(busid, &got) && got.version == YUSB_YX_VERSION);
         check(got.levers == levers && got.cache_blocks == slots);
     } else {
-        check(!memchr(busid, 0, 24));
+        check(!memchr(busid, 0, 24) ||
+              ((mine.levers & YUSB_YX_CACHE) && mine.cache_blocks > YUSB_YX_MAX_CACHE_BLOCKS));
     }
 }
 

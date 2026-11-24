@@ -601,3 +601,109 @@ def test_missing_native_binary_exits_with_ex_config(
     assert code == EXIT_CONFIG == 78
     err = capsys.readouterr().err
     assert err.count("\n") == 1 and str(missing) in err and "Traceback" not in err
+
+
+def test_stale_build_teardown_failure_holds_route_fence() -> None:
+    """ADR 0022: an unconfirmed teardown of a stale build blocks route adoption."""
+    from yoke.usb.proxy import TeardownError
+
+    started = threading.Event()
+    release = threading.Event()
+    stops = 0
+
+    class StuckProxy:
+        def stop(self) -> None:
+            nonlocal stops
+            stops += 1
+            raise TeardownError("endpoint stuck in UDC")
+
+    def factory(target: Target, ticket: BuildTicket) -> Any:
+        started.set()
+        release.wait(2.0)
+        return StuckProxy()
+
+    worker = Worker(factory, retry_min=10)
+    worker.apply(Route(1, Target("10.0.0.2", 3240, "1-1")))
+    builder = threading.Thread(target=worker.step)
+    builder.start()
+    assert started.wait(2.0)
+
+    def change_route() -> WorkerStatus:
+        return worker.apply(Route(2, Target("10.0.0.3", 3240, "1-2")))
+
+    result: list[WorkerStatus] = []
+    applier = threading.Thread(target=lambda: result.append(change_route()))
+    applier.start()
+    time.sleep(0.05)
+    release.set()
+    builder.join(2.0)
+    applier.join(2.0)
+    assert len(result) == 1
+    assert result[0].generation == 1  # refused to adopt generation 2
+    assert result[0].state == "error"
+    assert "endpoint stuck" in result[0].detail
+    assert stops >= 2  # both stale-build cleanup and apply() verified teardown
+
+
+def test_unexpected_factory_error_releases_build_lock_and_schedules_retry() -> None:
+    def boom(target: Target, ticket: BuildTicket) -> Any:
+        raise IndexError("malformed string table")
+
+    worker = Worker(boom, retry_min=0.5)
+    worker.apply(Route(1, Target("10.0.0.2", 3240, "1-1")))
+    worker.step()
+    status = worker.status()
+    assert status.state == "connecting"
+    assert "IndexError" in status.detail
+    # Route changes must not block waiting for a leaked _building ticket.
+    switched = worker.apply(Route(2, None))
+    assert switched.generation == 2 and switched.state == "idle"
+
+
+def test_control_out_timeout_after_local_status_stage_does_not_stall_ep0() -> None:
+    device = CompositeDevice()
+    with rig_for(device, policy=ProxyPolicy(control_timeout=0.05)) as rig:
+        assert rig.proxy is not None
+        stalls: list[bool] = []
+        original_stall = rig.proxy.backend.ep0_stall
+
+        def record_stall() -> None:
+            stalls.append(True)
+            original_stall()
+
+        rig.proxy.backend.ep0_stall = record_stall  # type: ignore[method-assign]
+        rig.usbipd.service_delay = 0.25
+        # Control OUT with 4 bytes of data: UDC completes status stage on ep0_read.
+        rig.host.control(Setup(0x40, 0x02, 0, 0, 4), b"abcd")
+        wait_for(
+            lambda: rig.proxy is not None and rig.proxy.counters.late_out_stalls >= 1
+        )
+        rig.usbipd.service_delay = 0.0
+        assert not stalls
+        # Next control transfer succeeds cleanly without a spurious STALL.
+        assert rig.host.control(ch9.get_descriptor(1, 0, 18))[:2] == b"\x12\x01"
+
+
+def test_enable_interface_rolls_back_partial_handles_on_gadget_error() -> None:
+    device = Loopback()
+    with rig_for(device) as rig:
+        assert rig.proxy is not None
+        rig.proxy._quiesce_all()
+        assert not rig.proxy._handles
+        original_enable = rig.proxy.backend.ep_enable
+        calls = 0
+
+        def fail_second(raw: bytes) -> int:
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise GadgetError("simulated UDC exhaustion", errno.ENOSPC)
+            return original_enable(raw)
+
+        rig.proxy.backend.ep_enable = fail_second  # type: ignore[method-assign]
+        config = rig.proxy.presentation.configuration(1)
+        assert config is not None
+        with pytest.raises(GadgetError, match="UDC exhaustion"):
+            rig.proxy._enable_interface(config, 0, 0)
+        assert not rig.proxy._handles
+        assert all(not ep.enabled for ep in rig.kernel._eps)

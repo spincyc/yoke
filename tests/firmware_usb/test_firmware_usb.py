@@ -74,9 +74,10 @@ def test_descriptor_rules(usb_programs: dict[str, Path], mode: str) -> None:
     [
         "config",  # YWP/1 identity, PSK >= 32 bytes, explicit open mode, name rule
         "auth-limit",  # per-source throttle of authentication failures
-        "clock-rules",  # admin step cap; sync kept across software resets only
+        "clock-rules",  # admin step cap; sync kept across software resets; SNTP gate
+        "heap-budget",  # 8-bit internal RAM + 64 KiB block cap (P4 274 KB trap)
         "media",  # producer media out, consumer media in (IPv4 only)
-        "pump",  # socket <-> core transport, close and refusal
+        "pump",  # socket <-> core transport, keepalive, close and refusal
         "pump-backpressure",  # a peer that stops reading; a full core is not watched
     ],
 )
@@ -96,6 +97,7 @@ def test_box_config_media_and_transport(
         "report",
         "no-ram",
         "parked-reads",  # 16 parked reads; control and unlinks still served
+        "local-burst",  # coalesced local completions never overflow USB host post queue
     ],
 )
 def test_bridge_data_path(usb_programs: dict[str, Path], mode: str) -> None:
@@ -111,7 +113,7 @@ def test_bridge_data_path(usb_programs: dict[str, Path], mode: str) -> None:
     assert all(value > 0 for value in json.loads(result.stdout).values())
 
 
-@pytest.mark.parametrize("mode", ["keyboard", "quiet-device"])
+@pytest.mark.parametrize("mode", ["keyboard", "quiet-device", "bad-mps"])
 def test_host_selftest(usb_programs: dict[str, Path], mode: str) -> None:
     run(usb_programs["host-selftest-host"], mode)
 
@@ -122,6 +124,7 @@ def test_host_selftest(usb_programs: dict[str, Path], mode: str) -> None:
         "release-after-completion",  # completions after the library's own bookkeeping
         "clear-halt",  # CLEAR_FEATURE(HALT) leaves fresh pipes (DATA0)
         "unplug-replug",  # freed after the dead URB; a quick replug attaches
+        "burst-and-guards",  # POSTS=32 burst, zero-length NULL guards, bad mps
     ],
 )
 def test_usb_host_backend(usb_programs: dict[str, Path], mode: str) -> None:
@@ -137,11 +140,28 @@ def test_usb_host_backend(usb_programs: dict[str, Path], mode: str) -> None:
         "socket-reopen",  # a failed control socket is retried; the node runs
         "receive-bound",  # a forged trickle is parsed; a flood: batches, then throttled
         "watch-wakes",  # the network task wakes only when a watch changes
+        "deferred-close",  # cross-core close runs on yoke-net after select()
+        "address-rejoin",  # multicast bind + rejoin on link bounce / DHCP renewal
+        "listener-retry",  # failed TCP listener closes fd, reports error, retries
     ],
 )
 def test_bridge_shell(usb_programs: dict[str, Path], mode: str) -> None:
     """box_ywp.c, box_net.c and box_device.c over host stand-ins (idf/)."""
     run(usb_programs["host-shell"], mode)
+
+
+@pytest.mark.parametrize(
+    "mode",
+    [
+        "connect-timeout",  # 5 s connect timeout, c.armed reset on tick, deferred close
+        "yx-fallback",  # P4 drops YX to plain USB/IP when YX exceeds internal RAM
+        "ram-retry",  # transient RAM shortage retries quickly (YUSB_BUILD_RETRY)
+        "teardown-overdue",  # overdue teardown unblocks waiting route with YWP_ERROR
+    ],
+)
+def test_computer_bridge(usb_programs: dict[str, Path], mode: str) -> None:
+    """box_computer.c (P4 policy) over host stand-ins (idf/)."""
+    run(usb_programs["host-computer"], mode)
 
 
 def partitions(path: Path) -> dict[str, tuple[int, int]]:

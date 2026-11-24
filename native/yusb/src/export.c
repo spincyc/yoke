@@ -470,12 +470,14 @@ static int on_busid(yusb_export_t *x)
          * survives (READAHEAD alone changes no bytes), the path is too long
          * for the trailer, or the codec cannot be set up, the trailer stays
          * zero: no accept means plain USB/IP throughout (ADR 0028 section 2). */
-        if (yusb_yx_framed(&agreed) && !yusb_yx_accept_put(path, &agreed) && yx_setup(x, &agreed)) {
-            x->yx = true;
-            x->yxp = agreed;
-        } else {
-            yx_teardown(x);
-            memset(path + YUSB_PATH_SIZE - 8u, 0, 8);
+        if (yusb_yx_framed(&agreed) && !yusb_yx_accept_put(path, &agreed)) {
+            if (yx_setup(x, &agreed)) {
+                x->yx = true;
+                x->yxp = agreed;
+            } else {
+                yx_teardown(x);
+                memset(path + YUSB_PATH_SIZE - 8u, 0, 8);
+            }
         }
     }
     x->devid = yusb_devid(&x->devs[dev].info);
@@ -697,6 +699,8 @@ static int on_submit(yusb_export_t *x)
     if (type < 0) return violation(x, "CMD_SUBMIT to an endpoint outside the configuration");
     yusb_setup_t setup = yusb_setup_unpack(h->setup);
     if (type == YUSB_XFER_CONTROL && setup.length != h->length) return violation(x, "control wLength mismatch");
+    if (type == YUSB_XFER_CONTROL && setup.length && yusb_setup_is_in(&setup) != dir_in)
+        return violation(x, "control direction mismatch");
     if (type == YUSB_XFER_INT && h->interval <= 0) return violation(x, "interrupt URB interval");
     if (x->hdr_yx && (!x->yx || dir_in || type != YUSB_XFER_BULK || !h->length))
         return violation(x, "YX payload for an ineligible URB");
@@ -718,7 +722,7 @@ static int on_submit(yusb_export_t *x)
          * sending the reply can be waited for). */
         if (x->nheld == x->max_held && !(note = free_note(x))) return RX_WAIT;
     }
-    if (type == YUSB_XFER_CONTROL && (!yusb_setup_is_in(&setup) || !setup.length) == dir_in)
+    if (type == YUSB_XFER_CONTROL && !setup.length && dir_in)
         xlog(x, "BOGUS control dir");
     rx_record(&x->rx, YUSB_USBIP_HEADER_SIZE);
     if (note) {

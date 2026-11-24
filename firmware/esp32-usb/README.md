@@ -179,7 +179,9 @@ interrupt IN endpoint (a flash drive) is enumerated and described only.
 ## Admin API
 
 The same mutual-TLS API as the IR endpoint (`GET /v1/status`,
-`PUT /v1/firmware` with `yoke-usb-box.bin`, `DELETE /v1/coredump`; see
+`PUT /v1/firmware` with `yoke-usb-box.bin` — pass `-H 'Expect:'` to `curl`
+as in the [IR README](../esp32/README.md) so it does not stall waiting for
+`100 Continue` — and `DELETE /v1/coredump`; see
 [ESP32-UPDATES.md](../../doc/design/ESP32-UPDATES.md)). Status adds a `usb`
 object: the running and configured role, the clock, the internal heap
 (`heap_internal_free`, `heap_internal_min_free`; `heap_free` also counts
@@ -298,7 +300,8 @@ TinyUSB backend's descriptor rules and state machine, both self-tests, the
 configuration, media and transport rules, and both boxes' bridge glue with
 the native cores over TCP loopback, under AddressSanitizer and
 UndefinedBehaviorSanitizer), then builds the IR endpoint and this project
-for ESP32-S3 and ESP32-P4. It checks that the pinned lock files did not
+for ESP32-S3 (both the default computer-role image and the
+`sdkconfig.role-device` device-role image) and ESP32-P4. It checks that the pinned lock files did not
 change, that TinyUSB is linked to the mirrored descriptor callbacks, and
 that every image fits its OTA slot. No device is contacted or flashed.
 `YOKE_NATIVE_YUSB` and `YOKE_NATIVE_YWP` point the tests, the verifier and

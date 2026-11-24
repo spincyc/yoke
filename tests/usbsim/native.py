@@ -30,7 +30,7 @@ from tests.usbsim.streams import TcpRelay
 from tests.usbsim.udc import FakeRawGadgetKernel
 from tests.usbsim.usbipd import FakeUsbipd
 from yoke.usb.ch9 import Speed
-from yoke.usb.control import ControlClient, Route, Target, WorkerStatus
+from yoke.usb.control import ControlClient, ControlError, Route, Target, WorkerStatus
 from yoke.usb.gadget import UdcEndpoint
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -205,7 +205,22 @@ class NativeRig:
             self.process = subprocess.Popen(
                 command, env=env, stdout=sink, stderr=subprocess.STDOUT, text=True
             )
-        wait_for(lambda: (self.tmp / "control.sock").exists(), 10)
+
+        def ready() -> bool:
+            assert self.process is not None
+            if self.process.poll() is not None:
+                raise AssertionError(
+                    f"native worker exited {self.process.returncode}: {self.output()}"
+                )
+            if not (self.tmp / "control.sock").exists():
+                return False
+            try:
+                self.control.status()
+                return True
+            except ControlError:
+                return False
+
+        wait_for(ready, 10, lambda: f"control socket never ready: {self.output()}")
 
     def listen(self) -> tuple[str, int]:
         if self.address is None:

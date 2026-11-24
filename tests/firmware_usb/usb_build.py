@@ -117,6 +117,22 @@ PROGRAMS: dict[str, tuple[str, ...]] = {
         "native-usb:src/*.c",
         "lz4:lz4.c",
     ),
+    "host-computer": (
+        "host_computer.c",
+        "here:idf/idf_stubs.c",
+        "yoke_box/box_computer.c",
+        "yoke_box/box_gadget.c",
+        "yoke_box/box_media.c",
+        "yoke_box/box_pump.c",
+        "native-usb:src/*.c",
+        "native-ywp:src/ywp_json.c",
+        "native-ywp:src/ywp_num.c",
+        "native-ywp:src/ywp_types.c",
+        "lz4:lz4.c",
+    ),
+}
+EXTRA_FLAGS: dict[str, tuple[str, ...]] = {
+    "host-computer": ("-DCONFIG_IDF_TARGET_ESP32P4=1",),
 }
 
 
@@ -163,7 +179,10 @@ def build(target: Path, names: tuple[str, ...], flags: list[str] = FLAGS) -> Pat
 
 
 def build_all(out: Path) -> dict[str, Path]:
-    return {name: build(out / name, names) for name, names in PROGRAMS.items()}
+    return {
+        name: build(out / name, names, [*FLAGS, *EXTRA_FLAGS.get(name, ())])
+        for name, names in PROGRAMS.items()
+    }
 
 
 if __name__ == "__main__":

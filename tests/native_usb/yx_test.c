@@ -222,15 +222,15 @@ static void expect_reject(uint8_t levers, uint16_t cache_blocks, const stream_t 
 static void test_offer(void)
 {
     uint8_t f[32];
-    yusb_yx_params_t o = params(YUSB_YX_FILL | YUSB_YX_CACHE, 0x1234), g;
+    yusb_yx_params_t o = params(YUSB_YX_FILL | YUSB_YX_CACHE, 0x0abc), g;
     memset(f, 0xaa, sizeof(f));
     memcpy(f, "1-1.2", 6);
     CHECK(yusb_yx_offer_put(f, &o) == YUSB_OK);
-    static const uint8_t want[8] = {'Y', 'X', 1, 0x05, 0x12, 0x34, 0, 0};
+    static const uint8_t want[8] = {'Y', 'X', 1, 0x05, 0x0a, 0xbc, 0, 0};
     CHECK(!memcmp(f + 24, want, 8));
     CHECK(!memcmp(f, "1-1.2", 6) && f[6] == 0xaa && f[23] == 0xaa);  /* bytes before 24 kept */
     CHECK(yusb_yx_offer_get(f, &g));
-    CHECK(g.version == 1 && g.levers == 0x05 && g.cache_blocks == 0x1234);
+    CHECK(g.version == 1 && g.levers == 0x05 && g.cache_blocks == 0x0abc);
     /* The string may use bytes 0..22; its NUL at 23 is the last allowed. */
     memset(f, 'b', 23);
     f[23] = 0;
@@ -244,6 +244,8 @@ static void test_offer(void)
     CHECK(yusb_yx_offer_put(f, &bad) == YUSB_ERR_RANGE);
     bad = params(YUSB_YX_FILL, 0);
     bad.version = 0;
+    CHECK(yusb_yx_offer_put(f, &bad) == YUSB_ERR_RANGE);
+    bad = params(YUSB_YX_CACHE, YUSB_YX_MAX_CACHE_BLOCKS + 1);
     CHECK(yusb_yx_offer_put(f, &bad) == YUSB_ERR_RANGE);
     CHECK(yusb_yx_offer_put(f, NULL) == YUSB_ERR_RANGE);
     /* cache_blocks is written as 0 without CACHE. */
@@ -271,6 +273,15 @@ static void test_offer(void)
     f[27] = YUSB_YX_FILL;
     f[28] = 0x01;
     CHECK(yusb_yx_offer_get(f, &g) && g.levers == YUSB_YX_FILL && g.cache_blocks == 0);
+    /* ADR 0028 §2: cache_blocks > 4096 is malformed and treated as absent. */
+    f[27] = YUSB_YX_FILL | YUSB_YX_CACHE;
+    f[28] = 0x10;
+    f[29] = 0x01;                                                     /* 4097 */
+    CHECK(!yusb_yx_offer_get(f, &g) && g.version == 0 && g.levers == 0 && g.cache_blocks == 0);
+    f[27] = YUSB_YX_FILL;
+    f[28] = 0xff;
+    f[29] = 0xff;
+    CHECK(!yusb_yx_offer_get(f, &g) && g.version == 0 && g.levers == 0 && g.cache_blocks == 0);
 }
 
 static void test_accept(void)
@@ -284,6 +295,11 @@ static void test_accept(void)
     CHECK(!memcmp(f + 248, want, 8));
     CHECK(yusb_yx_accept_get(f, &g) && g.version == 1 && g.levers == 0x0f &&
           g.cache_blocks == 4096);
+    yusb_yx_params_t over = params(YUSB_YX_CACHE, YUSB_YX_MAX_CACHE_BLOCKS + 1);
+    CHECK(yusb_yx_accept_put(f, &over) == YUSB_ERR_RANGE);
+    f[252] = 0x10;
+    f[253] = 0x01;                                                    /* 4097 on the wire */
+    CHECK(!yusb_yx_accept_get(f, &g) && g.version == 0 && g.levers == 0 && g.cache_blocks == 0);
     memset(f, 'p', 247);
     f[247] = 0;
     CHECK(yusb_yx_accept_put(f, &a) == YUSB_OK && yusb_yx_accept_get(f, &g));

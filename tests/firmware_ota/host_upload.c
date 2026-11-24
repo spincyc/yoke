@@ -279,6 +279,29 @@ int main(int argc, char **argv)
         assert(!strcmp(yoke_ota_boot_state(true, true, true), "pending-verify"));
         assert(!strcmp(yoke_ota_boot_state(false, true, false), "rolled-back"));
         assert(!strcmp(yoke_ota_boot_state(false, false, true), "idle"));
+        assert(!yoke_ota_clock_epoch_valid(0, 1704067199LL));
+        assert(yoke_ota_clock_epoch_valid(0, 1704067200LL));
+        assert(yoke_ota_clock_epoch_valid(0, 7258118400LL));
+        assert(!yoke_ota_clock_epoch_valid(0, 7258118401LL));
+        assert(!yoke_ota_clock_epoch_valid(1800000000LL, 1799999999LL));
+        assert(yoke_ota_clock_epoch_valid(1800000000LL, 1800000000LL));
+        assert(yoke_ota_clock_epoch_valid(1800000000LL, 1800000001LL));
+        return 0;
+    }
+    if (!strcmp(fault, "clock-floor")) {
+        initialized = true;
+        trust = 1;
+        int64_t now = (int64_t)time(NULL);
+        assert(yoke_ota_clock_epoch_valid(0, now));
+        /* Implausible / regressed clock: save_clock refuses to overwrite otatrust
+         * and returns ESP_OK so confirm/boot are not aborted. */
+        floor_epoch = now + 3600;
+        assert(save_clock() == ESP_OK);
+        assert(clock_saves == 0 && floor_epoch == now + 3600);
+        /* Valid forward clock: persisted and floor_epoch advances. */
+        floor_epoch = now - 60;
+        assert(save_clock() == ESP_OK);
+        assert(clock_saves == 1 && floor_epoch >= now);
         return 0;
     }
     lock = (void *)1;

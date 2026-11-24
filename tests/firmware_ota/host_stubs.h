@@ -9,6 +9,7 @@
 #define CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE 1
 #define CONFIG_MBEDTLS_HAVE_TIME_DATE 1
 #define ESP_LOGI(...) ((void)0)
+#define ESP_LOGW(...) ((void)0)
 #define ESP_LOGE(...) ((void)0)
 #define portMAX_DELAY 0
 #define NVS_READWRITE 0

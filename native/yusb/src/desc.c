@@ -130,9 +130,23 @@ int yusb_parse_config(const uint8_t *raw, size_t len, yusb_config_t *out, char *
                 return fail(YUSB_ERR_DESCRIPTOR, why, cap, "endpoint address 0x%02x invalid",
                             address);
             unsigned mp = le16(body + 4);
-            if (!yusb_packet_size(mp))
+            unsigned pkt = yusb_packet_size(mp);
+            unsigned mult = (mp >> 11) & 3u;
+            unsigned xfer = body[3] & 3u;
+            if (!pkt)
                 return fail(YUSB_ERR_DESCRIPTOR, why, cap, "endpoint 0x%02x has wMaxPacketSize 0",
                             address);
+            if (pkt > 1024)
+                return fail(YUSB_ERR_DESCRIPTOR, why, cap,
+                            "endpoint 0x%02x wMaxPacketSize %u exceeds 1024", address, pkt);
+            if (mult == 3)
+                return fail(YUSB_ERR_DESCRIPTOR, why, cap,
+                            "endpoint 0x%02x wMaxPacketSize 0x%04x has reserved multiplier",
+                            address, mp);
+            if (xfer == YUSB_XFER_BULK && mult)
+                return fail(YUSB_ERR_DESCRIPTOR, why, cap,
+                            "bulk endpoint 0x%02x wMaxPacketSize 0x%04x has high-bandwidth bits",
+                            address, mp);
             yusb_alt_t *a = &out->alts[out->num_alts - 1];
             for (unsigned i = a->first_endpoint; i < out->num_endpoints; ++i)
                 if (out->endpoints[i].address == address)
@@ -310,6 +324,14 @@ int yusb_check_supported(const yusb_device_desc_t *device, const yusb_config_t *
                 if (speed == YUSB_SPEED_LOW && type == YUSB_XFER_BULK)
                     return fail(YUSB_ERR_UNSUPPORTED, why, cap,
                                 "low-speed bulk endpoints are invalid");
+                if (type == YUSB_XFER_BULK && yusb_packet_size(e->max_packet) > 512)
+                    return fail(YUSB_ERR_UNSUPPORTED, why, cap,
+                                "bulk endpoint 0x%02x wMaxPacketSize %u exceeds 512",
+                                e->address, yusb_packet_size(e->max_packet));
+                if (speed != YUSB_SPEED_HIGH && ((e->max_packet >> 11) & 3u))
+                    return fail(YUSB_ERR_UNSUPPORTED, why, cap,
+                                "endpoint 0x%02x high-bandwidth bits are invalid outside high speed",
+                                e->address);
                 if (yusb_ep_number(e) > budget->max_number)
                     return fail(YUSB_ERR_UNSUPPORTED, why, cap,
                                 "endpoint 0x%02x exceeds the UDC endpoint number limit %u",
@@ -669,11 +691,11 @@ int yusb_builder_feed(yusb_builder_t *b, const uint8_t *data, size_t len, bool s
         begin_strings(b);
         return YUSB_OK;
     case B_LANGS: {
-        if (stalled) { b->step = after_strings(b); return YUSB_OK; }
+        if (stalled || len < 2) { b->step = after_strings(b); return YUSB_OK; }
         /* Strings beyond the cache bounds are forwarded instead (degrade). */
         if (store_string(b, 0, 0, data, len, false)) { b->step = after_strings(b); return YUSB_OK; }
         b->num_langs = 0;
-        size_t end = len ? (data[0] < len ? data[0] : len) : 0;
+        size_t end = data[0] < len ? data[0] : len;
         for (size_t i = 2; i + 1 < end && b->num_langs < YUSB_MAX_STRING_LANGS; i += 2)
             b->langs[b->num_langs++] = le16(data + i);
         b->lang = 0;

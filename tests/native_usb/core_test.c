@@ -234,10 +234,11 @@ static yusb_proxy_t *ready(const yusb_policy_t *policy, const yusb_gadget_ops_t 
         if (!sx.n) break;
         cmd_t c = take_cmd();
         /* Answer from the setup the core put in its header: re-derive it by
-         * length (device 18, config 9 then 32, qualifier 10: stall). */
+         * length (device 18, config 9 then wTotalLength, qualifier 10: stall). */
+        unsigned cfg_total = (unsigned)(cfg[2] | (cfg[3] << 8));
         if (c.length == 18) reply(p, c.seq, 0, dev_desc, 18, now);
         else if (c.length == 9) reply(p, c.seq, 0, cfg, 9, now);
-        else if (c.length == 32) reply(p, c.seq, 0, cfg, 32, now);
+        else if (c.length == cfg_total) reply(p, c.seq, 0, cfg, cfg_total, now);
         else reply(p, c.seq, -YUSB_EPIPE, NULL, 0, now);
     }
     CHECK(yusb_proxy_phase(p) == YUSB_PHASE_READY);
@@ -983,6 +984,434 @@ static void test_footprints(void)
     CHECK(f.create > 0 && f.pumps_max > 0);
 }
 
+/* --- F1: BOT IN rounding must never exceed max_transfer / slot_buf ------- */
+
+static void test_bot_in_rounding_respects_max_transfer(void)
+{
+    /* Bulk IN wMaxPacketSize 300 (does not divide max_transfer = 512). */
+    static const uint8_t odd_bot[32] = {
+        9, 2, 32, 0, 1, 1, 0, 0x80, 50,
+        9, 4, 0, 0, 2, 0x08, 0x06, 0x50, 0,
+        7, 5, 0x81, 2, 0x2c, 0x01, 0,
+        7, 5, 0x02, 2, 0x00, 0x02, 0,
+    };
+    yusb_policy_t policy;
+    yusb_policy_defaults(&policy);
+    policy.max_transfer = 512;
+    policy.bot_in_slots = 4;
+    yusb_gadget_ops_t ops = scripted_ops(NULL);
+    uint64_t now = 1000;
+    yusb_proxy_t *p = presenting_cfg(&policy, &ops, odd_bot, now);
+    sx.n = 0;
+    CHECK(sx.ep_busy[2]);
+    cbw(sx.rd[2], 1000, true); /* 1000 bytes IN: must chunk as 300, 300, 300, 300 + CSW 300 */
+    sx.ep_busy[2] = false;
+    yusb_proxy_ep_done(p, 2, 31, now);
+    collect(p);
+    cmd_t cbw_urb = take_cmd();
+    CHECK(!cbw_urb.in && cbw_urb.length == 31);
+    reply(p, cbw_urb.seq, 0, NULL, 0, now);
+    collect(p);
+    unsigned in_seen = 0;
+    uint8_t payload[300];
+    memset(payload, 0x5a, sizeof(payload));
+    for (unsigned step = 0; step < 8 && sx.n; ++step) {
+        cmd_t c = take_cmd();
+        if (!c.in) continue;
+        CHECK(c.length == 300 && c.length <= policy.max_transfer);
+        in_seen++;
+        reply(p, c.seq, 0, payload, in_seen < 5 ? 300 : 13, now);
+        collect(p);
+        if (sx.ep_busy[17]) {
+            sx.ep_busy[17] = false;
+            yusb_proxy_ep_done(p, 17, in_seen < 5 ? 300 : 13, now);
+            collect(p);
+        }
+    }
+    CHECK(in_seen == 5);
+    yusb_proxy_stop(p, now);
+    yusb_proxy_destroy(p);
+}
+
+/* --- F2: malformed SET_CONFIGURATION / SET_INTERFACE cannot bypass ep0_max */
+
+static void test_malformed_set_config_and_interface_stall_locally(void)
+{
+    static const uint8_t alt_cfg[41] = {
+        9, 2, 41, 0, 1, 1, 0, 0x80, 50,
+        9, 4, 0, 0, 2, 0xff, 0, 0, 0,
+        7, 5, 0x81, 2, 0, 2, 0,
+        7, 5, 0x02, 2, 0, 2, 0,
+        9, 4, 0, 1, 0, 0xff, 0, 0, 0,
+    };
+    yusb_policy_t policy;
+    yusb_policy_defaults(&policy);
+    policy.ep0_max = 512;
+    yusb_gadget_ops_t ops = scripted_ops(NULL);
+    uint64_t now = 1000;
+    yusb_proxy_t *p = ready(&policy, &ops, alt_cfg, now);
+    /* Configure cleanly first (wLength = 0). */
+    uint8_t ok_cfg[8] = {0x00, 9, 1, 0, 0, 0, 0, 0};
+    yusb_proxy_event(p, YUSB_EV_CONTROL, ok_cfg, now);
+    collect(p);
+    reply(p, take_cmd().seq, 0, NULL, 0, now);
+    collect(p);
+    ep0_finish(p, 0, now);
+    sx.n = 0;
+    const uint8_t bad[][8] = {
+        {0x00, 9, 1, 0, 0, 0, 0x00, 0x20}, /* SET_CONFIGURATION OUT wLength 8192 */
+        {0x80, 9, 1, 0, 0, 0, 0x00, 0x20}, /* SET_CONFIGURATION IN wLength 8192 */
+        {0x01, 11, 1, 0, 0, 0, 0x00, 0x20}, /* SET_INTERFACE OUT wLength 8192 */
+        {0x81, 11, 1, 0, 0, 0, 0x00, 0x20}, /* SET_INTERFACE IN wLength 8192 */
+        {0x80, 5, 2, 0, 0, 0, 0, 0},        /* SET_ADDRESS IN */
+        {0x00, 5, 2, 0, 0, 0, 4, 0},        /* SET_ADDRESS wLength 4 */
+        {0x82, 1, 0, 0, 0x81, 0, 0, 0},     /* CLEAR_FEATURE IN */
+        {0x02, 3, 0, 0, 0x81, 0, 2, 0},     /* SET_FEATURE wLength 2 */
+    };
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); ++i) {
+        unsigned before = sx.n;
+        yusb_proxy_event(p, YUSB_EV_CONTROL, bad[i], now);
+        collect(p);
+        CHECK(sx.ep0_busy && sx.ep0_last == 3 && sx.n == before);
+        ep0_finish(p, 0, now);
+    }
+    yusb_proxy_stop(p, now);
+    yusb_proxy_destroy(p);
+}
+
+/* --- F3: expired gate_deadline and stop_deadline are not re-armed --------- */
+
+static void test_expired_gate_and_stop_deadlines_are_not_rearmed(void)
+{
+    yusb_policy_t policy;
+    yusb_policy_defaults(&policy);
+    policy.in_depth_bulk = 1;
+    yusb_gadget_ops_t ops = scripted_ops(NULL);
+    uint64_t now = 1000;
+    yusb_proxy_t *p = presenting(&policy, &ops, now);
+    sx.n = 0;
+    /* Bus reset sets reset_wanted while pumps quiesce; an ep0 request that
+     * arrives immediately enters E0_GATE with gate_deadline = 1000 + timeout,
+     * while the remote port reset is submitted later (at 1100) so its own URB
+     * deadline is 1100 + timeout > gate_deadline. */
+    yusb_proxy_event(p, YUSB_EV_RESET, NULL, now);
+    uint8_t in[8] = {0xc0, 0x02, 0, 0, 0, 0, 4, 0};
+    yusb_proxy_event(p, YUSB_EV_CONTROL, in, now);
+    uint64_t gate_deadline = now + policy.control_timeout_ms;
+    collect(p);
+    /* Complete pump quiesce 100 ms later so reset_urb expires AFTER gate_deadline. */
+    now += 100;
+    sx.ep_busy[2] = false;
+    yusb_proxy_ep_done(p, 2, YUSB_GADGET_INTERRUPTED, now);
+    collect(p);
+    while (sx.n && sx.cmds[0].unlink) {
+        unlink_reply(p, take_cmd().seq, -YUSB_ECONNRESET, now);
+        collect(p);
+    }
+    CHECK(sx.n == 1); /* port reset submitted at now = 1100, deadline = 1100 + timeout */
+    cmd_t reset_cmd = take_cmd();
+    /* Advance to gate_deadline (before reset_urb times out): gated request
+     * submits and poll must NOT return the expired gate_deadline! */
+    now = gate_deadline;
+    uint64_t next = yusb_proxy_poll(p, now);
+    collect(p);
+    CHECK(sx.n == 1 && !sx.cmds[0].unlink && next > now);
+    uint8_t ans[4] = {1, 2, 3, 4};
+    reply(p, take_cmd().seq, 0, ans, 4, now);
+    reply(p, reset_cmd.seq, 0, NULL, 0, now);
+    collect(p);
+    CHECK(sx.ep0_busy);
+    /* Stop while ep0 op is stuck; advancing past stop_deadline must not re-arm it. */
+    yusb_proxy_stop(p, now);
+    CHECK(yusb_proxy_phase(p) == YUSB_PHASE_STOPPING);
+    CHECK(!yusb_proxy_teardown_overdue(p, now));
+    now += policy.stop_timeout_ms + 50;
+    CHECK(yusb_proxy_teardown_overdue(p, now));
+    next = yusb_proxy_poll(p, now);
+    CHECK(next > now);
+    ep0_finish(p, YUSB_GADGET_SHUTDOWN, now);
+    CHECK(yusb_proxy_phase(p) == YUSB_PHASE_STOPPED);
+    yusb_proxy_destroy(p);
+}
+
+/* --- F4: OUT pump HALT_CLEARED resets ring head/slot and read_size ------- */
+
+static void test_out_pump_halt_cleared_resets_slot_and_read_size(void)
+{
+    yusb_policy_t policy;
+    yusb_policy_defaults(&policy);
+    policy.out_window = 2;
+    policy.bot_out_window = 2;
+    yusb_gadget_ops_t ops = scripted_ops(NULL);
+    uint64_t now = 1000;
+    yusb_proxy_t *p = presenting_cfg(&policy, &ops, bot_cfg, now);
+    sx.n = 0;
+    CHECK(sx.ep_busy[2] && sx.rdlen[2] == 512);
+    /* Send a 128 KiB WRITE CBW: slot 0 goes INFLIGHT, slot 1 starts a 65536-byte read. */
+    cbw(sx.rd[2], 131072, false);
+    sx.ep_busy[2] = false;
+    yusb_proxy_ep_done(p, 2, 31, now);
+    collect(p);
+    cmd_t cbw_urb = take_cmd();
+    CHECK(!cbw_urb.in && cbw_urb.length == 31);
+    cmd_t csw_urb = take_cmd();
+    CHECK(csw_urb.in);
+    CHECK(sx.ep_busy[2] && sx.rdlen[2] == 65536);
+    /* Host clears halt on OUT while slot 0 is in flight and slot 1 is reading 65536. */
+    sx.ep_busy[2] = false;
+    yusb_proxy_ep_done(p, 2, YUSB_GADGET_HALT_CLEARED, now);
+    collect(p);
+    CHECK(sx.n == 1 && sx.cmds[0].unlink && sx.cmds[0].victim == cbw_urb.seq);
+    unlink_reply(p, take_cmd().seq, -YUSB_ECONNRESET, now);
+    collect(p);
+    CHECK(count_ep0() == 1); /* W_HCLEAR remote CLEAR_FEATURE */
+    reply(p, take_ep0().seq, 0, NULL, 0, now);
+    collect(p);
+    /* Retried read must be reset to u->size (512) at u->head, not stale 65536 / slot 1. */
+    CHECK(sx.ep_busy[2] && sx.rdlen[2] == 512);
+    /* Complete the old CSW so the IN pump is idle too. */
+    uint8_t csw[13] = {'U', 'S', 'B', 'S', 0x11, 0, 0, 0, 0, 0, 0, 0, 1};
+    reply(p, csw_urb.seq, 0, csw, 13, now);
+    collect(p);
+    if (sx.ep_busy[17]) {
+        sx.ep_busy[17] = false;
+        yusb_proxy_ep_done(p, 17, 13, now);
+        collect(p);
+    }
+    /* Now submit two consecutive CBWs: without the F4 fix the ring deadlocks on slot 0. */
+    for (int round = 0; round < 3; ++round) {
+        sx.n = 0;
+        CHECK(sx.ep_busy[2] && sx.rdlen[2] == 512);
+        cbw(sx.rd[2], 512, true);
+        sx.ep_busy[2] = false;
+        yusb_proxy_ep_done(p, 2, 31, now);
+        collect(p);
+        cmd_t next_cbw = take_cmd();
+        CHECK(!next_cbw.in && next_cbw.length == 31);
+        reply(p, next_cbw.seq, 0, NULL, 0, now);
+        collect(p);
+        /* Drain the IN data + CSW URBs for this round. */
+        while (count_in()) {
+            cmd_t ic = take_cmd();
+            if (!ic.in) continue;
+            reply(p, ic.seq, 0, csw, ic.length == 512 ? 13 : 13, now);
+            collect(p);
+            if (sx.ep_busy[17]) {
+                sx.ep_busy[17] = false;
+                yusb_proxy_ep_done(p, 17, 13, now);
+                collect(p);
+            }
+        }
+    }
+    CHECK(sx.ep_busy[2]);
+    yusb_proxy_stop(p, now);
+    yusb_proxy_destroy(p);
+}
+
+/* --- F8: failed interface enable disables handles; bots[] cleared -------- */
+
+static struct {
+    uint32_t live_mask;
+    unsigned enable_calls, fail_enable_on;
+    unsigned alloc_calls, fail_alloc_on;
+} f8;
+
+static int f8_enable(void *c, const yusb_endpoint_t *e)
+{
+    (void)c;
+    if (++f8.enable_calls == f8.fail_enable_on) return -1;
+    int h = (int)(yusb_ep_number(e) + (yusb_ep_is_in(e) ? 16u : 0u));
+    CHECK(!(f8.live_mask & (1u << h)));
+    f8.live_mask |= 1u << h;
+    return h;
+}
+
+static int f8_disable(void *c, int h)
+{
+    (void)c;
+    CHECK(h >= 0 && h < 32 && (f8.live_mask & (1u << h)));
+    f8.live_mask &= ~(1u << h);
+    return 0;
+}
+
+static void *f8_alloc(void *ctx, size_t size, size_t align)
+{
+    (void)ctx;
+    if (f8.fail_alloc_on && ++f8.alloc_calls == f8.fail_alloc_on) return NULL;
+    void *p = aligned_alloc(align, size);
+    if (p) memset(p, 0, size);
+    return p;
+}
+
+static void test_interface_enable_cleanup_and_bots_reset(void)
+{
+    /* Alt 0: two endpoints (0x81, 0x02). Alt 1: two endpoints (0x83, 0x04). */
+    static const uint8_t two_alt[55] = {
+        9, 2, 55, 0, 1, 1, 0, 0x80, 50,
+        9, 4, 0, 0, 2, 0xff, 0, 0, 0,
+        7, 5, 0x81, 2, 0, 2, 0,
+        7, 5, 0x02, 2, 0, 2, 0,
+        9, 4, 0, 1, 2, 0xff, 0, 0, 0,
+        7, 5, 0x83, 2, 0, 2, 0,
+        7, 5, 0x04, 2, 0, 2, 0,
+    };
+    yusb_policy_t policy;
+    yusb_policy_defaults(&policy);
+    policy.in_depth_bulk = 1;
+    policy.coalesce_in = false;
+    yusb_buffers_t buf_hook = {64, f8_alloc, free_hook, NULL};
+    yusb_gadget_ops_t ops = scripted_ops(&buf_hook);
+    ops.ep_enable = f8_enable;
+    ops.ep_disable = f8_disable;
+    uint64_t now = 1000;
+
+    /* Helper: fail on new alt (ep_enable fail, pump_create OOM) and on restore fail. */
+    for (int mode = 0; mode < 3; ++mode) {
+        memset(&f8, 0, sizeof(f8));
+        memset(&sx, 0, sizeof(sx));
+        yusb_proxy_t *p = ready(&policy, &ops, two_alt, now);
+        uint8_t setconf[8] = {0, 9, 1, 0, 0, 0, 0, 0};
+        yusb_proxy_event(p, YUSB_EV_CONTROL, setconf, now);
+        collect(p);
+        reply(p, take_cmd().seq, 0, NULL, 0, now);
+        collect(p);
+        ep0_finish(p, 0, now);
+        CHECK(f8.live_mask == ((1u << 17) | (1u << 2)));
+        sx.n = 0; /* discard alt 0's initial IN URB */
+        /* Trigger SET_INTERFACE(0, 1). */
+        uint8_t setif[8] = {1, 11, 1, 0, 0, 0, 0, 0};
+        yusb_proxy_event(p, YUSB_EV_CONTROL, setif, now);
+        /* Quiesce alt 0's IN/OUT pumps. */
+        sx.ep_busy[2] = false;
+        yusb_proxy_ep_done(p, 2, YUSB_GADGET_INTERRUPTED, now);
+        collect(p);
+        while (sx.n && sx.cmds[0].unlink) {
+            unlink_reply(p, take_cmd().seq, -YUSB_ECONNRESET, now);
+            collect(p);
+        }
+        CHECK(sx.n == 1 && sx.cmds[0].ep == 0);
+        cmd_t req = take_cmd();
+        if (mode == 0) {
+            /* New alt fails ep_enable on 2nd endpoint: 1st endpoint must be disabled. */
+            f8.fail_enable_on = f8.enable_calls + 2;
+            reply(p, req.seq, 0, NULL, 0, now);
+        } else if (mode == 1) {
+            /* New alt fails pump_create OOM on 2nd endpoint: both handles disabled. */
+            f8.fail_alloc_on = f8.alloc_calls + 2;
+            reply(p, req.seq, 0, NULL, 0, now);
+        } else {
+            /* Remote refuses SET_INTERFACE; restore fails on 2nd endpoint. */
+            f8.fail_enable_on = f8.enable_calls + 2;
+            reply(p, req.seq, -YUSB_EPIPE, NULL, 0, now);
+        }
+        collect(p);
+        CHECK(f8.live_mask == 0);
+        CHECK(sx.ep0_busy && sx.ep0_last == 3);
+        ep0_finish(p, 0, now);
+        yusb_proxy_stop(p, now);
+        yusb_proxy_destroy(p);
+    }
+
+    /* F8 bots[] reset across SET_CONFIGURATION and bus_reset on ONE proxy:
+     * 3 configurations whose BOT interfaces have distinct numbers 0, 1, 2
+     * (exceeding MCU YUSB_MAX_BOTS = 2 if bots[] is not cleared). */
+    yusb_gadget_ops_t plain_ops = scripted_ops(NULL);
+    uint8_t dev3[18];
+    memcpy(dev3, dev_desc, sizeof(dev3));
+    dev3[17] = 3;
+    uint8_t cfgs[3][32];
+    for (unsigned i = 0; i < 3; ++i) {
+        memcpy(cfgs[i], bot_cfg, sizeof(bot_cfg));
+        cfgs[i][5] = (uint8_t)(i + 1); /* bConfigurationValue */
+        cfgs[i][11] = (uint8_t)i;      /* distinct bInterfaceNumber */
+    }
+    memset(&sx, 0, sizeof(sx));
+    yusb_proxy_t *p = yusb_proxy_create(&policy, &plain_ops, "1-1", now);
+    collect(p);
+    uint8_t rep[YUSB_REP_IMPORT_SIZE] = {0};
+    yusb_op_encode(YUSB_OP_REP_IMPORT, 0, rep);
+    yusb_device_info_t info = {.busnum = 1, .devnum = 2, .speed = YUSB_SPEED_HIGH};
+    strcpy(info.busid, "1-1");
+    yusb_device_info_encode(&info, rep + 8);
+    feed(p, rep, sizeof(rep), now);
+    unsigned fetched = 0;
+    for (int guard = 0; guard < 64 && yusb_proxy_phase(p) == YUSB_PHASE_FETCH; ++guard) {
+        collect(p);
+        if (!sx.n) break;
+        cmd_t c = take_cmd();
+        if (c.length == 18) reply(p, c.seq, 0, dev3, 18, now);
+        else if (c.length == 9 && fetched < 3) reply(p, c.seq, 0, cfgs[fetched], 9, now);
+        else if (c.length == 32 && fetched < 3) reply(p, c.seq, 0, cfgs[fetched++], 32, now);
+        else reply(p, c.seq, -YUSB_EPIPE, NULL, 0, now);
+    }
+    CHECK(yusb_proxy_phase(p) == YUSB_PHASE_READY && fetched == 3);
+    yusb_proxy_gadget_started(p, NULL, 0, now);
+    for (unsigned cfg_val = 1; cfg_val <= 3; ++cfg_val) {
+        if (cfg_val == 2) {
+            /* Exercise bus_reset path before config 2; direct SET_CONFIGURATION before config 3. */
+            yusb_proxy_event(p, YUSB_EV_RESET, NULL, now);
+            sx.ep_busy[2] = false;
+            yusb_proxy_ep_done(p, 2, YUSB_GADGET_INTERRUPTED, now);
+            collect(p);
+            while (sx.n) {
+                cmd_t c = take_cmd();
+                if (c.unlink) unlink_reply(p, c.seq, -YUSB_ECONNRESET, now);
+                else reply(p, c.seq, 0, NULL, 0, now);
+                collect(p);
+            }
+        }
+        uint8_t setconf[8] = {0, 9, (uint8_t)cfg_val, 0, 0, 0, 0, 0};
+        yusb_proxy_event(p, YUSB_EV_CONTROL, setconf, now);
+        if (sx.ep_busy[2]) {
+            sx.ep_busy[2] = false;
+            yusb_proxy_ep_done(p, 2, YUSB_GADGET_INTERRUPTED, now);
+        }
+        collect(p);
+        while (sx.n && sx.cmds[0].unlink) {
+            unlink_reply(p, take_cmd().seq, -YUSB_ECONNRESET, now);
+            collect(p);
+        }
+        reply(p, take_ep0().seq, 0, NULL, 0, now);
+        collect(p);
+        ep0_finish(p, 0, now);
+        /* BOT sizing active: zero unsolicited IN URBs before CBW; CBW submits 4096-byte IN URB. */
+        CHECK(count_in() == 0 && sx.ep_busy[2]);
+        cbw(sx.rd[2], 4096, true);
+        sx.ep_busy[2] = false;
+        yusb_proxy_ep_done(p, 2, 31, now);
+        collect(p);
+        cmd_t cbw_urb = take_cmd();
+        CHECK(!cbw_urb.in && cbw_urb.length == 31);
+        CHECK(count_in() == 1 && sx.cmds[0].in && sx.cmds[0].length == 4096);
+        reply(p, cbw_urb.seq, 0, NULL, 0, now);
+        collect(p);
+        if (cfg_val < 3) {
+            /* Drain the IN URB + CSW before switching configs. */
+            cmd_t d_in = take_cmd();
+            uint8_t z[16] = {0};
+            reply(p, d_in.seq, 0, z, 13, now);
+            collect(p);
+            if (sx.ep_busy[17]) {
+                sx.ep_busy[17] = false;
+                yusb_proxy_ep_done(p, 17, 13, now);
+                collect(p);
+            }
+            if (count_in()) {
+                cmd_t csw_u = take_cmd();
+                reply(p, csw_u.seq, 0, z, 13, now);
+                collect(p);
+                if (sx.ep_busy[17]) {
+                    sx.ep_busy[17] = false;
+                    yusb_proxy_ep_done(p, 17, 13, now);
+                    collect(p);
+                }
+            }
+        }
+    }
+    yusb_proxy_stop(p, now);
+    yusb_proxy_destroy(p);
+}
+
 int main(void)
 {
     test_fence();
@@ -1003,6 +1432,11 @@ int main(void)
     test_acknowledged_requests_are_never_dropped();
     test_raw_gadget_abi();
     test_footprints();
+    test_bot_in_rounding_respects_max_transfer();
+    test_malformed_set_config_and_interface_stall_locally();
+    test_expired_gate_and_stop_deadlines_are_not_rearmed();
+    test_out_pump_halt_cleared_resets_slot_and_read_size();
+    test_interface_enable_cleanup_and_bots_reset();
     if (failures) {
         fprintf(stderr, "%d failures\n", failures);
         return 1;

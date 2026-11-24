@@ -1049,6 +1049,76 @@ static void test_export_readahead_alone_is_not_framed(void)
     finish(x);
 }
 
+/* F6: control transfers with a data stage whose bmRequestType direction
+ * disagrees with the USB/IP header direction are protocol violations;
+ * zero-length control with dir_in still logs and is accepted. */
+static void test_export_control_direction_mismatch_is_rejected(void)
+{
+    yusb_hc_ops_t ops = ops_();
+    yusb_export_cfg_t cfg;
+    cfg_(&cfg);
+    /* OUT setup with data stage (wLength = 16) sent as USB/IP DIR_IN. */
+    yusb_export_t *x = create_with(&cfg, &ops);
+    import(x, NULL);
+    uint8_t bad_out[8] = {0x40, 0x01, 0, 0, 0, 0, 16, 0};
+    uint8_t msg[48], *buf;
+    put_submit(msg, 1, YUSB_USBIP_DIR_IN, 0, 16, bad_out);
+    CHECK(yusb_export_rx_space(x, &buf) >= sizeof(msg));
+    memcpy(buf, msg, sizeof(msg));
+    CHECK(yusb_export_rx_done(x, sizeof(msg), 0) == YUSB_ERR_PROTOCOL);
+    CHECK(yusb_export_finished(x) && yusb_export_counters(x)->violations == 1 && hc.n == 0);
+    finish(x);
+
+    /* IN setup with data stage (wLength = 18) sent as USB/IP DIR_OUT. */
+    x = create_with(&cfg, &ops);
+    import(x, NULL);
+    put_submit(msg, 2, YUSB_USBIP_DIR_OUT, 0, 18, get_device);
+    CHECK(yusb_export_rx_space(x, &buf) >= sizeof(msg));
+    memcpy(buf, msg, sizeof(msg));
+    CHECK(yusb_export_rx_done(x, sizeof(msg), 0) == YUSB_ERR_PROTOCOL);
+    CHECK(yusb_export_finished(x) && yusb_export_counters(x)->violations == 1 && hc.n == 0);
+    finish(x);
+
+    /* Zero-length control with DIR_IN: logged as BOGUS control dir, not a violation. */
+    x = create_with(&cfg, &ops);
+    import(x, NULL);
+    uint8_t zlen[8] = {0x80, 0x00, 0, 0, 0, 0, 0, 0};
+    put_submit(msg, 3, YUSB_USBIP_DIR_IN, 0, 0, zlen);
+    CHECK(feed(x, msg, sizeof(msg)) == sizeof(msg));
+    CHECK(!yusb_export_finished(x) && yusb_export_counters(x)->violations == 0 && hc.n == 1);
+    finish(x);
+}
+
+/* F13: a device path occupying bytes 248..255 refuses YX accept without
+ * truncating the path in OP_REP_IMPORT. */
+static void test_export_long_path_is_not_truncated_on_yx_offer(void)
+{
+    yusb_hc_ops_t ops = ops_();
+    yusb_export_cfg_t cfg;
+    cfg_(&cfg);
+    cfg.yx = (yusb_yx_params_t){YUSB_YX_VERSION, YUSB_YX_FILL | YUSB_YX_LZ4, 0};
+    yusb_export_dev_t dev = dev_();
+    memset(dev.info.path, 'p', 252);
+    dev.info.path[252] = 0;
+    memset(&hc, 0, sizeof(hc));
+    yusb_export_t *x = yusb_export_create(&cfg, &ops, &dev, 1);
+    CHECK(x != NULL);
+    if (!x) return;
+    uint8_t req[YUSB_REQ_IMPORT_SIZE];
+    yusb_req_import_encode("1-1", req);
+    yusb_yx_params_t offer = cfg.yx;
+    CHECK(yusb_yx_offer_put(req + YUSB_OP_HEADER_SIZE, &offer) == YUSB_OK);
+    have = 0;
+    CHECK(feed(x, req, sizeof(req)) == sizeof(req));
+    drain(x);
+    CHECK(have == YUSB_REP_IMPORT_SIZE && !yusb_export_yx(x, NULL));
+    yusb_device_info_t info;
+    CHECK(yusb_device_info_decode(out + YUSB_OP_HEADER_SIZE, &info) == YUSB_OK);
+    CHECK(strlen(info.path) == 252 && !strcmp(info.path, dev.info.path));
+    have = 0;
+    finish(x);
+}
+
 /* --- footprints ---------------------------------------------------------- */
 
 static void test_footprints(void)
@@ -1255,6 +1325,8 @@ int main(void)
     test_export_pool_sizes_buffers_per_urb();
     test_export_yx_replies_match_the_reference_encoder();
     test_export_readahead_alone_is_not_framed();
+    test_export_control_direction_mismatch_is_rejected();
+    test_export_long_path_is_not_truncated_on_yx_offer();
 #ifdef COUNT_ALLOCS
     test_counted_codec();
     test_counted_yx_setup_failure();

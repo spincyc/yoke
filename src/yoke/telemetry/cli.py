@@ -52,7 +52,7 @@ def configure_parsers(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
 
 
 def run_command(args: argparse.Namespace) -> int:
-    from yoke.config import resolve_psk
+    from yoke.config import OPEN_MODE_WARNING, resolve_psk
     from yoke.telemetry.client import SnapshotClient
     from yoke.telemetry.http import MetricsServer
     from yoke.telemetry.model import Snapshot
@@ -100,7 +100,15 @@ def run_command(args: argparse.Namespace) -> int:
                 else run_top(client.get, args.interval)
             )
 
-        psk, warning = (b"", None) if args.demo else resolve_psk(args.psk_file)
+        open_mode = bool(getattr(args, "open", False))
+        if open_mode and args.psk_file is not None:
+            raise ValueError("choose either --psk-file or --open")
+        if args.demo:
+            psk, warning = b"", None
+        elif open_mode:
+            psk, warning = b"", OPEN_MODE_WARNING
+        else:
+            psk, warning = resolve_psk(args.psk_file)
         if warning is not None:
             print(warning, file=sys.stderr)
         cfg = MonitorConfig(

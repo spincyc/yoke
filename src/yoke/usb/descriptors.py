@@ -218,8 +218,24 @@ def parse_configuration(raw: bytes) -> Configuration:
                 body[6],
                 bytes(body),
             )
+            mult = (endpoint.max_packet >> 11) & 3
             if endpoint.packet_size == 0:
                 raise DescriptorError(f"endpoint {address:#04x} has wMaxPacketSize 0")
+            if endpoint.packet_size > 1024:
+                raise DescriptorError(
+                    f"endpoint {address:#04x} wMaxPacketSize "
+                    f"{endpoint.packet_size} exceeds 1024"
+                )
+            if mult == 3:
+                raise DescriptorError(
+                    f"endpoint {address:#04x} wMaxPacketSize "
+                    f"{endpoint.max_packet:#06x} has reserved multiplier"
+                )
+            if endpoint.transfer_type == ch9.XFER_BULK and mult:
+                raise DescriptorError(
+                    f"bulk endpoint {address:#04x} wMaxPacketSize "
+                    f"{endpoint.max_packet:#06x} has high-bandwidth bits"
+                )
             if any(e.address == address for e in endpoints):
                 raise DescriptorError(f"duplicate endpoint {address:#04x}")
             number = header[0]
@@ -315,6 +331,16 @@ def check_supported(
                         )
                     if speed == Speed.LOW and kind == ch9.XFER_BULK:
                         raise UnsupportedError("low-speed bulk endpoints are invalid")
+                    if kind == ch9.XFER_BULK and endpoint.packet_size > 512:
+                        raise UnsupportedError(
+                            f"bulk endpoint {endpoint.address:#04x} wMaxPacketSize "
+                            f"{endpoint.packet_size} exceeds 512"
+                        )
+                    if speed != Speed.HIGH and (endpoint.max_packet >> 11) & 3:
+                        raise UnsupportedError(
+                            f"endpoint {endpoint.address:#04x} high-bandwidth bits "
+                            "are invalid outside high speed"
+                        )
                     if endpoint.number > budget.max_number:
                         raise UnsupportedError(
                             f"endpoint {endpoint.address:#04x} exceeds the UDC "
@@ -473,7 +499,7 @@ def build_presentation(
             wanted.update(alt.string_index for alt in alts.values())
     wanted.discard(0)
     langs_raw = fetch(ch9.get_descriptor(ch9.DT_STRING, 0, 255)) if wanted else None
-    if langs_raw is not None:
+    if langs_raw is not None and len(langs_raw) >= 2:
         strings[(0, 0)] = langs_raw
         langs = [
             int.from_bytes(langs_raw[i : i + 2], "little")

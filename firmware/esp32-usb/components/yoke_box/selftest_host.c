@@ -68,9 +68,10 @@ static void claim_and_poll(void)
         if (p[1] != USB_DT_ENDPOINT || p[0] < 7 || w.alternate || (p[3] & 3u) != USB_XFER_INT ||
             !(p[2] & 0x80u))
             continue;
+        uint16_t mps = usb_le16(p + 4) & 0x7ffu;
+        if (mps == 0 || mps > POLL_BYTES) continue;
         status.poll_endpoint = p[2];
-        poll = (yoke_usbh_urb_t){.endpoint = p[2], .data = poll_data,
-                                 .length = usb_le16(p + 4) & 0x7ffu};
+        poll = (yoke_usbh_urb_t){.endpoint = p[2], .data = poll_data, .length = mps};
         say("polling endpoint 0x%02x (%u bytes); press keys or move the device", p[2],
             (unsigned)poll.length);
         start_poll();

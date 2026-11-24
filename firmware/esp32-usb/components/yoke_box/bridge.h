@@ -23,6 +23,16 @@
  * and the Ethernet driver (⚠ estimate; GET /v1/status reports the
  * internal heap's free and minimum free bytes). */
 #define BOX_HEAP_RESERVE (32u * 1024u)
+/* Largest single internal allocation native/yusb makes (bounded so the P4's
+ * multi-allocation footprint does not demand one 274 KiB contiguous block). */
+#define BOX_HEAP_BLOCK_CAP (64u * 1024u)
+
+static inline bool box_heap_budget_ok(size_t free_bytes, size_t largest_block, size_t need)
+{
+    size_t block_need = need < BOX_HEAP_BLOCK_CAP ? need : BOX_HEAP_BLOCK_CAP;
+    return free_bytes >= BOX_HEAP_RESERVE && free_bytes - BOX_HEAP_RESERVE >= need &&
+           largest_block >= block_need;
+}
 
 typedef struct {
     /* Install the backend at boot; the USB task exists afterwards. No
@@ -47,9 +57,10 @@ extern const box_bridge_t box_computer;
 extern const box_bridge_t box_device;
 
 /* Any task: whether a session of `need` bytes (a native/yusb footprint)
- * may be created. Conservative: as if all of it came from internal RAM in
- * one block (with PSRAM, malloc puts the large pieces there), leaving
- * BOX_HEAP_RESERVE. The cores also fail cleanly on a refused allocation. */
+ * may be created. Conservative: total 8-bit internal RAM must hold `need`
+ * plus BOX_HEAP_RESERVE, and the largest contiguous 8-bit internal block
+ * must hold at least min(need, BOX_HEAP_BLOCK_CAP). The cores also fail
+ * cleanly on a refused allocation. */
 bool box_heap_fits(size_t need);
 
 /* Before the role starts: watches may be armed from then on. */
@@ -69,3 +80,7 @@ void box_net_poll_done(uint32_t tag, ywp_state_t state, const char *detail);
 void box_net_watch(int fd, bool read, bool write, void (*post)(void (*fn)(void *), void *),
                    void (*ready)(void *arg), void *arg);
 void box_net_unwatch(int fd);
+/* Unwatch fd and close it safely on the network task (never concurrently
+ * with select() on another core). If the network task has not started yet,
+ * closes fd directly. */
+void box_net_close(int fd);

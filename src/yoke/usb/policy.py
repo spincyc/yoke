@@ -182,8 +182,12 @@ def decide(
                 return Reply(data)
         return Forward(cache=True)
     if request == ch9.SET_ADDRESS:
+        if setup.is_in or setup.length:
+            return Stall("malformed standard request")
         return Ack()  # the UDC owns addressing; never forward
     if request == ch9.SET_CONFIGURATION and recipient == ch9.RECIP_DEVICE:
+        if setup.is_in or setup.length:
+            return Stall("malformed standard request")
         if setup.value == 0 or presentation.configuration(setup.value) is not None:
             return SetConfiguration(setup.value)
         return Stall("unknown configuration")
@@ -191,6 +195,8 @@ def decide(
         return Reply(bytes([state.configuration]))
     config = presentation.configuration(state.configuration)
     if request == ch9.SET_INTERFACE and recipient == ch9.RECIP_INTERFACE:
+        if setup.is_in or setup.length:
+            return Stall("malformed standard request")
         if config is not None and config.alt(setup.index, setup.value) is not None:
             return SetInterface(setup.index, setup.value)
         return Stall("unknown interface or alternate setting")
@@ -213,6 +219,8 @@ def decide(
                 return Reply(bytes([int(state.is_halted(address)), 0]))
         return Stall("unknown status recipient")
     if request in (ch9.CLEAR_FEATURE, ch9.SET_FEATURE):
+        if setup.is_in or setup.length:
+            return Stall("malformed standard request")
         if recipient == ch9.RECIP_ENDPOINT and setup.value == ch9.FEATURE_ENDPOINT_HALT:
             address = setup.index & 0x8F
             if address & 0x0F == 0:

@@ -50,6 +50,8 @@ static uint32_t get_be32(const uint8_t *p)
 static int params_put(uint8_t *field, size_t at, const yusb_yx_params_t *p)
 {
     if (!field || !p || !p->version || (p->levers & ~YUSB_YX_LEVERS)) return YUSB_ERR_RANGE;
+    if ((p->levers & YUSB_YX_CACHE) && p->cache_blocks > YUSB_YX_MAX_CACHE_BLOCKS)
+        return YUSB_ERR_RANGE;
     /* Stock peers stop at the NUL; the trailer must not overlap the string. */
     if (!memchr(field, 0, at)) return YUSB_ERR_RANGE;
     uint8_t *x = field + at;
@@ -70,9 +72,11 @@ static bool params_get(const uint8_t *field, size_t at, yusb_yx_params_t *p)
     memset(p, 0, sizeof(*p));
     const uint8_t *x = field + at;
     if (x[0] != 'Y' || x[1] != 'X' || !x[2] || !memchr(field, 0, at)) return false;
+    uint16_t cache = get_be16(x + 4);
+    if (cache > YUSB_YX_MAX_CACHE_BLOCKS) return false;
     p->version = x[2];
     p->levers = x[3] & YUSB_YX_LEVERS;
-    if (p->levers & YUSB_YX_CACHE) p->cache_blocks = get_be16(x + 4);
+    if (p->levers & YUSB_YX_CACHE) p->cache_blocks = cache;
     if (!p->cache_blocks) p->levers &= (uint8_t)~YUSB_YX_CACHE;
     return true;
 }

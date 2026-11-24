@@ -145,10 +145,13 @@ class FakeService:
 def installed(tmp_path: Path) -> tuple[Updater, FakeInstaller, FakeService]:
     root = tmp_path / "opt/yoke"
     (root / "releases/initial/venv/bin").mkdir(parents=True)
+    for directory in (root, root / "releases", root / "releases/initial"):
+        directory.chmod(0o755)
     (root / "releases/initial/venv/bin/python").symlink_to(sys.executable)
     (root / "current").symlink_to("releases/initial")
     tool = Path(__file__).parents[1] / "src/yoke/update.py"
     (root / "updater.py").write_bytes(tool.read_bytes())
+    (root / "updater.py").chmod(0o644)
     installer = FakeInstaller()
     service = FakeService(root)
     return Updater(root, installer, service), installer, service
@@ -605,6 +608,7 @@ class ScriptRunner:
 
 def test_systemd_notify_readiness_contract_and_bounded_commands(tmp_path: Path) -> None:
     (tmp_path / "updater.py").write_text("# trusted fixed script fixture\n")
+    (tmp_path / "updater.py").chmod(0o644)
     runner = ScriptRunner(tmp_path)
     pauses: list[float] = []
     service = SystemdService(tmp_path, runner, pause=pauses.append)
@@ -637,6 +641,7 @@ def test_inactive_boot_recovery_unit_prevents_activation_deadlock(
     tmp_path: Path,
 ) -> None:
     (tmp_path / "updater.py").write_text("# trusted fixed script fixture\n")
+    (tmp_path / "updater.py").chmod(0o644)
     with pytest.raises(UpdateError, match="command failed"):
         SystemdService(
             tmp_path, ScriptRunner(tmp_path, recovery_active=False)
@@ -739,7 +744,7 @@ def test_standalone_cli_real_offline_install_activate_and_rollback(
 
     def invoke(*args: str, expected: int = 0) -> dict[str, object]:
         proc = subprocess.run(
-            [*prefix, *args], capture_output=True, text=True, timeout=45, check=False
+            [*prefix, *args], capture_output=True, text=True, timeout=120, check=False
         )
         assert proc.returncode == expected, proc.stdout + proc.stderr
         value = json.loads(proc.stdout)

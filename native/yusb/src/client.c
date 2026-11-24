@@ -48,6 +48,7 @@ size_t cl_tx_segments(const yusb_policy_t *pol, unsigned nurbs)
 {
     size_t cap = 2u * nurbs + 8u;
     yusb_yx_params_t offer = {YUSB_YX_VERSION, pol->yx_levers, pol->yx_cache_blocks};
+    yusb_yx_agree(&offer, &offer, &offer);
     if (yusb_yx_framed(&offer)) {
         unsigned window = pol->out_window > pol->bot_out_window ? pol->out_window : pol->bot_out_window;
         cap += (size_t)pol->budget.max_out * window * yusb_yx_segments(pol->max_transfer);
@@ -66,13 +67,14 @@ int cl_init(yusb_proxy_t *p)
     if (txq_init(&p->tx, cl_tx_segments(pol, p->nurbs)) || rx_init(&p->rx, stage)) return YUSB_ERR_NOMEM;
     p->receiving = NO_URB;
     yusb_yx_params_t offer = {YUSB_YX_VERSION, pol->yx_levers, pol->yx_cache_blocks};
+    yusb_yx_agree(&offer, &offer, &offer);
     if (yusb_yx_framed(&offer)) {
         p->yx_nseg = yusb_yx_segments(pol->max_transfer);
         p->yx_seg = calloc(p->yx_nseg, sizeof(*p->yx_seg));
         if (!p->yx_seg) return YUSB_ERR_NOMEM;
     }
     yusb_req_import_encode(p->busid, p->op_out);
-    if (pol->yx_levers)
+    if (offer.levers)
         yusb_yx_offer_put(p->op_out + YUSB_OP_HEADER_SIZE, &offer);  /* refused if busid too long */
     txq_push(&p->tx, p->op_out, sizeof(p->op_out));
     rx_record(&p->rx, YUSB_OP_HEADER_SIZE);

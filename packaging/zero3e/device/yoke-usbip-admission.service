@@ -8,7 +8,7 @@
 [Unit]
 Description=yoke USB/IP data-plane admission (nftables allowlist)
 DefaultDependencies=no
-After=local-fs.target systemd-modules-load.service
+After=local-fs.target systemd-modules-load.service yoke-update-recover.service
 Before=yoke-usbipd.service shutdown.target
 Conflicts=shutdown.target
 

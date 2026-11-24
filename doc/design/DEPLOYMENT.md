@@ -237,9 +237,14 @@ from that same address. Check with
 The producer reports `pending` until the helper applied its latest
 allowlist and `error` if the helper failed.
 
-On the **computer side** the installer only installs the unprivileged
-agent. Its USB gadget worker and that worker's unit are installed
-separately and are not part of this recipe.
+On the **computer side** the installer installs the unprivileged agent,
+the separate unprivileged `yoke-gadget` user and `yoke-gadget.service`
+worker unit, `modules-load.d/yoke-raw-gadget.conf`, and
+`70-yoke-raw-gadget.rules` granting `yoke-gadget` mode `0600` access to
+`/dev/raw-gadget`. Pass `--native-worker PATH` to install the native C
+`yoke-gadget-worker` binary and its `20-native-worker.conf` drop-in
+(ADR 0027); re-running without `--native-worker` reverts to the Python
+worker.
 
 A lab Linux consumer that imports through the kernel (`vhci-hcd`) uses
 `install.sh vhci-lab`: a udev rule makes the `vhci_hcd` attach/detach

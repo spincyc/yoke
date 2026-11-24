@@ -15,8 +15,10 @@
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "lwip/sockets.h"
 
 #define WATCHES 4
+#define CLOSING_MAX (WATCHES * 2)
 #define INBOX 4
 #define TASK_STACK 8192
 #define TASK_PRIORITY 4
@@ -40,6 +42,9 @@ typedef struct {
 
 static const char *TAG = "yoke-net";
 static watch_t watches[WATCHES] = {{.fd = -1}, {.fd = -1}, {.fd = -1}, {.fd = -1}};
+static int closing[CLOSING_MAX];
+static size_t closing_count;
+static bool started;
 static SemaphoreHandle_t lock;
 static QueueHandle_t inbox;
 static int wake_fd = -1;
@@ -90,6 +95,61 @@ void box_net_unwatch(int fd)
     if (found) wake();
 }
 
+static void drain_closing(void)
+{
+    int fds[CLOSING_MAX];
+    size_t count = 0;
+    xSemaphoreTake(lock, portMAX_DELAY);
+    count = closing_count;
+    if (count) {
+        memcpy(fds, closing, count * sizeof(fds[0]));
+        closing_count = 0;
+    }
+    xSemaphoreGive(lock);
+    for (size_t i = 0; i < count; ++i) close(fds[i]);
+}
+
+void box_net_close(int fd)
+{
+    if (fd < 0) return;
+    if (!lock) {
+        close(fd);
+        return;
+    }
+    bool defer = false, queued = false, duplicate = false;
+    xSemaphoreTake(lock, portMAX_DELAY);
+    for (size_t i = 0; i < WATCHES; ++i) {
+        if (watches[i].fd == fd) watches[i] = (watch_t){.fd = -1};
+    }
+    if (started) {
+        defer = true;
+        for (size_t i = 0; i < closing_count; ++i) {
+            if (closing[i] == fd) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (!duplicate && closing_count < CLOSING_MAX) {
+            closing[closing_count++] = fd;
+            queued = true;
+        }
+    }
+    xSemaphoreGive(lock);
+    if (duplicate) return;
+    if (!defer) {
+        close(fd);
+        return;
+    }
+    if (!queued) {
+        ESP_LOGE(TAG, "close queue full; closing socket %d directly", fd);
+        close(fd);
+        wake();
+        return;
+    }
+    (void)shutdown(fd, SHUT_RDWR);
+    wake();
+}
+
 static void deliver(message_t *m)
 {
     (void)xQueueSend(inbox, m, portMAX_DELAY);
@@ -126,6 +186,7 @@ static void task(void *arg)
     bool ywp = box_ywp_open(config, role, address) == ESP_OK;
     for (;;) {
         esp_task_wdt_reset();
+        drain_closing();
         fd_set readable, writable;
         FD_ZERO(&readable);
         FD_ZERO(&writable);
@@ -147,8 +208,11 @@ static void task(void *arg)
         double wait = ywp ? box_ywp_deadline() - now() : WAKE_S;
         if (wait > WAKE_S) wait = WAKE_S;
         if (wait < 0) wait = 0;
-        struct timeval tv = {.tv_sec = 0, .tv_usec = (long)(wait * 1e6)};
-        if (select(top + 1, &readable, &writable, NULL, &tv) < 0) {
+        long us = (long)(wait * 1e6);
+        struct timeval tv = {.tv_sec = us / 1000000L, .tv_usec = us % 1000000L};
+        int ready_count = select(top + 1, &readable, &writable, NULL, &tv);
+        drain_closing();
+        if (ready_count < 0) {
             if (errno != EINTR) ESP_LOGE(TAG, "select failed: errno %d", errno);
             vTaskDelay(pdMS_TO_TICKS(10));
             continue;
@@ -202,10 +266,18 @@ esp_err_t box_net_start(const box_config_t *c, const box_bridge_t *r, uint32_t i
     config = c;
     role = r;
     address = ipv4;
-    return xTaskCreatePinnedToCore(task, "yoke-net", TASK_STACK, NULL, TASK_PRIORITY, NULL, 0) ==
-                   pdPASS
-               ? ESP_OK
-               : ESP_ERR_NO_MEM;
+    xSemaphoreTake(lock, portMAX_DELAY);
+    started = true;
+    xSemaphoreGive(lock);
+    if (xTaskCreatePinnedToCore(task, "yoke-net", TASK_STACK, NULL, TASK_PRIORITY, NULL, 0) !=
+        pdPASS) {
+        xSemaphoreTake(lock, portMAX_DELAY);
+        started = false;
+        xSemaphoreGive(lock);
+        drain_closing();
+        return ESP_ERR_NO_MEM;
+    }
+    return ESP_OK;
 }
 
 void box_net_status(cJSON *body)
