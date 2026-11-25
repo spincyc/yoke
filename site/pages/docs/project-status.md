@@ -20,7 +20,7 @@ complete USB connection has not been built and bench-tested.
 | Part | Status |
 |---|---|
 | Hardware platform | Radxa ZERO 3E selected; one board in each box |
-| Case | R6 judged too large; compact R7 PoE and computer-side cases printed 2026-11-04; physical fit and cooling not yet tested |
+| Case | R8 hardened compact PoE (14.5 mm pillars) and bare computer-side cases printed 2026-11-25 (superseding R7); physical fit and cooling not yet tested |
 | Pairing | Software saves pairings, restores them after restart, and handles lost connections |
 | Device-side firmware | USB/IP export with data-plane admission and a ZERO 3E install recipe; not yet run on the board |
 | Computer-side firmware | Tier 2: native C USB/IP-to-gadget worker (the Python worker is the reference); verified in simulation and a real-kernel VM; not yet run on hardware |

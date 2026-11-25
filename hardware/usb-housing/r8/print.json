@@ -1,0 +1,71 @@
+{
+ "schema": "yoke.usb-housing-print/1",
+ "revision": "R8",
+ "kind": "HARDENED_COMPACT_POE_AND_BARE_FIRST_ARTICLES_ONE_PLATE",
+ "state": "SUBMITTED_AND_PRINTING_VERIFIED",
+ "printer_model": "FlashForge Adventurer 5M",
+ "printer_firmware": "5.1.8",
+ "job_filename": "yoke-usb-housing-r8.gcode",
+ "stl_sha256": "d91be3e78a6da9df86ebed6c2987f1cd3de6b3bf8379df89bafffea27ebfe4c8",
+ "gcode_sha256": "4007550808038ad562aa9e47d1e1f37599e00713d2ad7c747799d8ca48698006",
+ "toolpath_sha256": "16c4576d6feffefe587efe591b969eb3f2f25c405fbe204dfc775dd531250e68",
+ "estimated_filament_g": 54.54,
+ "estimated_time": "4h36m54s plus preparation",
+ "material_profile": "Flashforge Generic PLA",
+ "layers": 178,
+ "supports": "DISABLED",
+ "bed_levelling": true,
+ "printed_parts": [
+  "poe-base",
+  "bare-base",
+  "poe-lid",
+  "bare-lid"
+ ],
+ "housing_dimensions_mm": {
+  "poe": [
+   84.55,
+   38.0,
+   40.2
+  ],
+  "bare": [
+   84.55,
+   38.0,
+   19.2
+  ]
+ },
+ "hardware": "Per box: four M3x8 case screws and four RX-M3x5.7 lid inserts. PoE box also uses the Radxa-supplied four M2.5x14.5 insulated copper pillars and eight CM2.5x4 screws; the bare box leaves its mounting holes empty and shrouded.",
+ "instructions": "assembly.pdf",
+ "assembly_pdf_sha256": "74974546cecb927b13f6c93e58393c2eb0d3dc7f0d460c10f1ae8f7cb814b6a5",
+ "design_source_sha256": {
+  "build.py": "50e09e9d6a903727bf2476a201b0925e29c13fd2e1e223c10625baa54cd5b5b8",
+  "check_access.py": "045acd527bbc7affbdcf0735893888fe3c424a58f157c609c68c810d454df4d6",
+  "check_joint.py": "83991ad633674ba5845846797fea7e5e2a4b9f9faea7e51a382f28a5cb67fc42",
+  "check_toolpaths.py": "d93872686e8f46cb176f2f4edf439d92853c3b0a85f2da259d612823879dfd60",
+  "document.py": "bb36b0dc34a00562e109ab50dc846761aaf2a679f386be4055c9d6b750de33cd",
+  "hardware.json": "236af6bf61217e01a76747119924036bde6d3f1593d91dd277244e3a0d8bef1e",
+  "housing.scad": "772e851ef716a71eda26b2f1ba0d15661d68af57f72c1bc4a2c77dc89ac54455",
+  "reference_envelopes.scad": "aed5d560aa6691d4929b998083bf361255288e12394a7b7f85c571348dbbd539"
+ },
+ "assembly_packet_sha256": "a6801ee384b5588d312678d49ddabf653208e8fd2f556a42e3818ec0e94ec83c",
+ "assembly_release_sha256": "7ca6e2661e3c52ac2de844b84d71946421a4f3d4f7e9a93188667d7c22718344",
+ "assembly_review_sha256": "b8358c2a7035025cd32669e1a82f0503aa50f90621a9dc460457568da769b543",
+ "independent_reviewer": "r8_cold_design_independent",
+ "review_history": "First R8 independent review FAILED on hollow lid insert bosses under wall_loops=2/15% infill and bare_fins board-float collisions with micro-HDMI and 40-pin GPIO. Fixed with 2.70 mm outer walls, open-top vertical perimeter-forcing seams around all 8 insert bosses (0 sparse-infill layers in G-code), relocated float-proof bare_fins, tightened +/-0.27 mm RJ45 cradle, and all 6 minor notes; second independent review PASS across all 7 required checks.",
+ "approval_result": "PASS",
+ "approval_sha256": "f48b42a18fc979439e41bd90849bb261e386ec54b4b83470297f2988367b6f46",
+ "geometry_advisory": "PASS at approval (527 poses, 1008 pair measurements, 0 collisions, 0 gaps under 0.1 mm, 3.8 s)",
+ "dispatch_attempted": true,
+ "dispatch_attempt_count": 1,
+ "dispatch_outcome": "STARTED_AND_FILENAME_VERIFIED",
+ "submitted_at": "2026-11-25T21:13:02Z",
+ "acknowledged_at": "2026-11-25T21:13:23Z",
+ "physical_validation": "NOT RUN",
+ "physical_test_scope": "Unloaded shell fit and seam gap 0.15-0.45 mm; heat-set insert squareness and screw fit with no shelf or post-ring movement; measured RA023 HAT gap 14.2-14.8 mm else reprint only PoE lid; complete electronics installation; USB3/OTG and top-latch RJ45 cable seating; ten service cycles; sustained open vs closed powered cooling (<= 45 C PLA limit).",
+ "dispatch_ledger": {
+  "path": "lacuna/tools/print/dispatch-log.jsonl",
+  "matching_rows_sha256": "49084c709d7920d2ff076e425806b5f2c42fbe0561882fc0c400068a3d97c7d3",
+  "matching_row_count": 2,
+  "matching_rows_sha256_method": "Exact matching UTF-8 JSONL bytes in ledger order, including LF."
+ },
+ "repeat_policy": "One authorized start consumed. Reconcile this job; never automatically resend or reauthorize."
+}

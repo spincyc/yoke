@@ -1,0 +1,105 @@
+{
+  "schema": "yoke.housing-validation/1",
+  "revision": "R8",
+  "scope": "Hardened compact PoE (device side, 14.5 mm official RA023 pillars) and bare (computer side, host USB-C OTG) housing first articles on one plate; physical fit, cable seating, service cycles and powered cooling remain NOT RUN.",
+  "owner_direction": "2026-11-25: Review and fix the 3D printed housing for the Radxa ZERO 3E with and without the Ethernet PoE HAT, then print one PoE and one bare housing in a single 3D print on the ready printer.",
+  "revision_history": [
+    "2026-11-25 pre-print mechanical, electrical-safety, and printability audit of R7 identified 3 blockers (18 mm CAD gap vs shipped 14.5 mm RA023 pillars, r=4.3 mm lid seat recesses cutting through exterior corner walls, and roof/side vents exposing live 48-57 V corner mounts and bare 40-pin GPIO) plus 8 major defects.",
+    "2026-11-25 first R8 packet failed independent cold review (r8_cold_design_independent) on two real defects: (1) under Lacuna's frozen wall_loops=2 / 15% sparse infill profile, lid insert bosses had only 0.49-0.55 mm solid PLA outside the 4.6 mm RX-M3x5.7 insert OD across 86% of insert length; (2) bare-lid retention ribs collided with micro-HDMI (+0.30 mm) and worst-case 5.08 mm 40-pin GPIO (+0.16..0.40 mm) inside permitted XY board float.",
+    "2026-11-25 second R8 packet fixed both blockers and all 6 minor notes: expanded outer walls to 2.70 mm (5.00 mm corner inset) with three 60-deg x 0.12 mm open-top vertical perimeter-forcing seams (r=3.92..4.04 mm, z=4.6..12.6) yielding 4 solid concentric wall rings (0 sparse-infill layers, >=60.18 mm solid toolpath/layer in r=2.30..3.90 mm) across all 8 insert bosses; relocated bare_fins front ribs (>=4.30 mm from micro-HDMI, >=4.67 mm from USB3) and rear ribs (y=29.50..30.60 with +/-0.27 mm RJ45 cradle) passing 27 9-pose board-float checks; widened Z=3.8 square bridge to 3.4x3.4 mm; set bare_height=19.2 mm (exact 73 layers); expanded usb_window bottom to z=3.7 mm; cleared Mount 4 dia-8 reserve by 0.10 mm; passed independent cold review across all 7 required checks."
+  ],
+  "dimensions_mm": {
+    "poe": [
+      84.55,
+      38.0,
+      40.2
+    ],
+    "bare": [
+      84.55,
+      38.0,
+      19.2
+    ],
+    "r7_poe": [
+      81.4,
+      36.25,
+      41.7
+    ],
+    "r6_poe": [
+      89.0,
+      45.5,
+      46.0
+    ]
+  },
+  "plate_sha256": "d91be3e78a6da9df86ebed6c2987f1cd3de6b3bf8379df89bafffea27ebfe4c8",
+  "gcode_sha256": "4007550808038ad562aa9e47d1e1f37599e00713d2ad7c747799d8ca48698006",
+  "toolpath_sha256": "16c4576d6feffefe587efe591b969eb3f2f25c405fbe204dfc775dd531250e68",
+  "packet_sha256": "a6801ee384b5588d312678d49ddabf653208e8fd2f556a42e3818ec0e94ec83c",
+  "release_sha256": "7ca6e2661e3c52ac2de844b84d71946421a4f3d4f7e9a93188667d7c22718344",
+  "approval_sha256": "f48b42a18fc979439e41bd90849bb261e386ec54b4b83470297f2988367b6f46",
+  "estimate": {
+    "filament_g": 54.54,
+    "time": "4h36m54s plus preparation",
+    "layers": 178,
+    "profile": "OrcaSlicer 2.4.2, Flashforge Adventurer 5M 0.4, 0.20mm Standard, Flashforge Generic PLA, supports disabled"
+  },
+  "physical_validation": "NOT RUN",
+  "checks": [
+    {
+      "id": "case_screw_joint",
+      "result": "PASS",
+      "record_sha256": "ecabeb3fa045fa368f0a749760e809dd541162bb303ea7482eb7379caf9485cf",
+      "method": "check_joint.py sections the base at every 0.20 mm printed layer from Z 3.4 to Z 4.6 across all 4 axes: 2 bridge layers followed by 4 fused full layers with solid ring r=1.9..3.8 mm; flat seat contact between base post ring (OD 8.5 mm) and lid post face (OD 8.1 mm with r=3.92..4.04 perimeter seams) is >= 34.94 mm2 per post with 0.000 mm2 lid material below Z 4.6."
+    },
+    {
+      "id": "screw_seat_and_insert_boss_toolpaths",
+      "result": "PASS",
+      "record_sha256": "d99e8f26ae08ffb61544e60d6eb15572c6da26e224b5c2914be5e8a140ef9e6f",
+      "method": "Exact G-code audit on all 8 base head shelves (Z 3.6 slot bridge, Z 3.8 3.4x3.4 mm square bridge, Z 4.0 corner bridges at 25 mm/s M106 S255, plus 3 zero-bridge solid layers Z 4.2..4.6) AND all 8 lid insert bosses (zero Sparse infill across all 31 insert layers inside r=2.30..3.90 mm, >= 60.18 mm solid concentric extrusion path/layer). Physical bridge and insert pull-out strength remain NOT RUN."
+    },
+    {
+      "id": "access_safety_corner_insert_and_float",
+      "result": "PASS",
+      "record_sha256": "d7692cb56aa7e996ccba334aa7c1e4a97f5e9f76ababaacd4f3d6ab156044a3b",
+      "method": "check_access.py: 138/138 PASS — 15x10 mm USB-C overmold sweeps, +1.55 mm top-latch RJ45 sweeps, nominal & expanded microSD allowances, full-height dia-8.0 conductive keepouts across all 3 printed parts (0.000 mm3 overlap), solid roof shrouding over all 4 live 48-57 V mounts and bare 40-pin GPIO (y>=22.0), continuous >=0.90 mm outer 2-loop corner skins on all 8 lid corners, >=1.6 mm nominal insert walls, 360-deg head-well walls, every vent open through all walls (1238.1 mm2 PoE / 742.2 mm2 bare), and 27 9-pose XY board-float collision checks (0.000 mm3 overlap against sbc-ref, worst-case 5.08 mm 2x20 GPIO, and PoE stack)."
+    },
+    {
+      "id": "mesh_and_gcode",
+      "result": "PASS",
+      "record_sha256": "5e1b72dc4c219d3fccb3986e8c3048a482ca05dc70f16640aab30a5a2ecc0e98",
+      "method": "Lacuna slice and prepared-job preflight: 4 closed two-manifold BED_SUPPORTED bodies, exact STL-to-G-code layer heights (base 29, bare-lid 73, poe-lid 178 layers), supports disabled, 0 layer-support violations, exact mesh/job and 140x110 thumbnail binding."
+    },
+    {
+      "id": "sampled_assembly",
+      "result": "PASS",
+      "record_sha256": "3ef8511486771b0b788f97dd08d486c43070f378cc5c99113265a7d4bb4cd334",
+      "method": "Lacuna tools.geometry.sampled on geometry-plan.json (sha256 839cb53a4ac48734315783fdfda572163749efbc39433c0812d24e18c7402141): 23 manifold instances (0 unreadable), 8 assembly motion paths, 527 poses, 1008 pair measurements, 0 collisions, 0 near warnings (<0.1 mm), 0 errors."
+    },
+    {
+      "id": "printable_guide",
+      "result": "PASS",
+      "record_sha256": "da23b08470e5543ea180523627ad03c76b71305eadb25c27674a38220ef8a550",
+      "method": "Six monochrome Letter pages (612x792 pt, >=18 pt margins) generated from exact R8 STL meshes and nominal reference envelopes; independently inspected at 150 dpi grayscale and byte-matched against fresh pdftoppm output by Lacuna approve."
+    },
+    {
+      "id": "lacuna_approval",
+      "result": "PASS",
+      "record_sha256": "f48b42a18fc979439e41bd90849bb261e386ec54b4b83470297f2988367b6f46",
+      "method": "python3 -m tools.print approve validated all 48 bound packet/review files, exact 1-to-1 plate triangle identity, freshly rendered monochrome PDF page hashes, and advisory sampled geometry (PASS, 0 collisions, 0 near warnings)."
+    }
+  ],
+  "limits": [
+    "Nominal RA023 HAT spacing follows Radxa's shipped 4 x M2.5 x 14.5 mm copper pillars (hat_gap = 14.5 mm, 3.0 mm roof clearance). Accept measured facing PCB gap 14.2-14.8 mm; otherwise adjust hat_gap and reprint only the PoE lid.",
+    "Retention: SBC rests on six edge pads (Z 5.8) and lid ribs stop 0.4 mm above component-free top edges without clamping PCBs or loading the conductive pillars.",
+    "Acceptance after snugging: seam shadow gap 0.15-0.45 mm on every side; screw heads at or below floor; zero shelf, insert, or post movement.",
+    "Never connect both PoE and USB-C power simultaneously on a PoE-equipped board; leave bare box corner mounting holes empty and shrouded.",
+    "No digital check establishes printed tolerance, thread/insert pull-out strength, cable seating, service durability, or powered PLA thermal margin."
+  ],
+  "independent_cold_review": {
+    "result": "PASS",
+    "reviewer": "r8_cold_design_independent",
+    "review_sha256": "b8358c2a7035025cd32669e1a82f0503aa50f90621a9dc460457568da769b543",
+    "scope": "PREPRINT_ASSEMBLY_REVIEW",
+    "physical_validation": "NOT RUN",
+    "prior": "First R8 packet failed independent review on hollow insert bosses under wall_loops=2/15% infill and bare_fins float collisions; second R8 packet resolved both blockers and all 6 minor notes and passed all 7 required checks."
+  }
+}

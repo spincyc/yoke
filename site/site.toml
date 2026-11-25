@@ -392,9 +392,20 @@ listed = false
 [[pages]]
 source = "hardware/usb-housing/r7/README.md"
 output = "hardware/usb-housing-r7.html"
-title = "USB housings R7"
+title = "USB housings R7 — superseded"
 section = "Hardware"
-summary = "Compact PoE (device side) and bare (computer side) ZERO 3E first articles sharing one base; physical fit and cooling remain untested."
+summary = "Compact PoE and bare ZERO 3E first articles superseded by R8 on 2026-11-25. Do not print."
+layout = "docs"
+nav = "docs"
+parent = "engineering/index.html"
+listed = false
+
+[[pages]]
+source = "hardware/usb-housing/r8/README.md"
+output = "hardware/usb-housing-r8.html"
+title = "USB housings R8"
+section = "Hardware"
+summary = "Hardened compact PoE (14.5 mm pillars, device side) and bare (computer side) ZERO 3E first articles sharing one base; physical fit and cooling remain untested."
 layout = "docs"
 nav = "docs"
 parent = "engineering/index.html"
