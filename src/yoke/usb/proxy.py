@@ -1151,9 +1151,15 @@ class Proxy:
             self._reset_done.set()
             self._notify_events()
 
-    def _start(self, pumps: list[_Pump]) -> None:
+    def _register(self, pumps: list[_Pump]) -> None:
         for pump in pumps:
             self._pumps[pump.address] = pump
+
+    def _start(self, pumps: list[_Pump]) -> None:
+        self._register(pumps)
+        if self._stopping:
+            return
+        for pump in pumps:
             pump.thread.start()
 
     def _set_configuration(self, setup: Setup, value: int) -> None:
@@ -1188,8 +1194,13 @@ class Proxy:
             self.state = "configured"
         else:
             self.state = "addressed"
-        self._start(pumps)
+        # Register pumps and acknowledge ep0 before spawning pump threads:
+        # hardware endpoints are already enabled and configured, and keeping
+        # Python thread startup out of the status stage avoids burning the
+        # 50 ms §9.2.6.4 budget.
+        self._register(pumps)
         self._ep0(lambda: self.backend.ep0_read(0))
+        self._start(pumps)
 
     def _set_interface(self, setup: Setup, number: int, alternate: int) -> None:
         self._must_finish = True
@@ -1222,5 +1233,6 @@ class Proxy:
             self._stall("UDC endpoint enable failed")
             return
         self._control.alternates[number] = alternate
-        self._start(pumps)
+        self._register(pumps)
         self._ep0(lambda: self.backend.ep0_read(0))
+        self._start(pumps)
