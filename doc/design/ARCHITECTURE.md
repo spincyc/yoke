@@ -159,6 +159,7 @@ src/yoke/
     demo.py      synthetic offline samples
     cli.py       metrics/top command adapters
   config.py      per-agent TOML validation and shared PSK loading/resolution
+  control.py     shared control intents (pair/unpair/reapply), sorting, and inspection
   statefile.py   exclusive local lease and atomic durable state replacement
   simulation.py installed deterministic software fault campaign
   cli.py         yoke operator commands and injected intent/status/snoop helpers
@@ -187,10 +188,11 @@ site/            documentation template, navigation, and static assets
 
 | Entry point | Implementation | Boundary |
 |---|---|---|
-| `yoke pair`, `unpair`, `status`, `snoop` | `yoke.cli` | Short-lived control client or passive observer |
+| `yoke pair`, `unpair`, `reapply`, `status`, `inspect`, `snoop` | `yoke.cli` + `yoke.control` | Short-lived control client or passive observer |
 | `yoke agent` | `yoke.net.runner` + `yoke.drivers.factory` | One endpoint's control runtime and backend |
 | `yoke simulate` | `yoke.simulation` | Installed deterministic control fault campaign |
-| `yoke metrics`, `top` | `yoke.telemetry.cli` | Optional read-only observation and host sampling |
+| `yoke metrics` | `yoke.telemetry.cli` | Optional strictly read-only observation and host sampling |
+| `yoke top` | `yoke.telemetry.cli` + `yoke.control` | Interactive terminal monitor and read/write control console (ADR 0031) |
 | `yoke-media` | `yoke.media.cli` | Separate synthetic reference media tools |
 | `python -m yoke.update` | `yoke.update` | Explicit offline Linux release operations |
 | `python firmware/verify.py` | `firmware/verify.py` | Software verification of the separate firmware projects |

@@ -10,7 +10,7 @@ from dataclasses import dataclass, field, replace
 
 from yoke.core.types import CONTROL_GROUP, CONTROL_PORT, MAX_FRAME_BYTES
 from yoke.net.mcast import open_multicast_socket, validate_multicast
-from yoke.telemetry.collector import TelemetryCollector
+from yoke.telemetry.collector import DebugContext, TelemetryCollector
 from yoke.telemetry.host import HostSampler
 from yoke.telemetry.http import SnapshotCache
 from yoke.telemetry.model import Snapshot
@@ -60,6 +60,7 @@ class Monitor:
         self._sock: socket.socket | None = None
         self._collector: TelemetryCollector | None = None
         self._cache: SnapshotCache | None = None
+        self._debug: DebugContext = DebugContext()
         self._error: Exception | None = None
         self._started_at = 0.0
         self._published_at = 0.0
@@ -98,17 +99,20 @@ class Monitor:
 
     def _publish(self, now: float) -> None:
         if self.config.demo:
-            from yoke.telemetry.demo import demo_snapshot
+            from yoke.telemetry.demo import demo_debug_context, demo_snapshot
 
             sample = demo_snapshot(now - self._started_at)
+            debug = demo_debug_context(sample)
         else:
             assert self._collector is not None
             sample = self._collector.snapshot(now, self._sampler.sample(now))
+            debug = self._collector.debug_context(now)
         sample = replace(sample, sample_interval_seconds=self.config.interval)
         if self._cache is None:
             self._cache = SnapshotCache(sample)
         else:
             self._cache.update(sample)
+        self._debug = debug
         self._published_at = now
 
     def _run(self) -> None:
@@ -147,6 +151,10 @@ class Monitor:
         if time.monotonic() - self._published_at > max(3 * self.config.interval, 3):
             raise OSError("telemetry collection is stale")
         return self.cache.snapshot()
+
+    def debug_context(self) -> DebugContext:
+        """Return the latest immutable inspect/log context without blocking."""
+        return self._debug
 
     def close(self) -> None:
         self._stop.set()

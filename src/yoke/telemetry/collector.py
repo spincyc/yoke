@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import math
+from collections import deque
 from dataclasses import dataclass, field
+from typing import Any
 
+from yoke.control import inspect_node_data
 from yoke.core.types import PEER_FORGET, PEER_TIMEOUT, Body, FrameType
-from yoke.snoop import Snooper, SnoopRecord
+from yoke.snoop import Snooper, SnoopRecord, render_text
 from yoke.telemetry.model import (
     EVENTS,
     MAX_COUNTER,
@@ -15,6 +18,16 @@ from yoke.telemetry.model import (
     DeviceSnapshot,
     Snapshot,
 )
+
+LOG_HISTORY_LENGTH = 64
+
+
+@dataclass(frozen=True)
+class DebugContext:
+    """Immutable debug details for TUI inspect/log views, separate from HTTP export."""
+
+    nodes: dict[str, dict[str, Any]] = field(default_factory=dict)
+    log: tuple[str, ...] = ()
 
 
 @dataclass
@@ -37,11 +50,13 @@ class TelemetryCollector:
     def __init__(self, psk: bytes, *, now: float, wall_time: float) -> None:
         self._validate_now(now)
         self._validate_now(wall_time)
+        self._psk = psk
         self._snooper = Snooper(psk, now=now, wall_time=wall_time)
         self._authentication = "site-psk" if psk else "open-unauthenticated"
         self._started = now
         self._now = now
         self._counters: dict[str, _Counters] = {}
+        self._recent_log: deque[str] = deque(maxlen=LOG_HISTORY_LENGTH)
 
     def observe(
         self, raw: bytes, now: float, *, wall: float | None = None
@@ -54,6 +69,7 @@ class TelemetryCollector:
         self._advance(now)
         records = self._snooper.observe(raw, now, wall=wall)
         for record in records:
+            self._recent_log.append(render_text(record))
             frame = record.frame
             if record.verdict != "ok" or frame is None:
                 continue
@@ -125,6 +141,17 @@ class TelemetryCollector:
             },
             host=host,
         )
+
+    def debug_context(self, now: float) -> DebugContext:
+        """Return detached per-node inspection dicts and recent log lines."""
+        self._advance(now)
+        self._snooper.topology(now)
+        nodes: dict[str, dict[str, Any]] = {}
+        for node_id in sorted(self._snooper.nodes):
+            info = inspect_node_data(self._snooper, node_id, now, psk=self._psk)
+            if info is not None:
+                nodes[node_id] = info
+        return DebugContext(nodes=nodes, log=tuple(self._recent_log))
 
     def _retain_counters(self) -> None:
         self._counters = {

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import math
+from typing import Any
 
+from yoke.telemetry.collector import DebugContext
 from yoke.telemetry.model import DeviceSnapshot, Snapshot
 
 
@@ -135,3 +137,64 @@ def demo_snapshot(now: float) -> Snapshot:
             "uptime_seconds": 18_000 + elapsed,
         },
     )
+
+
+def demo_debug_context(snapshot: Snapshot) -> DebugContext:
+    """Build synthetic inspection and log views matching a demo snapshot."""
+    nodes: dict[str, dict[str, Any]] = {}
+    media_by_id: dict[str, dict[str, Any]] = {
+        "camera-east": {"group": "239.10.0.1", "port": 5004},
+        "usb-desk": {"host": "192.0.2.20", "port": 3240, "busids": ["1-1.2"]},
+    }
+    log_lines: list[str] = []
+    for device in snapshot.devices:
+        paired_consumers = (
+            sorted(
+                peer.node_id
+                for peer in snapshot.devices
+                if peer.role == "consumer" and peer.pairing_producer == device.node_id
+            )
+            if device.role == "producer"
+            else []
+        )
+        nodes[device.node_id] = {
+            "schema_version": 1,
+            "authentication": "demo",
+            "node": {
+                "id": device.node_id,
+                "role": device.role,
+                "kind": device.kind,
+                "name": device.name,
+                "state": device.state,
+                "live": device.live,
+                "stale": not device.live,
+                "age_seconds": round(device.last_seen_age_seconds, 6),
+                "err": None,
+                "driver_status": (
+                    {"detail": device.driver_detail}
+                    if device.driver_detail is not None
+                    else None
+                ),
+                "pairing": (
+                    {
+                        "producer": device.pairing_producer,
+                        "version": [1, "demo-cli"]
+                        if device.pairing_producer
+                        else [0, ""],
+                    }
+                    if device.role == "consumer"
+                    else None
+                ),
+                "media": media_by_id.get(device.node_id),
+                "paired_consumers": paired_consumers,
+                "last_intent": None,
+            },
+            "counts": dict(snapshot.observer),
+        }
+        summary = f"{device.role}/{device.kind} state={device.state}"
+        if device.pairing_producer:
+            summary += f" pairing={device.pairing_producer}@[1,demo-cli]"
+        log_lines.append(
+            f"+{snapshot.uptime_seconds:8.3f}s {device.node_id:<16} ann  {summary}"
+        )
+    return DebugContext(nodes=nodes, log=tuple(log_lines))

@@ -1,21 +1,26 @@
-"""A small, ASCII-safe terminal monitor over read-only telemetry snapshots.
+"""ASCII-safe terminal monitor and interactive control console for Yoke.
 
 Rendering never samples or performs I/O. The interactive shell samples on its
-own deadline; keyboard input and terminal resizes only redraw the current view.
+own deadline, dispatches at most one background control intent at a time when
+writable (ADR 0031), and redraws cleanly on input, resize, or completion.
 """
 
 from __future__ import annotations
 
 import math
+import queue
 import sys
+import threading
 import time
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field
 from types import ModuleType
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
+from yoke.control import drop_summary, render_inspect_text
+from yoke.telemetry.collector import DebugContext
 from yoke.telemetry.model import DeviceSnapshot, Snapshot
 
 if TYPE_CHECKING:
@@ -24,6 +29,43 @@ if TYPE_CHECKING:
 HISTORY_LENGTH = 120
 SORT_KEYS = ("name", "type", "state", "age")
 _SPARKS = " .:-=+*#%@"
+
+ActionOp = Literal["pair", "unpair", "unpair-producer", "reapply"]
+
+
+@dataclass(frozen=True)
+class ActionRequest:
+    """One control-plane write requested interactively by the operator."""
+
+    op: ActionOp
+    target: str
+    producer: str | None = None
+
+    def label(self) -> str:
+        if self.op == "pair":
+            return f"pair {self.producer} -> {self.target}"
+        if self.op == "unpair-producer":
+            return f"unpair consumers of {self.target}"
+        if self.op == "reapply":
+            return f"reapply {self.target}"
+        return f"unpair {self.target}"
+
+
+@dataclass(frozen=True)
+class ActionResult:
+    """Bounded human-readable outcome of one interactive control write."""
+
+    ok: bool
+    summary: str
+
+
+@dataclass(frozen=True)
+class ControlCallbacks:
+    """Injected control-plane write capability; omitted/unwritable stays RO."""
+
+    writable: bool = False
+    readonly_reason: str | None = "read-only mode"
+    execute: Callable[[ActionRequest], ActionResult] | None = None
 
 
 def _safe(value: object) -> str:
@@ -131,13 +173,26 @@ def source_progress(
 
 @dataclass
 class ViewState:
-    """Interaction state and four bounded histories, independent of redraws."""
+    """Interaction state, modals, and four bounded histories, independent of redraws."""
 
     selected_node_id: str | None = None
     sort_index: int = 0
     paused: bool = False
     show_help: bool = False
     source_error: str | None = None
+    writable: bool = False
+    readonly_reason: str | None = None
+    modal: str = ""
+    picker_role: str = ""
+    picker_anchor_id: str = ""
+    picker_candidates: tuple[str, ...] = ()
+    picker_index: int = 0
+    confirm_prompt: str = ""
+    confirm_request: ActionRequest | None = None
+    pending_action: ActionRequest | None = None
+    action_in_flight: str | None = None
+    action_status: str | None = None
+    action_ok: bool | None = None
     cpu_history: deque[float | None] = field(
         default_factory=lambda: deque(maxlen=HISTORY_LENGTH)
     )
@@ -221,8 +276,160 @@ class ViewState:
             devices[0] if devices else None,
         )
 
+    def _close_modal(self) -> None:
+        self.modal = ""
+        self.picker_role = ""
+        self.picker_anchor_id = ""
+        self.picker_candidates = ()
+        self.picker_index = 0
+        self.confirm_prompt = ""
+        self.confirm_request = None
+
+    def _guard_write(self, snapshot: Snapshot) -> DeviceSnapshot | None:
+        if not self.writable:
+            self.action_ok = False
+            self.action_status = (
+                self.readonly_reason
+                or "read-only: pass --psk-file (or --open for lab) to send intents"
+            )
+            return None
+        if self.action_in_flight is not None or self.pending_action is not None:
+            self.action_ok = False
+            self.action_status = f"action in progress: {self.action_in_flight or ''}"
+            return None
+        selected = self.selected_device(snapshot)
+        if selected is None:
+            self.action_ok = False
+            self.action_status = "no endpoint selected"
+            return None
+        return selected
+
+    def _open_pair_picker(self, snapshot: Snapshot) -> None:
+        selected = self._guard_write(snapshot)
+        if selected is None:
+            return
+        want_role = "producer" if selected.role == "consumer" else "consumer"
+        peers = [
+            item
+            for item in self.ordered_devices(snapshot)
+            if item.role == want_role
+            and item.kind == selected.kind
+            and item.node_id != selected.node_id
+        ]
+        if not peers:
+            self.action_ok = False
+            self.action_status = (
+                f"no compatible {want_role} of kind {selected.kind} observed"
+            )
+            return
+        self.modal = "pair_pick"
+        self.picker_role = selected.role
+        self.picker_anchor_id = selected.node_id
+        self.picker_candidates = tuple(item.node_id for item in peers)
+        self.picker_index = 0
+        if selected.role == "consumer" and selected.pairing_producer in (
+            self.picker_candidates
+        ):
+            self.picker_index = self.picker_candidates.index(selected.pairing_producer)
+
+    def _open_unpair_confirm(self, snapshot: Snapshot) -> None:
+        selected = self._guard_write(snapshot)
+        if selected is None:
+            return
+        if selected.role == "consumer":
+            if not selected.pairing_producer:
+                self.action_ok = False
+                self.action_status = f"{selected.node_id} is already unpaired"
+                return
+            self.modal = "confirm"
+            self.confirm_prompt = (
+                f"Unpair {selected.node_id} from {selected.pairing_producer}? [y/N]"
+            )
+            self.confirm_request = ActionRequest(op="unpair", target=selected.node_id)
+            return
+        attached = [
+            item.node_id
+            for item in snapshot.devices
+            if item.role == "consumer" and item.pairing_producer == selected.node_id
+        ]
+        if not attached:
+            self.action_ok = False
+            self.action_status = f"no consumers paired to {selected.node_id}"
+            return
+        self.modal = "confirm"
+        self.confirm_prompt = (
+            f"Unpair {len(attached)} consumer(s) from {selected.node_id}? [y/N]"
+        )
+        self.confirm_request = ActionRequest(
+            op="unpair-producer", target=selected.node_id
+        )
+
+    def _open_reapply_confirm(self, snapshot: Snapshot) -> None:
+        selected = self._guard_write(snapshot)
+        if selected is None:
+            return
+        if selected.role != "consumer":
+            self.action_ok = False
+            self.action_status = "reapply targets a consumer (select a consumer)"
+            return
+        current = selected.pairing_producer or "unpaired"
+        self.modal = "confirm"
+        self.confirm_prompt = (
+            f"Re-apply {selected.node_id} ({current}) at next version? [y/N]"
+        )
+        self.confirm_request = ActionRequest(op="reapply", target=selected.node_id)
+
     def handle_key(self, key: str, snapshot: Snapshot) -> bool:
         """Apply normalized keys; return false when the operator quits."""
+        view_snapshot = self.display_snapshot(snapshot)
+        if self.modal == "pair_pick":
+            if key in ("escape", "n", "N", "q", "Q"):
+                self._close_modal()
+                return True
+            if key in ("up", "k") and self.picker_candidates:
+                self.picker_index = max(0, self.picker_index - 1)
+            elif key in ("down", "j") and self.picker_candidates:
+                self.picker_index = min(
+                    len(self.picker_candidates) - 1, self.picker_index + 1
+                )
+            elif key in ("enter", "y", "Y") and self.picker_candidates:
+                choice = self.picker_candidates[self.picker_index]
+                if self.picker_role == "consumer":
+                    req = ActionRequest(
+                        op="pair", target=self.picker_anchor_id, producer=choice
+                    )
+                else:
+                    req = ActionRequest(
+                        op="pair", target=choice, producer=self.picker_anchor_id
+                    )
+                self.pending_action = req
+                self._close_modal()
+            return True
+
+        if self.modal == "confirm":
+            if key in ("y", "Y", "enter") and self.confirm_request is not None:
+                self.pending_action = self.confirm_request
+                self._close_modal()
+            elif key in ("n", "N", "escape", "q", "Q"):
+                self._close_modal()
+            return True
+
+        if self.modal in ("inspect", "log"):
+            if key in ("q", "Q"):
+                return False
+            if key == "escape":
+                self._close_modal()
+                return True
+            if self.modal == "inspect" and key in ("i", "enter"):
+                self._close_modal()
+                return True
+            if self.modal == "log" and key == "l":
+                self._close_modal()
+                return True
+            if key in ("up", "down", "j", "k") and self.modal == "inspect":
+                self._move_selection(key, view_snapshot)
+            return True
+
         if key in ("q", "Q", "escape"):
             return False
         if key == " ":
@@ -230,19 +437,37 @@ class ViewState:
         elif key == "?":
             self.show_help = not self.show_help
         elif key == "s":
-            selected = self.selected_device(self.display_snapshot(snapshot))
+            selected = self.selected_device(view_snapshot)
             if selected is not None:
                 self.selected_node_id = selected.node_id
             self.sort_index = (self.sort_index + 1) % len(SORT_KEYS)
         elif key in ("up", "down", "j", "k"):
-            devices = self.ordered_devices(self.display_snapshot(snapshot))
-            selected = self.selected_device(self.display_snapshot(snapshot))
-            if selected is not None:
-                position = devices.index(selected)
-                step = 1 if key in ("down", "j") else -1
-                position = max(0, min(len(devices) - 1, position + step))
-                self.selected_node_id = devices[position].node_id
+            self._move_selection(key, view_snapshot)
+        elif key in ("i", "enter"):
+            self.show_help = False
+            self.modal = "inspect"
+        elif key == "l":
+            self.show_help = False
+            self.modal = "log"
+        elif key == "p":
+            self.show_help = False
+            self._open_pair_picker(view_snapshot)
+        elif key == "u":
+            self.show_help = False
+            self._open_unpair_confirm(view_snapshot)
+        elif key == "r":
+            self.show_help = False
+            self._open_reapply_confirm(view_snapshot)
         return True
+
+    def _move_selection(self, key: str, snapshot: Snapshot) -> None:
+        devices = self.ordered_devices(snapshot)
+        selected = self.selected_device(snapshot)
+        if selected is not None:
+            position = devices.index(selected)
+            step = 1 if key in ("down", "j") else -1
+            position = max(0, min(len(devices) - 1, position + step))
+            self.selected_node_id = devices[position].node_id
 
 
 class _Canvas:
@@ -492,11 +717,13 @@ def _detail(
     )
     if height >= 5:
         event_count = sum(item.events.values())
+        drops = drop_summary(snapshot.observer)
+        drop_suffix = f" / drops: {drops}" if drops else ""
         canvas.put(
             2,
             y + 3,
             f"CONTROL: {item.control_frames} frames / {_bytes(item.control_bytes)} / "
-            f"{event_count} events (observed)",
+            f"{event_count} events (observed){drop_suffix}",
             width,
         )
     if height >= 6:
@@ -517,19 +744,30 @@ def _detail(
         )
 
 
-def _help(canvas: _Canvas) -> None:
+def _help(canvas: _Canvas, state: ViewState) -> None:
+    access = (
+        "Mode: READ/WRITE (sends signed YWP/1 intents)"
+        if state.writable
+        else f"Mode: READ-ONLY ({state.readonly_reason or 'writes disabled'})"
+    )
     lines = (
-        "q / Esc       quit",
+        "q / Esc       quit (Esc closes active modal)",
         "arrows / j k  select endpoint",
         "s             cycle name/type/state/age",
         "space         pause display; collection runs",
+        "i / Enter     inspect selected endpoint (CLI: inspect)",
+        "l             control-plane frame log (CLI: snoop)",
+        "p             pair or switch route (CLI: pair)",
+        "u             unpair consumer/producer (CLI: unpair)",
+        "r             re-apply pairing intent (CLI: reapply)",
         "?             close help",
         "",
+        access,
         "Host graphs describe the COLLECTOR HOST.",
         "NIC bytes differ from YWP CONTROL bytes.",
         "Active backend state does not prove media.",
     )
-    width = min(canvas.width, 62)
+    width = min(canvas.width, 66)
     height = min(canvas.height, len(lines) + 2)
     x, y = (canvas.width - width) // 2, (canvas.height - height) // 2
     canvas.box(x, y, width, height, "KEYS / OBSERVATION SCOPE")
@@ -537,8 +775,134 @@ def _help(canvas: _Canvas) -> None:
         canvas.put(x + 2, y + index + 1, line, width - 4)
 
 
+def _inspect_overlay(
+    canvas: _Canvas,
+    snapshot: Snapshot,
+    state: ViewState,
+    debug: DebugContext | None,
+) -> None:
+    selected = state.selected_device(snapshot)
+    lines: list[str] = []
+    if selected is None:
+        lines.append("No endpoint selected.")
+    else:
+        record = debug.nodes.get(selected.node_id) if debug is not None else None
+        if record is not None:
+            lines.extend(render_inspect_text(record).splitlines())
+        else:
+            status_label = "live" if selected.live else "stale"
+            lines.extend(
+                [
+                    f"ID:      {selected.node_id}",
+                    f"Name:    {selected.name}",
+                    f"Role:    {selected.role} ({selected.kind})",
+                    f"State:   {selected.state} ({status_label}, "
+                    f"age {selected.last_seen_age_seconds:.1f}s)",
+                    f"Pairing: {selected.pairing_producer or 'unpaired'}",
+                    f"Backend: {selected.driver_detail or '(none announced)'}",
+                ]
+            )
+            drops = drop_summary(snapshot.observer)
+            if drops:
+                lines.append(f"Drops:   {drops}")
+        if selected.events:
+            summary = ", ".join(
+                f"{name}={count}" for name, count in sorted(selected.events.items())
+            )
+            lines.append(f"Events:  {summary}")
+        else:
+            lines.append("Events:  none observed")
+        lines.append("")
+        lines.append("Esc/i close   arrows/jk switch endpoint   q quit")
+    width = min(canvas.width, max(54, canvas.width - 6))
+    height = min(canvas.height, len(lines) + 2)
+    x, y = (canvas.width - width) // 2, (canvas.height - height) // 2
+    title = (
+        f"INSPECT / {selected.node_id}" if selected is not None else "INSPECT / none"
+    )
+    canvas.box(x, y, width, height, title)
+    for index, line in enumerate(lines[: max(0, height - 2)]):
+        canvas.put(x + 2, y + index + 1, line, width - 4)
+
+
+def _log_overlay(
+    canvas: _Canvas, snapshot: Snapshot, debug: DebugContext | None
+) -> None:
+    verdicts = " ".join(
+        f"{k}={v}" for k, v in sorted(snapshot.observer.items()) if v > 0
+    )
+    header = f"Verdicts: {verdicts or 'none'}   (Esc/l close, q quit)"
+    entries = list(debug.log) if debug is not None else []
+    width = min(canvas.width, max(60, canvas.width - 4))
+    height = min(canvas.height, max(8, canvas.height - 4))
+    x, y = (canvas.width - width) // 2, (canvas.height - height) // 2
+    canvas.box(x, y, width, height, "CONTROL LOG (CLI: yoke snoop)")
+    canvas.put(x + 2, y + 1, header, width - 4)
+    body_rows = max(0, height - 3)
+    if not entries:
+        if body_rows > 0:
+            canvas.put(x + 2, y + 2, "No control frames captured yet.", width - 4)
+        return
+    visible = entries[-body_rows:] if body_rows else []
+    for index, line in enumerate(visible):
+        canvas.put(x + 2, y + 2 + index, line, width - 4)
+
+
+def _pair_picker_overlay(canvas: _Canvas, snapshot: Snapshot, state: ViewState) -> None:
+    by_id = {item.node_id: item for item in snapshot.devices}
+    anchor = by_id.get(state.picker_anchor_id)
+    target_role = "producer" if state.picker_role == "consumer" else "consumer"
+    lines = [
+        f"Anchor: {state.picker_anchor_id} ({state.picker_role}) -> {target_role}:",
+        "",
+    ]
+    for index, candidate_id in enumerate(state.picker_candidates):
+        marker = ">" if index == state.picker_index else " "
+        peer = by_id.get(candidate_id)
+        detail = ""
+        if peer is not None:
+            current_tag = ""
+            if (
+                anchor is not None
+                and anchor.role == "consumer"
+                and anchor.pairing_producer == candidate_id
+            ):
+                current_tag = " [current]"
+            elif peer.role == "consumer" and peer.pairing_producer:
+                current_tag = f" [paired->{peer.pairing_producer}]"
+            detail = f" ({peer.state}{current_tag})"
+        lines.append(f"{marker} {candidate_id}{detail}")
+    lines.append("")
+    lines.append("arrows/jk select   Enter/y confirm   Esc/n cancel")
+    width = min(canvas.width, max(54, min(72, canvas.width - 4)))
+    height = min(canvas.height, len(lines) + 2)
+    x, y = (canvas.width - width) // 2, (canvas.height - height) // 2
+    canvas.box(x, y, width, height, "PAIR ROUTE (CLI: yoke pair)")
+    for index, line in enumerate(lines[: max(0, height - 2)]):
+        canvas.put(x + 2, y + index + 1, line, width - 4)
+
+
+def _confirm_overlay(canvas: _Canvas, state: ViewState) -> None:
+    lines = (
+        state.confirm_prompt,
+        "",
+        "y / Enter confirm   n / Esc cancel",
+    )
+    width = min(canvas.width, max(44, min(72, len(state.confirm_prompt) + 6)))
+    height = min(canvas.height, len(lines) + 2)
+    x, y = (canvas.width - width) // 2, (canvas.height - height) // 2
+    canvas.box(x, y, width, height, "CONFIRM CONTROL INTENT")
+    for index, line in enumerate(lines[: max(0, height - 2)]):
+        canvas.put(x + 2, y + index + 1, line, width - 4)
+
+
 def render(
-    snapshot: Snapshot, *, width: int, height: int, state: ViewState
+    snapshot: Snapshot,
+    *,
+    width: int,
+    height: int,
+    state: ViewState,
+    debug: DebugContext | None = None,
 ) -> list[str]:
     """Return an exact-size printable-ASCII canvas without mutating state."""
     canvas = _Canvas(width, height)
@@ -565,12 +929,13 @@ def render(
         )
     if state.source_error and state._displayed is None:
         authentication = "auth unknown"
+    rw_badge = "RW" if state.writable else "RO"
     if width >= 76:
         canvas.put(
             0,
             0,
             f"Yoke / telemetry   {mode}   up {_uptime(snapshot.uptime_seconds)}   "
-            f"{authentication}",
+            f"{authentication}   [{rw_badge}]",
         )
     else:
         auth_short = (
@@ -580,10 +945,11 @@ def render(
         )
         if state.source_error and state._displayed is None:
             auth_short = ""
+        up_str = _uptime(snapshot.uptime_seconds)
         canvas.put(
             0,
             0,
-            f"Yoke / {mode} / {auth_short}up {_uptime(snapshot.uptime_seconds)}",
+            f"Yoke / {mode} / {auth_short}{rw_badge} / up {up_str}",
         )
     fleet_y = _host_panels(canvas, snapshot, state)
     remaining = height - fleet_y - 1
@@ -597,20 +963,34 @@ def render(
     _detail(canvas, snapshot, state, fleet_y + fleet_height, detail_height)
     if state.source_error:
         footer = f"SOURCE ERROR: {state.source_error} / q quit"
+    elif state.action_in_flight:
+        footer = f"BUSY: {state.action_in_flight}...   CONTROL != NIC/media"
+    elif state.action_status:
+        prefix = "OK: " if state.action_ok else "NOTICE: "
+        footer = f"{prefix}{state.action_status}   (? help / q quit)"
     elif state.paused:
         footer = (
             "PAUSED display / collection continues / space resume / ? help / q quit"
         )
     elif width >= 76:
+        ctrl = "p pair  u unpair  r reapply  " if state.writable else ""
         footer = (
-            "q quit   arrows/jk select   s sort   space pause   ? help   "
+            f"q quit  jk select  {ctrl}i inspect  l log  s sort  space pause  ? help  "
             "CONTROL != NIC/media"
         )
     else:
-        footer = "q quit  jk select  s sort  space pause  ?"
+        footer = "q quit jk sel p/u/r i log s spc ?"
     canvas.put(0, height - 1, footer)
-    if state.show_help:
-        _help(canvas)
+    if state.modal == "inspect":
+        _inspect_overlay(canvas, snapshot, state, debug)
+    elif state.modal == "log":
+        _log_overlay(canvas, snapshot, debug)
+    elif state.modal == "pair_pick":
+        _pair_picker_overlay(canvas, snapshot, state)
+    elif state.modal == "confirm":
+        _confirm_overlay(canvas, state)
+    elif state.show_help:
+        _help(canvas, state)
     return canvas.rows
 
 
@@ -640,16 +1020,34 @@ def _run_screen(
     terminal: ModuleType,
     get_snapshot: Callable[[], Snapshot],
     interval: float,
+    *,
+    get_debug: Callable[[], DebugContext] | None = None,
+    controls: ControlCallbacks | None = None,
 ) -> int:
     state = ViewState()
+    if controls is not None:
+        state.writable = controls.writable and controls.execute is not None
+        state.readonly_reason = controls.readonly_reason
     latest = Snapshot(0.0, "open-unauthenticated", (), {}, None)
+    latest_debug: DebugContext | None = None
     progress: SourceProgress | None = None
     next_sample = 0.0
     green, cyan, selection = _palette(terminal)
+    results: queue.Queue[ActionResult] = queue.Queue(maxsize=1)
     screen.keypad(True)
     with suppress(terminal.error):
         terminal.curs_set(0)
     while True:
+        try:
+            done = results.get_nowait()
+        except queue.Empty:
+            pass
+        else:
+            state.action_in_flight = None
+            state.action_ok = done.ok
+            state.action_status = _safe(done.summary)
+            next_sample = 0.0
+
         now = time.monotonic()
         if now >= next_sample:
             try:
@@ -667,11 +1065,16 @@ def _run_screen(
                     state.reset_history()
                 progress = checked_progress
                 latest = candidate
+                if get_debug is not None:
+                    with suppress(OSError, ValueError):
+                        latest_debug = get_debug()
                 state.source_error = None
                 state.observe(latest)
             next_sample = time.monotonic() + interval
         height, width = screen.getmaxyx()
-        frame = render(latest, width=width, height=height, state=state)
+        frame = render(
+            latest, width=width, height=height, state=state, debug=latest_debug
+        )
         try:
             screen.erase()
             for row, line in enumerate(frame):
@@ -692,21 +1095,61 @@ def _run_screen(
         except terminal.error:
             # The size can change between reading it and updating the screen.
             pass
-        wait_ms = max(1, min(1000, math.ceil((next_sample - time.monotonic()) * 1000)))
+        wait_limit = 100 if state.action_in_flight else 1000
+        wait_ms = max(
+            1, min(wait_limit, math.ceil((next_sample - time.monotonic()) * 1000))
+        )
         screen.timeout(wait_ms)
         key = screen.getch()
+        enter_key = getattr(terminal, "KEY_ENTER", 343)
         normalized = {
             terminal.KEY_UP: "up",
             terminal.KEY_DOWN: "down",
+            enter_key: "enter",
+            10: "enter",
+            13: "enter",
             27: "escape",
         }.get(key)
         if normalized is None and 0 <= key < 128:
             normalized = chr(key)
         if normalized is not None and not state.handle_key(normalized, latest):
             return 0
+        if state.pending_action is not None:
+            request = state.pending_action
+            state.pending_action = None
+            if controls is None or not controls.writable or controls.execute is None:
+                state.action_ok = False
+                state.action_status = (
+                    state.readonly_reason or "writes are disabled in this session"
+                )
+            elif state.action_in_flight is None:
+                executor = controls.execute
+                state.action_in_flight = request.label()
+                state.action_status = None
+
+                def _worker(
+                    req: ActionRequest = request,
+                    fn: Callable[[ActionRequest], ActionResult] = executor,
+                ) -> None:
+                    try:
+                        outcome = fn(req)
+                    except Exception as exc:  # pragma: no cover - defensive
+                        outcome = ActionResult(False, f"{req.label()} failed: {exc}")
+                    with suppress(queue.Full):
+                        results.put_nowait(outcome)
+
+                threading.Thread(
+                    target=_worker, name="yoke-tui-action", daemon=True
+                ).start()
 
 
-def run_top(get_snapshot: Callable[[], Snapshot], interval: float = 1.0) -> int:
+def run_top(
+    get_snapshot: Callable[[], Snapshot],
+    interval: float = 1.0,
+    *,
+    get_debug: Callable[[], DebugContext] | None = None,
+    controls: ControlCallbacks | None = None,
+) -> int:
     """Run a curses session, always restoring the terminal on exit or failure."""
     if not math.isfinite(interval) or interval <= 0:
         raise ValueError("sample interval must be positive and finite")
@@ -716,8 +1159,19 @@ def run_top(get_snapshot: Callable[[], Snapshot], interval: float = 1.0) -> int:
         import curses
     except ImportError as error:
         raise RuntimeError("this Python has no curses support; use --once") from error
+
+    def _entry(screen: curses.window) -> int:
+        return _run_screen(
+            screen,
+            curses,
+            get_snapshot,
+            interval,
+            get_debug=get_debug,
+            controls=controls,
+        )
+
     try:
-        return curses.wrapper(_run_screen, curses, get_snapshot, interval)
+        return curses.wrapper(_entry)
     except KeyboardInterrupt:
         return 0
     except curses.error as error:

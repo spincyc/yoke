@@ -38,6 +38,7 @@ is normative for control behavior.
 | [0028 — Negotiated USB/IP payload extension (YX) and latency hiding](../../../doc/decisions/0028-negotiated-usbip-payload-extension.md) |  |
 | [0029 — Native YWP/1 core: number model, replay digest and bounded tables](../../../doc/decisions/0029-native-ywp1-core-interpretations.md) |  |
 | [ADR 0030: USB box firmware on ESP-IDF (tiers 1 and 1.5)](../../../doc/decisions/0030-usb-box-firmware-on-esp-idf.md) |  |
+| [0031 — Interactive read/write TUI control with full CLI parity](../../../doc/decisions/0031-interactive-tui-control-and-cli-parity.md) | `yoke top` RW control, `inspect`, `reapply`, `unpair --producer`, bounded `snoop` |
 
 Protocol behavior changes require updating the normative protocol and
 recording the decision before implementation. See

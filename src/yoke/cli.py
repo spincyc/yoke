@@ -1,4 +1,4 @@
-"""yoke command line: pair, unpair, status, snoop, agent.
+"""yoke command line: pair, unpair, reapply, status, inspect, snoop, agent.
 
 Every decision lives in a pure function driven by injected callables
 (:class:`IntentIO` for intents, plain ``recv``/``clock`` callables for
@@ -13,33 +13,91 @@ import argparse
 import importlib
 import json
 import math
-import secrets
+import secrets as secrets
 import socket as socket_mod
 import sys
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from pathlib import Path
 
 from yoke import config
 from yoke.config import DEFAULT_PSK_PATH as DEFAULT_PSK_PATH
 from yoke.config import OPEN_MODE_WARNING as OPEN_MODE_WARNING
 from yoke.config import resolve_psk as resolve_psk
-from yoke.core import frames
+from yoke.control import (
+    COLLECT_WINDOW as COLLECT_WINDOW,
+)
+from yoke.control import (
+    RETRY_SPACING_BASE as RETRY_SPACING_BASE,
+)
+from yoke.control import (
+    STATUS_SORT_KEYS as STATUS_SORT_KEYS,
+)
+from yoke.control import (
+    BatchIntentResult as BatchIntentResult,
+)
+from yoke.control import (
+    IntentIO as IntentIO,
+)
+from yoke.control import (
+    IntentOutcome as IntentOutcome,
+)
+from yoke.control import (
+    RecvFn as RecvFn,
+)
+from yoke.control import (
+    _read,
+)
+from yoke.control import (
+    collect as _control_collect,
+)
+from yoke.control import (
+    compact_json as _json,
+)
+from yoke.control import (
+    default_origin as default_origin,
+)
+from yoke.control import (
+    driver_detail_text as _driver_detail,
+)
+from yoke.control import (
+    drop_summary as _drop_summary,
+)
+from yoke.control import (
+    id_errors as id_errors,
+)
+from yoke.control import (
+    inspect_node_data as inspect_node_data,
+)
+from yoke.control import (
+    intent_outcome_body as intent_outcome_body,
+)
+from yoke.control import (
+    new_operation_author as new_operation_author,
+)
+from yoke.control import (
+    render_inspect_text as render_inspect_text,
+)
+from yoke.control import (
+    run_intent as run_intent,
+)
+from yoke.control import (
+    run_reapply as run_reapply,
+)
+from yoke.control import (
+    run_unpair_producer as run_unpair_producer,
+)
+from yoke.control import (
+    sort_nodes as sort_nodes,
+)
 from yoke.core.types import (
-    CLI_DEADLINE,
-    CLI_RETRIES,
     CONTROL_GROUP,
     CONTROL_PORT,
-    MAX_SEQUENCE,
     NODE_ID_RE,
     PEER_TIMEOUT,
     VERSION_ZERO,
-    Body,
-    FrameType,
-    Role,
-    Version,
 )
 from yoke.net.mcast import open_multicast_socket, validate_multicast
 from yoke.snoop import (
@@ -51,257 +109,17 @@ from yoke.snoop import (
 )
 from yoke.terminal import escape_terminal
 
-COLLECT_WINDOW = 2.5
-RETRY_SPACING_BASE = 0.5
 
-# recv(deadline) -> (raw datagram, receive time) or None once the absolute
-# deadline (in the injected clock's domain) has passed with nothing received.
-RecvFn = Callable[[float], "tuple[bytes, float] | None"]
+def _display(value: str) -> str:
+    """Keep an untrusted label on one printable terminal line."""
+    return escape_terminal(value)
 
 
-def _read(clock: Callable[[], float] | None) -> float | None:
-    """Re-read an optional wall clock per datagram (ADR 0023)."""
-    return clock() if clock is not None else None
-
-
-def new_operation_author() -> str:
-    """A fresh valid YWP/1 author independent of the reusable CLI identity."""
-    return "op-" + secrets.token_hex(14)
-
-
-@dataclass(frozen=True)
-class IntentIO:
-    """Injectable I/O; ``operation_author`` must be fresh for each operation."""
-
-    send: Callable[[bytes], None]
-    recv: RecvFn
-    clock: Callable[[], float]
-    seq: Callable[[], int]
-    psk: bytes
-    origin: str
-    collect_window: float = COLLECT_WINDOW
-    retries: int = CLI_RETRIES
-    retry_base: float = RETRY_SPACING_BASE
-    deadline: float = CLI_DEADLINE
-    wall_clock: Callable[[], float] | None = None
-    operation_author: Callable[[], str] = new_operation_author
-
-
-@dataclass(frozen=True)
-class IntentOutcome:
-    exit_code: int
-    out: tuple[str, ...]
-    err: tuple[str, ...]
-    sent_version: Version | None
-    sends: int
-    consumer_announced: bool
-    committed: bool = False
-    activation: str | None = None
-
-
-def id_errors(op: str, consumer: str, producer: str | None) -> list[str]:
-    """Validate node ids before any I/O happens (PROTOCOL.md id syntax)."""
-    errors = []
-    if op not in ("pair", "unpair"):
-        errors.append(f"invalid operation: {op!r}")
-    if not NODE_ID_RE.fullmatch(consumer):
-        errors.append(f"invalid consumer id: {consumer!r}")
-    if op == "pair" and (producer is None or not NODE_ID_RE.fullmatch(producer)):
-        errors.append(f"invalid producer id: {producer!r}")
-    if op == "pair" and producer == consumer:
-        errors.append("producer and consumer must differ (self-pair)")
-    return errors
-
-
-def _fmt_version(version: Version) -> str:
-    return f"[{version[0]},{version[1]}]"
-
-
-_DIAGNOSTIC_DROPS = ("bad-sig", "stale", "version", "malformed", "oversize")
-
-
-def _drop_summary(counts: dict[str, int] | None) -> str:
-    if not counts:
-        return ""
-    parts = [f"{k}={counts[k]}" for k in _DIAGNOSTIC_DROPS if counts.get(k, 0) > 0]
-    return ", ".join(parts)
-
-
-def _driver_detail(driver_status: Body | None) -> str:
-    if not isinstance(driver_status, dict) or not driver_status:
-        return ""
-    detail = driver_status.get("detail")
-    if isinstance(detail, str):
-        return _display(detail)
-    return _display(_json(driver_status))
-
-
-def run_intent(
-    io: IntentIO, op: str, consumer: str, producer: str | None = None
-) -> IntentOutcome:
-    """Send a pair/unpair intent and resolve it against the ack stream.
-
-    Phases per the task/PROTOCOL.md: collect announces (learn the
-    consumer's pairing version, sanity-check kinds), then send the intent
-    with version ``[n+1, fresh_operation_author]`` on the CLI retry schedule
-    until its matching ack arrives or the deadline passes. Retries retain
-    this one version; a new operation never reuses the stable CLI identity
-    as its version author.
-    """
-    problems = id_errors(op, consumer, producer)
-    if not NODE_ID_RE.fullmatch(io.origin):
-        problems.append(f"invalid origin id: {io.origin!r}")
-    elif io.origin in (consumer, producer):
-        problems.append("CLI origin must differ from endpoint ids")
-    for label, value in (
-        ("collect_window", io.collect_window),
-        ("retry_base", io.retry_base),
-        ("deadline", io.deadline),
-    ):
-        if not math.isfinite(value) or value <= 0:
-            problems.append(f"{label} must be finite and positive")
-    if type(io.retries) is not int or not 1 <= io.retries <= CLI_RETRIES:
-        problems.append(f"retries must be from 1 through {CLI_RETRIES}")
-    if problems:
-        return IntentOutcome(2, (), tuple(problems), None, 0, False)
-
-    author = io.operation_author()
-    if not isinstance(author, str) or not NODE_ID_RE.fullmatch(author):
-        return IntentOutcome(2, (), ("invalid operation author",), None, 0, False)
-
-    err: list[str] = []
-    start = io.clock()
-    snooper = Snooper(
-        io.psk,
-        now=start,
-        wall_time=io.wall_clock() if io.wall_clock is not None else start,
-    )
-    window_end = start + io.collect_window
-    while io.clock() < window_end and consumer not in snooper.nodes:
-        item = io.recv(window_end)
-        if item is None:
-            break
-        snooper.observe(*item, wall=_read(io.wall_clock))
-
-    if io.origin in snooper.nodes:
-        return IntentOutcome(
-            2, (), ("CLI origin is already announced by an endpoint",), None, 0, False
-        )
-
-    consumer_view = snooper.nodes.get(consumer)
-    announced = consumer_view is not None
-    if consumer_view is None:
-        n = 0
-        drops = _drop_summary(snooper.counts)
-        drop_note = f" (dropped: {drops})" if drops else ""
-        err.append(
-            f"warning: consumer {consumer!r} has not announced yet; "
-            f"proceeding with pairing version 0{drop_note}"
-        )
-    else:
-        if consumer_view.role != Role.CONSUMER.value:
-            err.append(
-                f"{consumer!r} announces as a {consumer_view.role}, not a "
-                "consumer; it will never ack an intent — refusing to send"
-            )
-            return IntentOutcome(2, (), tuple(err), None, 0, announced)
-        n = (consumer_view.pairing_version or VERSION_ZERO)[0]
-    if n >= MAX_SEQUENCE:
-        return IntentOutcome(
-            2, (), ("consumer pairing version is exhausted",), None, 0, announced
-        )
-    if op == "pair" and producer is not None:
-        producer_view = snooper.nodes.get(producer)
-        if producer_view is not None and producer_view.role != Role.PRODUCER.value:
-            err.append(
-                f"{producer!r} announces as a {producer_view.role}, not a "
-                "producer; refusing to send"
-            )
-            return IntentOutcome(2, (), tuple(err), None, 0, announced)
-        if (
-            consumer_view is not None
-            and producer_view is not None
-            and consumer_view.kind != producer_view.kind
-        ):
-            err.append(
-                f"kind mismatch: consumer {consumer} is {consumer_view.kind}, "
-                f"producer {producer} is {producer_view.kind}; refusing to send"
-            )
-            return IntentOutcome(2, (), tuple(err), None, 0, announced)
-
-    version: Version = (n + 1, author)
-    body: Body = {"op": op, "consumer": consumer, "version": [version[0], version[1]]}
-    if op == "pair":
-        body["producer"] = producer
-
-    t0 = io.clock()
-    hard_deadline = t0 + io.deadline
-    offsets = [io.retry_base * (2**k - 1) for k in range(io.retries)]
-    sends = 0
-    while True:
-        now = io.clock()
-        if now >= hard_deadline:
-            break
-        if sends < len(offsets) and now >= t0 + offsets[sends]:
-            stamp = io.wall_clock() if io.wall_clock is not None else now
-            raw = frames.encode(FrameType.INT, io.origin, io.seq(), stamp, body, io.psk)
-            io.send(raw)
-            sends += 1
-            continue
-        if sends < len(offsets):
-            next_wake = min(hard_deadline, t0 + offsets[sends])
-        else:
-            next_wake = hard_deadline
-        item = io.recv(next_wake)
-        if item is None:
-            continue
-        for record in snooper.observe(*item, wall=_read(io.wall_clock)):
-            frame = record.frame
-            if (
-                record.verdict == "ok"
-                and frame is not None
-                and frame.type is FrameType.ACK
-                and frame.origin == consumer
-                and frame.body.get("version") == [version[0], version[1]]
-            ):
-                reason = frame.body.get("reason")
-                reason_text = reason if isinstance(reason, str) else "?"
-                if frame.body.get("applied") is True:
-                    target = f" <- {producer}" if op == "pair" else ""
-                    view = snooper.nodes.get(consumer)
-                    activation = (
-                        view.state
-                        if view is not None
-                        and view.pairing_version == version
-                        and view.pairing_producer == producer
-                        else "unconfirmed"
-                    )
-                    line = (
-                        f"{op} {consumer}{target} committed at version "
-                        f"{_fmt_version(version)} ({reason_text}); "
-                        f"activation {activation} "
-                        "(yoke status shows current media state)"
-                    )
-                    return IntentOutcome(
-                        0, (line,), tuple(err), version, sends, True, True, activation
-                    )
-                line = f"{op} rejected by {consumer}: {reason_text}"
-                return IntentOutcome(2, (), (*err, line), version, sends, True)
-        announced = announced or consumer in snooper.nodes
-
-    diagnosis = (
-        "consumer never announced" if not announced else "consumer announced but no ack"
-    )
-    drops = _drop_summary(snooper.counts)
-    drop_note = f"; dropped: {drops}" if drops else ""
-    err.append(
-        f"no ack from {consumer!r} within {io.deadline:g}s: "
-        f"{diagnosis} ({sends} intents sent{drop_note})"
-    )
-    return IntentOutcome(1, (), tuple(err), version, sends, announced)
-
-
-# -- status ------------------------------------------------------------------
+def _validate_window(window: float) -> None:
+    if not math.isfinite(window) or window <= 0:
+        raise ValueError("collection window must be finite and positive")
+    if window >= threading.TIMEOUT_MAX:
+        raise ValueError("collection window exceeds the platform timeout limit")
 
 
 def collect(
@@ -314,17 +132,10 @@ def collect(
 ) -> Snooper:
     """Feed everything received within ``window`` seconds into a Snooper."""
     _validate_window(window)
-    start = clock()
-    snooper = Snooper(
-        psk, now=start, wall_time=wall_clock() if wall_clock is not None else start
-    )
-    end = start + window
-    while clock() < end:
-        item = recv(end)
-        if item is None:
-            break
-        snooper.observe(*item, wall=_read(wall_clock))
-    return snooper
+    return _control_collect(recv, clock, psk, window, wall_clock=wall_clock)
+
+
+# -- status & inspect --------------------------------------------------------
 
 
 def render_status_table(
@@ -332,11 +143,12 @@ def render_status_table(
     now: float,
     *,
     counts: dict[str, int] | None = None,
+    sort_key: str = "id",
 ) -> str:
     """Table of announced nodes; stale/error nodes and drops flagged."""
     headers = ("ID", "ROLE", "KIND", "STATE", "PAIRING", "NAME", "DETAIL")
     rows: list[tuple[str, ...]] = [headers]
-    for node_id, view in sorted(nodes.items()):
+    for node_id, view in sort_nodes(nodes, now, sort_key):
         pairing = "-"
         if view.role == "consumer":
             version = view.pairing_version or VERSION_ZERO
@@ -374,18 +186,6 @@ def render_status_table(
     return "\n".join(lines)
 
 
-def _display(value: str) -> str:
-    """Keep an untrusted label on one printable terminal line."""
-    return escape_terminal(value)
-
-
-def _validate_window(window: float) -> None:
-    if not math.isfinite(window) or window <= 0:
-        raise ValueError("collection window must be finite and positive")
-    if window >= threading.TIMEOUT_MAX:
-        raise ValueError("collection window exceeds the platform timeout limit")
-
-
 def run_status(
     recv: RecvFn,
     clock: Callable[[], float],
@@ -393,11 +193,12 @@ def run_status(
     window: float,
     *,
     json_mode: bool = False,
+    sort_key: str = "id",
     wall_clock: Callable[[], float] | None = None,
 ) -> tuple[int, str]:
     snooper = collect(recv, clock, psk, window, wall_clock=wall_clock)
+    now = clock()
     if json_mode:
-        now = clock()
         nodes = [
             {
                 "id": node_id,
@@ -419,7 +220,7 @@ def run_status(
                 "age_seconds": round(max(0.0, now - view.last_seen), 6),
                 "stale": now - view.last_seen > PEER_TIMEOUT,
             }
-            for node_id, view in sorted(snooper.nodes.items())
+            for node_id, view in sort_nodes(snooper.nodes, now, sort_key)
         ]
         return 0, _json(
             {
@@ -429,7 +230,56 @@ def run_status(
                 "counts": snooper.counts,
             }
         )
-    return 0, render_status_table(snooper.nodes, clock(), counts=snooper.counts)
+    return 0, render_status_table(
+        snooper.nodes, now, counts=snooper.counts, sort_key=sort_key
+    )
+
+
+def run_inspect(
+    recv: RecvFn,
+    clock: Callable[[], float],
+    psk: bytes,
+    node_id: str,
+    window: float,
+    *,
+    json_mode: bool = False,
+    wall_clock: Callable[[], float] | None = None,
+) -> tuple[int, str, str | None]:
+    """Collect announces and return full debug details for one node."""
+    if not NODE_ID_RE.fullmatch(node_id):
+        message = f"invalid node id: {node_id!r}"
+        if json_mode:
+            return (
+                2,
+                _json({"schema_version": 1, "exit_code": 2, "errors": [message]}),
+                message,
+            )
+        return 2, "", message
+    snooper = collect(recv, clock, psk, window, wall_clock=wall_clock)
+    data = inspect_node_data(snooper, node_id, clock(), psk=psk)
+    if data is None:
+        drops = _drop_summary(snooper.counts)
+        drop_note = f" (dropped: {drops})" if drops else ""
+        message = f"node {node_id!r} did not announce within {window:g}s{drop_note}"
+        if json_mode:
+            return (
+                1,
+                _json(
+                    {
+                        "schema_version": 1,
+                        "authentication": "site-psk" if psk else "open-unauthenticated",
+                        "exit_code": 1,
+                        "node": None,
+                        "counts": snooper.counts,
+                        "errors": [message],
+                    }
+                ),
+                message,
+            )
+        return 1, "", message
+    if json_mode:
+        return 0, _json(data), None
+    return 0, render_inspect_text(data), None
 
 
 # -- snoop -------------------------------------------------------------------
@@ -437,16 +287,6 @@ def run_status(
 
 def render_topology(snooper: Snooper, *, now: float | None = None) -> str:
     return json.dumps(snooper.topology(now=now), sort_keys=True)
-
-
-def _json(value: object) -> str:
-    return json.dumps(
-        value,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-        allow_nan=False,
-    )
 
 
 def run_snoop(
@@ -458,42 +298,37 @@ def run_snoop(
     *,
     clock: Callable[[], float],
     wall_clock: Callable[[], float] | None = None,
+    max_records: int | None = None,
 ) -> int:
-    """Print every observed frame until ``recv`` ends or SIGINT arrives,
-    then summarize topology at the injected monotonic clock's current time.
+    """Print every observed frame until ``recv`` ends, ``max_records`` is
+    reached, or SIGINT arrives, then summarize topology at the injected
+    monotonic clock's current time.
 
     Receive timestamps and ``clock`` must use the same time domain. No
     datagram is needed to expire liveness after a completely silent group.
     """
+    if max_records is not None and (type(max_records) is not int or max_records <= 0):
+        raise ValueError("snoop count must be a positive integer")
     start = clock()
     snooper = Snooper(
         psk, now=start, wall_time=wall_clock() if wall_clock is not None else start
     )
     render: Callable[[SnoopRecord], str] = render_json if json_mode else render_text
+    emitted = 0
     try:
-        while True:
+        while max_records is None or emitted < max_records:
             item = recv()
             if item is None:
                 break
             for record in snooper.observe(*item, wall=_read(wall_clock)):
                 emit(render(record))
+                emitted += 1
+                if max_records is not None and emitted >= max_records:
+                    break
     except KeyboardInterrupt:
         pass
     emit_err(render_topology(snooper, now=clock()))
     return 0
-
-
-# -- defaults ----------------------------------------------------------------
-
-
-def default_origin(hostname: str) -> str:
-    """``cli-`` + sanitized hostname, guaranteed to satisfy NODE_ID_RE."""
-    sanitized = "".join(
-        ch if ch.isascii() and (ch.islower() or ch.isdigit() or ch == "-") else "-"
-        for ch in hostname.lower()
-    )
-    candidate = ("cli-" + sanitized)[:32]
-    return candidate if NODE_ID_RE.fullmatch(candidate) else "cli-unknown"
 
 
 # -- wiring ------------------------------------------------------------------
@@ -527,9 +362,23 @@ def build_parser() -> argparse.ArgumentParser:
     pair.add_argument("producer")
     pair.add_argument("consumer")
     pair.add_argument("--json", action="store_true", help="emit a JSON result")
-    unpair = sub.add_parser("unpair", help="detach CONSUMER from its producer")
-    unpair.add_argument("consumer")
+    unpair = sub.add_parser(
+        "unpair",
+        help="detach CONSUMER (or all consumers paired to --producer PRODUCER)",
+    )
+    unpair.add_argument("consumer", nargs="?", default=None)
+    unpair.add_argument(
+        "--producer",
+        default=None,
+        help="unpair all observed consumers currently paired to PRODUCER",
+    )
     unpair.add_argument("--json", action="store_true", help="emit a JSON result")
+    reapply = sub.add_parser(
+        "reapply",
+        help="re-assert CONSUMER's currently announced pairing at the next version",
+    )
+    reapply.add_argument("consumer")
+    reapply.add_argument("--json", action="store_true", help="emit a JSON result")
     status = sub.add_parser("status", help="collect announces and show a table")
     status.add_argument(
         "--json", action="store_true", help="emit a JSON status snapshot"
@@ -541,8 +390,42 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="SECONDS",
         help=f"collection window (default {COLLECT_WINDOW}s)",
     )
+    status.add_argument(
+        "--sort",
+        choices=STATUS_SORT_KEYS,
+        default="id",
+        help="sort order (default: id)",
+    )
+    inspect_cmd = sub.add_parser(
+        "inspect", help="show full debug details for one announced endpoint"
+    )
+    inspect_cmd.add_argument("node", help="endpoint node id to inspect")
+    inspect_cmd.add_argument(
+        "--json", action="store_true", help="emit a JSON inspection record"
+    )
+    inspect_cmd.add_argument(
+        "--watch",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help=f"collection window (default {COLLECT_WINDOW}s)",
+    )
     snoop = sub.add_parser("snoop", help="passively render the control group")
     snoop.add_argument("--json", action="store_true", help="one JSON line per frame")
+    snoop.add_argument(
+        "--count",
+        type=int,
+        default=None,
+        metavar="N",
+        help="stop cleanly after observing N frames",
+    )
+    snoop.add_argument(
+        "--window",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="stop cleanly after SECONDS",
+    )
     agent = sub.add_parser("agent", help="run an endpoint agent")
     agent.add_argument("--config", required=True, help="agent TOML config path")
     agent_mode = agent.add_mutually_exclusive_group()
@@ -682,12 +565,40 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     producer: str | None = None
-    if command in ("pair", "unpair"):
-        producer = str(args.producer) if command == "pair" else None
-        problems = id_errors(command, str(args.consumer), producer)
+    unpair_by_producer: str | None = None
+    if command == "inspect" and not NODE_ID_RE.fullmatch(str(args.node)):
+        return _command_error(args, 2, f"invalid node id: {args.node!r}")
+    if command == "snoop" and args.count is not None and args.count <= 0:
+        return _command_error(args, 2, "--count must be a positive integer")
+    if command in ("pair", "unpair", "reapply"):
+        problems: list[str] = []
+        targets: tuple[str, ...] = ()
+        if command == "pair":
+            producer = str(args.producer)
+            problems = id_errors("pair", str(args.consumer), producer)
+            targets = (str(args.consumer), producer)
+        elif command == "unpair":
+            if bool(args.consumer) == bool(args.producer):
+                return _command_error(
+                    args,
+                    2,
+                    "specify either CONSUMER or --producer PRODUCER (not both)",
+                )
+            if args.producer is not None:
+                unpair_by_producer = str(args.producer)
+                if not NODE_ID_RE.fullmatch(unpair_by_producer):
+                    problems.append(f"invalid producer id: {unpair_by_producer!r}")
+                targets = (unpair_by_producer,)
+            else:
+                problems = id_errors("unpair", str(args.consumer), None)
+                targets = (str(args.consumer),)
+        else:
+            if not NODE_ID_RE.fullmatch(str(args.consumer)):
+                problems.append(f"invalid consumer id: {args.consumer!r}")
+            targets = (str(args.consumer),)
         if not NODE_ID_RE.fullmatch(origin):
             problems.append(f"invalid origin id: {origin!r}")
-        elif origin in (str(args.consumer), producer):
+        elif origin in targets:
             problems.append("CLI origin must differ from endpoint ids")
         if problems:
             return _command_error(args, 2, *problems)
@@ -704,11 +615,11 @@ def main(argv: list[str] | None = None) -> int:
 
     group: str = args.group
     port: int = args.port
-    window = (
-        float(args.watch)
-        if command == "status" and args.watch is not None
-        else COLLECT_WINDOW
-    )
+    window = COLLECT_WINDOW
+    if command in ("status", "inspect") and args.watch is not None:
+        window = float(args.watch)
+    elif command == "snoop" and args.window is not None:
+        window = float(args.window)
     try:
         validate_multicast(group, port, interface=args.interface)
         _validate_window(window)
@@ -739,7 +650,7 @@ def main(argv: list[str] | None = None) -> int:
             raw, _addr = sock.recvfrom(65535)
             return raw, time.monotonic()
 
-        if command in ("pair", "unpair"):
+        def make_intent_io() -> IntentIO:
             last_seq = 0
 
             def next_seq() -> int:
@@ -747,7 +658,7 @@ def main(argv: list[str] | None = None) -> int:
                 last_seq = max(last_seq + 1, time.time_ns())
                 return last_seq
 
-            io = IntentIO(
+            return IntentIO(
                 send=send,
                 recv=recv_until,
                 clock=time.monotonic,
@@ -756,29 +667,78 @@ def main(argv: list[str] | None = None) -> int:
                 origin=origin,
                 wall_clock=time.time,
             )
-            outcome = run_intent(io, command, str(args.consumer), producer)
+
+        if command in ("pair", "unpair") and unpair_by_producer is None:
+            outcome = run_intent(
+                make_intent_io(), command, str(args.consumer), producer
+            )
+            if args.json:
+                _out(
+                    _json(
+                        intent_outcome_body(
+                            op=command,
+                            consumer=str(args.consumer),
+                            producer=producer,
+                            psk=psk,
+                            outcome=outcome,
+                        )
+                    )
+                )
+            else:
+                for line in outcome.out:
+                    _out(escape_terminal(line))
+            for line in outcome.err:
+                _err(line)
+            return outcome.exit_code
+        if command == "unpair" and unpair_by_producer is not None:
+            batch = run_unpair_producer(make_intent_io(), unpair_by_producer)
             if args.json:
                 _out(
                     _json(
                         {
                             "schema_version": 1,
-                            "op": command,
-                            "consumer": str(args.consumer),
-                            "producer": producer,
+                            "op": "unpair-producer",
+                            "producer": batch.producer,
                             "authentication": "site-psk"
                             if psk
                             else "open-unauthenticated",
-                            "exit_code": outcome.exit_code,
-                            "version": list(outcome.sent_version)
-                            if outcome.sent_version
-                            else None,
-                            "committed": outcome.committed,
-                            "activation": outcome.activation,
-                            "sends": outcome.sends,
-                            "errors": list(outcome.err),
+                            "exit_code": batch.exit_code,
+                            "results": [
+                                intent_outcome_body(
+                                    op="unpair",
+                                    consumer=consumer_id,
+                                    producer=None,
+                                    psk=psk,
+                                    outcome=item,
+                                )
+                                for consumer_id, item in batch.results
+                            ],
+                            "errors": list(batch.err),
                         }
                     )
                 )
+            else:
+                for line in batch.out:
+                    _out(escape_terminal(line))
+            for line in batch.err:
+                _err(line)
+            return batch.exit_code
+        if command == "reapply":
+            resolved_producer, outcome = run_reapply(
+                make_intent_io(), str(args.consumer)
+            )
+            if args.json:
+                body = intent_outcome_body(
+                    op="reapply",
+                    consumer=str(args.consumer),
+                    producer=resolved_producer,
+                    psk=psk,
+                    outcome=outcome,
+                )
+                body["resolved_op"] = (
+                    "pair" if resolved_producer is not None else "unpair"
+                )
+                _out(_json(body))
             else:
                 for line in outcome.out:
                     _out(escape_terminal(line))
@@ -792,19 +752,44 @@ def main(argv: list[str] | None = None) -> int:
                 psk,
                 window,
                 json_mode=bool(args.json),
+                sort_key=str(args.sort),
                 wall_clock=time.time,
             )
             _out(table)
             return code
+        if command == "inspect":
+            code, output, err_msg = run_inspect(
+                recv_until,
+                time.monotonic,
+                psk,
+                str(args.node),
+                window,
+                json_mode=bool(args.json),
+                wall_clock=time.time,
+            )
+            if output:
+                _out(output)
+            if err_msg:
+                _err(err_msg)
+            return code
         if command == "snoop":
+            snoop_recv = recv_blocking
+            if args.window is not None:
+                deadline = time.monotonic() + window
+
+                def recv_window() -> tuple[bytes, float] | None:
+                    return recv_until(deadline)
+
+                snoop_recv = recv_window
             return run_snoop(
-                recv_blocking,
+                snoop_recv,
                 psk,
                 bool(args.json),
                 _out,
                 _err,
                 clock=time.monotonic,
                 wall_clock=time.time,
+                max_records=args.count,
             )
         raise AssertionError(f"unhandled command: {command!r}")
     except OSError as exc:

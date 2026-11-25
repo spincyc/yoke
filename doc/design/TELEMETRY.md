@@ -1,11 +1,14 @@
-# Endpoint telemetry and terminal monitoring
+# Endpoint telemetry and terminal console
 
-Yoke monitoring is optional and read-only. Pairing, reconciliation and media
-keep operating when the monitor, Prometheus or Thermite is absent. The same
-Python model feeds a terminal dashboard, a JSON API and a Prometheus exporter.
-No broker, central registry, cloud account or third-party runtime package is
-required. [ADR 0020](../decisions/0020-optional-read-only-telemetry.md) records
-the boundary.
+Yoke HTTP monitoring (`yoke metrics`) is optional and strictly read-only.
+Pairing, reconciliation and media keep operating when the monitor, Prometheus
+or Thermite is absent. The same Python model feeds the terminal console
+(`yoke top`), a JSON API and a Prometheus exporter. No broker, central
+registry, cloud account or third-party runtime package is required.
+[ADR 0020](../decisions/0020-optional-read-only-telemetry.md) records the
+telemetry boundary, and
+[ADR 0031](../decisions/0031-interactive-tui-control-and-cli-parity.md) adds
+interactive read/write control to `yoke top` with strict 1-to-1 CLI parity.
 
 ## Research and choice
 
@@ -57,9 +60,22 @@ with `--window`. `top --once --width 100 --height 30` produces plain text
 without terminal escape codes. Interactive mode needs a terminal with curses.
 
 Keys: arrows or `j`/`k` select an endpoint; `s` changes sort; Space pauses
-the display while collection continues; `?` shows help; `q` or Escape quits.
-Resize adapts the layout. Source failures are displayed explicitly rather
-than presenting cached data as a fresh live observation.
+the display while collection continues; `i` or Enter inspects the selected
+endpoint in full detail; `l` opens the bounded live control-plane frame log;
+`p` opens the compatible pair/switch picker; `u` unpairs the selected consumer
+(or every consumer attached to a selected producer); `r` re-applies the selected
+consumer's current pairing intent at the next version; `?` shows help; `q` or
+Escape quits (or closes the active modal). Resize adapts the layout. Source
+failures are displayed explicitly rather than presenting cached data as a fresh
+live observation.
+
+Interactive writes (`p`, `u`, `r`) are enabled (`[RW]`) when `yoke top` runs
+directly on the control group with a valid site PSK (or explicit `--open` lab
+mode). Pass `--read-only`, `--url`, `--demo`, or omit both PSK and `--open` to
+keep `yoke top` strictly read-only (`[RO]`). Every TUI action has a matching
+scriptable CLI command (`yoke status --sort`, `yoke inspect`, `yoke pair`,
+`yoke unpair` / `yoke unpair --producer`, `yoke reapply`,
+`yoke snoop --count/--window`, `yoke metrics --once`).
 
 `--demo` is synthetic and labeled DEMO. It reads no device sockets or host
 resource files. Current YWP/1 endpoints are USB and HDMI. IR routing and its
