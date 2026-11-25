@@ -1,0 +1,10 @@
+[Unit]
+Description=Yoke appliance update recovery hook (handled by RAUC A/B slots)
+DefaultDependencies=no
+After=local-fs.target
+Before=yoked.service yoke-usbip-admission.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/true

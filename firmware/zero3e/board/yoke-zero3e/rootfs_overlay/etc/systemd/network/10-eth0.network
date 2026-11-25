@@ -1,0 +1,14 @@
+[Match]
+Name=eth* end* en*
+
+[Network]
+DHCP=yes
+LinkLocalAddressing=yes
+MulticastDNS=yes
+IPv6AcceptRA=yes
+
+[DHCPv4]
+ClientIdentifier=mac
+UseDNS=yes
+UseNTP=yes
+UseHostname=yes

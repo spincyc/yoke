@@ -1,0 +1,193 @@
+#!/bin/sh
+# On-box provisioning helper for Yoke Radxa ZERO 3E read-only A/B appliances.
+#
+# Usage:
+#   yoke-zero3e-provision computer --node-id ID [--name NAME] [--interface IPV4]
+#       [--busid BUSID] [--psk HEX64 | --psk-file PATH]
+#   yoke-zero3e-provision device --node-id ID --host IPV4 --busid BUSID [--busid ...]
+#       [--port 3240] [--psk HEX64 | --psk-file PATH]
+#   yoke-zero3e-provision hostname NAME
+#   yoke-zero3e-provision status
+set -eu
+
+usage() {
+	sed -n '4,10p' "$0" | sed 's/^# \{0,1\}//' >&2
+	exit 2
+}
+
+fail() {
+	echo "yoke-zero3e-provision: $*" >&2
+	exit 2
+}
+
+matches() {
+	printf '%s\n' "$1" | grep -Eq "$2"
+}
+
+[ "$(id -u)" -eq 0 ] || fail "must run as root"
+[ $# -ge 1 ] || usage
+
+cmd=$1
+shift
+
+case "$cmd" in
+status)
+	echo "firmware: $(cat /etc/yoke-firmware-version 2>/dev/null || echo unknown)"
+	echo "hostname: $(hostname)"
+	if [ -f /data/etc/yoke/role-computer ]; then
+		echo "role: computer"
+	elif [ -f /data/etc/yoke/role-device ]; then
+		echo "role: device"
+	else
+		echo "role: unprovisioned"
+	fi
+	/usr/bin/rauc status 2>/dev/null || true
+	systemctl --no-pager --plain status yoked.service yoke-gadget.service yoke-usbipd.service yoke-usbip-admission.service 2>/dev/null || true
+	exit 0
+	;;
+hostname)
+	[ $# -eq 1 ] || usage
+	matches "$1" '^[a-z0-9][a-z0-9-]{0,62}$' || fail "invalid hostname: $1"
+	printf '%s\n' "$1" >/data/etc/hostname
+	hostname "$1"
+	echo "hostname set to $1 (persisted in /data/etc/hostname)"
+	exit 0
+	;;
+computer | device) ;;
+-h | --help) usage ;;
+*) fail "unknown command: $cmd" ;;
+esac
+
+node_id=""
+name=""
+host=""
+iface=""
+port=3240
+busids=""
+psk=""
+psk_file=""
+
+while [ $# -gt 0 ]; do
+	case "$1" in
+	--node-id | --name | --host | --interface | --port | --busid | --psk | --psk-file)
+		[ $# -ge 2 ] || fail "$1 requires a value"
+		case "$1" in
+		--node-id) node_id=$2 ;;
+		--name) name=$2 ;;
+		--host) host=$2 ;;
+		--interface) iface=$2 ;;
+		--port) port=$2 ;;
+		--busid) busids="$busids $2" ;;
+		--psk) psk=$2 ;;
+		--psk-file) psk_file=$2 ;;
+		esac
+		shift 2
+		;;
+	-h | --help) usage ;;
+	*) fail "unknown argument: $1" ;;
+	esac
+done
+
+matches "$node_id" '^[a-z0-9][a-z0-9-]{0,31}$' || fail "--node-id must match [a-z0-9][a-z0-9-]{0,31}"
+[ -n "$name" ] || name="$node_id"
+
+if [ -n "$psk" ] && [ -n "$psk_file" ]; then
+	fail "pass either --psk or --psk-file, not both"
+fi
+if [ -n "$psk_file" ]; then
+	[ -r "$psk_file" ] || fail "cannot read $psk_file"
+	psk=$(tr -d ' \t\r\n' <"$psk_file")
+fi
+if [ -n "$psk" ]; then
+	matches "$psk" '^[0-9a-fA-F]{64}$' || fail "PSK must be 64 hex characters"
+	umask 0077
+	printf '%s\n' "$psk" >/data/etc/yoke/psk.tmp
+	chown yoke:yoke /data/etc/yoke/psk.tmp
+	chmod 0600 /data/etc/yoke/psk.tmp
+	mv -f /data/etc/yoke/psk.tmp /data/etc/yoke/psk
+fi
+
+case "$cmd" in
+computer)
+	rm -f /data/etc/yoke/role-device
+	touch /data/etc/yoke/role-computer
+	printf '# Managed by yoke-zero3e-provision (computer role)\n' >/data/etc/udev/70-yoke-usbip-bind.rules
+	{
+		printf 'node_id = "%s"\n' "$node_id"
+		printf 'role = "consumer"\n'
+		printf 'kind = "usb"\n'
+		printf 'name = "%s"\n' "$name"
+		printf 'psk_file = "/etc/yoke/psk"\n'
+		printf 'state_file = "/var/lib/yoke/state.json"\n'
+		if [ -n "$iface" ]; then
+			printf 'interface = "%s"\n' "$iface"
+		fi
+		printf '\n[driver]\n'
+		printf 'type = "usb-gadget"\n'
+		printf 'udc = "fcc00000.usb"\n'
+		if [ -n "$busids" ]; then
+			first_busid=$(printf '%s' "$busids" | awk '{print $1}')
+			printf 'busid = "%s"\n' "$first_busid"
+		fi
+	} >/data/etc/yoke/agent.toml.tmp
+	;;
+device)
+	matches "$host" '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' || fail "--host must be an IPv4 address"
+	[ -n "$busids" ] || fail "at least one --busid is required (see usbip list -l)"
+	rules=""
+	list=""
+	for b in $busids; do
+		matches "$b" '^[0-9]+-[0-9]+(\.[0-9]+)*$' || fail "invalid --busid: $b"
+		rules="${rules}ACTION==\"add\", SUBSYSTEM==\"usb\", ENV{DEVTYPE}==\"usb_device\", KERNEL==\"$b\", TAG+=\"systemd\", ENV{SYSTEMD_WANTS}+=\"yoke-usbip-bind@%k.service\"
+"
+		list="${list:+$list, }\"$b\""
+	done
+	rm -f /data/etc/yoke/role-computer
+	touch /data/etc/yoke/role-device
+	awk -v rules="$rules" '{ if ($0 == "@RULES@") printf "%s", rules; else print }' \
+		/usr/share/yoke-zero3e/70-yoke-usbip-bind.rules.in >/data/etc/udev/70-yoke-usbip-bind.rules.tmp
+	chmod 0644 /data/etc/udev/70-yoke-usbip-bind.rules.tmp
+	mv -f /data/etc/udev/70-yoke-usbip-bind.rules.tmp /data/etc/udev/70-yoke-usbip-bind.rules
+	sed -e "s/@NODE_ID@/$node_id/g" -e "s/@HOST@/$host/g" \
+		-e "s/@PORT@/$port/g" -e "s/@BUSIDS@/$list/g" \
+		/usr/share/yoke-zero3e/device-agent.toml.in >/data/etc/yoke/agent.toml.tmp
+	;;
+esac
+
+chown root:yoke /data/etc/yoke/agent.toml.tmp
+chmod 0640 /data/etc/yoke/agent.toml.tmp
+mv -f /data/etc/yoke/agent.toml.tmp /data/etc/yoke/agent.toml
+
+udevadm control --reload-rules || true
+systemctl daemon-reload
+
+if [ ! -f /data/etc/yoke/psk ]; then
+	echo "provisioned role=$cmd in /data/etc/yoke/agent.toml (still need /data/etc/yoke/psk before commissioning)"
+	exit 0
+fi
+
+if [ ! -f /var/lib/yoke/state.json ]; then
+	su -s /bin/sh yoke -c '/opt/yoke/current/venv/bin/python -m yoke.cli agent --commission --config /etc/yoke/agent.toml' &
+	comm_pid=$!
+	tries=30
+	while [ "$tries" -gt 0 ] && [ ! -f /var/lib/yoke/state.json ]; do
+		sleep 0.5
+		tries=$((tries - 1))
+	done
+	kill -TERM "$comm_pid" 2>/dev/null || true
+	wait "$comm_pid" 2>/dev/null || true
+	[ -f /var/lib/yoke/state.json ] || fail "failed to commission /var/lib/yoke/state.json"
+fi
+
+if [ "$cmd" = computer ]; then
+	systemctl stop yoke-usbipd.service yoke-usbip-admission.path 2>/dev/null || true
+	udevadm trigger --subsystem-match=misc || true
+	systemctl restart yoke-gadget.service yoked.service
+else
+	systemctl stop yoke-gadget.service 2>/dev/null || true
+	modprobe usbip-host || true
+	udevadm trigger --subsystem-match=usb --action=add || true
+	systemctl restart yoke-usbip-admission.service yoke-usbip-admission.path yoke-usbipd.service yoked.service
+fi
+
+echo "provisioned and started Yoke $cmd box ($node_id)"

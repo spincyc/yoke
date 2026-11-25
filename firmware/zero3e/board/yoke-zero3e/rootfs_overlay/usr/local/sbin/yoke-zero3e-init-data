@@ -1,0 +1,38 @@
+#!/bin/sh
+# Initialize persistent /data directories and SSH keys on first boot.
+set -eu
+
+# Ensure /data root is traversable by non-root yoke user (genimage mktemp defaults to 0700).
+chmod 0755 /data
+
+mkdir -p /data/etc/yoke /data/etc/udev /data/var/lib/yoke /data/ssh /data/rauc
+mkdir -p /var/lib/yoke /var/empty
+
+chmod 0755 /data/etc /data/etc/yoke /data/etc/udev /data/var /data/var/lib /data/rauc /var/empty
+chown yoke:yoke /data/var/lib/yoke
+chmod 0700 /data/var/lib/yoke
+
+chown root:root /data/ssh
+chmod 0700 /data/ssh
+if [ ! -f /data/ssh/ssh_host_ed25519_key ]; then
+	/usr/bin/ssh-keygen -t ed25519 -N '' -f /data/ssh/ssh_host_ed25519_key
+fi
+chown root:root /data/ssh/ssh_host_ed25519_key
+chmod 0600 /data/ssh/ssh_host_ed25519_key
+
+if [ ! -f /data/ssh/authorized_keys ] && [ -f /usr/share/yoke-zero3e/initial-authorized-keys ]; then
+	cp /usr/share/yoke-zero3e/initial-authorized-keys /data/ssh/authorized_keys
+fi
+if [ -f /data/ssh/authorized_keys ]; then
+	chown root:root /data/ssh/authorized_keys
+	chmod 0600 /data/ssh/authorized_keys
+fi
+
+if [ ! -f /data/etc/udev/70-yoke-usbip-bind.rules ]; then
+	printf '# Managed by yoke-zero3e-provision (device role)\n' >/data/etc/udev/70-yoke-usbip-bind.rules
+	chmod 0644 /data/etc/udev/70-yoke-usbip-bind.rules
+fi
+
+if [ -s /data/etc/hostname ]; then
+	hostname -F /data/etc/hostname || true
+fi

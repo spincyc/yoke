@@ -1,0 +1,34 @@
+#!/bin/sh
+# Mark the booted RAUC slot good only once SSH and configured Yoke services are healthy.
+set -eu
+
+wait_active() {
+	unit="$1"
+	tries=30
+	while [ "$tries" -gt 0 ]; do
+		if systemctl is-active --quiet "$unit"; then
+			return 0
+		fi
+		sleep 1
+		tries=$((tries - 1))
+	done
+	echo "yoke-zero3e-mark-good: $unit did not become active" >&2
+	return 1
+}
+
+wait_active sshd.service
+
+if [ -f /data/etc/yoke/agent.toml ]; then
+	wait_active yoked.service
+fi
+
+if [ -f /data/etc/yoke/role-computer ]; then
+	wait_active yoke-gadget.service
+fi
+
+if [ -f /data/etc/yoke/role-device ]; then
+	wait_active yoke-usbip-admission.service
+	wait_active yoke-usbipd.service
+fi
+
+exec /usr/bin/rauc status mark-good

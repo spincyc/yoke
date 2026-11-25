@@ -1,0 +1,4 @@
+menu "Yoke ZERO 3E appliance packages"
+source "$BR2_EXTERNAL_YOKE_ZERO3E_PATH/package/yoke-gadget-worker/Config.in"
+source "$BR2_EXTERNAL_YOKE_ZERO3E_PATH/package/yoke-app/Config.in"
+endmenu

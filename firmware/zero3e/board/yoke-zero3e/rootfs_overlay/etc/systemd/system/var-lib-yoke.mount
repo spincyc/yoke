@@ -1,0 +1,16 @@
+[Unit]
+Description=Persistent Yoke state directory bind mount
+DefaultDependencies=no
+Requires=var.mount data.mount yoke-data-init.service
+After=var.mount data.mount yoke-data-init.service
+Before=local-fs.target yoked.service shutdown.target
+Conflicts=shutdown.target
+
+[Mount]
+What=/data/var/lib/yoke
+Where=/var/lib/yoke
+Type=none
+Options=bind
+
+[Install]
+WantedBy=local-fs.target

@@ -1,0 +1,2 @@
+yoke -1 yoke -1 * /var/lib/yoke /sbin/nologin - Yoke agent
+yoke-gadget -1 yoke -1 * - /sbin/nologin - Yoke USB gadget worker

@@ -1,0 +1,24 @@
+# Persistent U-Boot env in GPT partition (type 3de21764-95bd-54bd-a5c3-4abe786f38a8) at 16 MiB
+CONFIG_ENV_SIZE=0x10000
+CONFIG_ENV_OFFSET=0x1000000
+CONFIG_PARTITION_TYPE_GUID=y
+# CONFIG_ENV_IS_NOWHERE is not set
+CONFIG_ENV_IS_IN_MMC=y
+CONFIG_ENV_MMC_DEVICE_INDEX=0
+CONFIG_ENV_MMC_EMMC_HW_PARTITION=0
+
+# Required for RAUC A/B boot counter arithmetic in boot.cmd
+CONFIG_CMD_SETEXPR=y
+
+# Direct SquashFS loading from Slot A / Slot B (/boot/Image and /boot/rockchip/*.dtb)
+CONFIG_FS_SQUASHFS=y
+CONFIG_CMD_SQUASHFS=y
+CONFIG_ZLIB=y
+
+# USB Mass Storage gadget command for optional Maskrom SD flashing
+CONFIG_CMD_USB_MASS_STORAGE=y
+
+# Run our static RAUC A/B selector boot.scr from partition 2 (yoke-boot).
+# ZERO 3E maps microSD (&sdmmc0) to mmc 0; ZERO 3W maps microSD to mmc 1.
+CONFIG_USE_BOOTCOMMAND=y
+CONFIG_BOOTCOMMAND="if load mmc 0:2 ${scriptaddr} boot.scr; then setenv mmcdev 0; source ${scriptaddr}; elif load mmc 1:2 ${scriptaddr} boot.scr; then setenv mmcdev 1; source ${scriptaddr}; fi; run distro_bootcmd"

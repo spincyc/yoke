@@ -1,0 +1,6 @@
+config BR2_PACKAGE_YOKE_GADGET_WORKER
+	bool "yoke-gadget-worker"
+	depends on BR2_TOOLCHAIN_HAS_THREADS
+	help
+	  Yoke native C11 USB/IP to Linux Raw Gadget worker (ADR 0027).
+	  Installs /usr/local/libexec/yoke/yoke-gadget-worker.

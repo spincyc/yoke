@@ -1,0 +1,2 @@
+/dev/root / auto ro 0 0
+PARTLABEL=yoke-data /data ext4 defaults,noatime,sync 0 2

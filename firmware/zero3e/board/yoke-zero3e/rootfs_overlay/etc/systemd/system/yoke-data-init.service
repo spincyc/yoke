@@ -1,0 +1,15 @@
+[Unit]
+Description=Initialize persistent /data layout for Yoke ZERO 3E appliance
+DefaultDependencies=no
+Requires=var.mount data.mount
+After=var.mount data.mount
+Before=var-lib-yoke.mount local-fs.target shutdown.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/yoke-zero3e-init-data
+
+[Install]
+WantedBy=local-fs.target
