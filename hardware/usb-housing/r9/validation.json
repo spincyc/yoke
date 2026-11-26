@@ -1,0 +1,111 @@
+{
+  "schema": "yoke.housing-validation/1",
+  "revision": "R9",
+  "scope": "Hardened compact PoE (device side, 14.5 mm official RA023 pillars) and bare (computer side, host USB-C OTG) housing first articles on one plate with DXF-verified bare-edge base pads and 8 positive PCB-perimeter locator stops; physical fit, cable seating, service cycles and powered cooling remain NOT RUN.",
+  "owner_direction": "2026-11-25: Physical fit of R8 on real Radxa ZERO 3E v1.2 showed the rear side sat flush while the front side with the three square bumps had a several-millimeter gap. Owner directed revision and selected a full 4-part R9 plate (2 revised bases + PoE lid + bare lid).",
+  "revision_history": [
+    "2026-11-25 R8 physical fit report (r8/owner-result.json) and official Radxa ZERO 3E v1.2 bottom DXF inspection proved R8's three 6x5 mm front pads (y=0.8..5.8) collided directly with underside components omitted from Radxa's 3D STEP file (U12 16-pin SOIC, micro-HDMI & USB-C through-hole shield legs, ED9-12, C151), lifting the front side while the bare-edge rear sat flush.",
+    "2026-11-25 first R9 packet (DXF-verified narrow bare-edge front pads + updated bare ribs) failed independent cold review (r9_cold_design_independent) on three real findings: (1) underestimated X-float ([-0.88,+0.94] mm due to chamfered PCB corners & lid post_r=4.05 above base_post_r=4.25) allowing THT/SMD collisions and bare_fin_2 retention loss; (2) unconstrained board yaw (-1.51..+0.86 deg) around the short 5 mm RJ45 cradle during USB-C insertion/removal; (3) real 40-pin GPIO centerline at y=26.6751 (CON1 y=[24.1351,29.2151], bottom pads y<=28.7706).",
+    "2026-11-25 second R9 packet (R9 v2) resolved all three blockers with zero regressions: added 8 solid-to-floor PCB-perimeter locator stops on base (z=0..7.20 mm, capping true 3-DOF travel to dx/dy in [-0.25,+0.25] mm and yaw in [-0.54,+0.48] deg even before lid closure); expanded body[3]=34.50 / inside[3]=31.80 (84.55 x 39.20 mm, rear axes y=29.50) so rear lip sits behind PCB y=30.0 and back_pads y=[29.25,30.25] clear real GPIO bottom pads by >=0.234 mm; relocated bare_fins front rib to [17.8,20.2]x[-2.0,0.80], closed-end rib to [64.15,72.10]x[14.5,17.5], and rear ribs to y=[29.55,31.80]; upgraded reference_envelopes.scad & check_access.py with chamfered BG_OUTLINE, real CON1, and 163 3-DOF checks; passed independent cold review across all 7 required checks (fa638048...)."
+  ],
+  "dimensions_mm": {
+    "poe": [
+      84.55,
+      39.2,
+      40.2
+    ],
+    "bare": [
+      84.55,
+      39.2,
+      19.2
+    ],
+    "r8_poe": [
+      84.55,
+      38.0,
+      40.2
+    ],
+    "r7_poe": [
+      81.4,
+      36.25,
+      41.7
+    ],
+    "r6_poe": [
+      89.0,
+      45.5,
+      46.0
+    ]
+  },
+  "plate_sha256": "dd07e4a7b776fb766412625be38f95739aecf6c6897b37281f8fd507a03d7c59",
+  "gcode_sha256": "721156b28b27a743b2ab98ac67d64db9b5774a24b9b1386663be9c0205f72fbe",
+  "toolpath_sha256": "c032f9e7d550677cb8d381ced46405abb318ff03ddf0f933d131d902c61db6be",
+  "packet_sha256": "cb2fd0cde83dcbaaa1011af402211b73604317ab1b3edde47a6ef1bce81f7923",
+  "release_sha256": "9ba5bd749ee5d06e8b542210e2be6e7a96ce5c905e68168b920b2caa9590ea82",
+  "approval_sha256": "40a5abe91a12fa2114bb19a138214a4477a98af707cdfc9b4dfda40524668589",
+  "estimate": {
+    "filament_g": 55.77,
+    "time": "4h43m56s plus preparation",
+    "layers": 178,
+    "profile": "OrcaSlicer 2.4.2, Flashforge Adventurer 5M 0.4, 0.20mm Standard, Flashforge Generic PLA, supports disabled"
+  },
+  "physical_validation": "NOT RUN",
+  "checks": [
+    {
+      "id": "case_screw_joint",
+      "result": "PASS",
+      "record_sha256": "e8d51b2d3b39f532a0c9536168f205dd7f278d88095478d77db469eac90d13b6",
+      "method": "check_joint.py sections the base at every 0.20 mm printed layer from Z 3.4 to Z 4.6 across all 4 axes: 2 bridge layers followed by 4 fused full layers with solid ring r=1.9..3.8 mm; flat seat contact between base post ring (OD 8.5 mm) and lid post face (OD 8.1 mm with r=3.92..4.04 perimeter seams) is >= 34.94 mm2 per post with 0.000 mm2 lid material below Z 4.6."
+    },
+    {
+      "id": "screw_seat_and_insert_boss_toolpaths",
+      "result": "PASS",
+      "record_sha256": "744a1a43b97894ccd9937eeebbed018be8f195b721b6748f2d3107abbce88154",
+      "method": "Exact G-code audit on all 8 base head shelves (Z 3.6 slot bridge, Z 3.8 3.4x3.4 mm square bridge, Z 4.0 corner bridges at 25 mm/s M106 S255, plus 3 zero-bridge solid layers Z 4.2..4.6) AND all 8 lid insert bosses (zero Sparse infill across all 29 insert layers inside r=2.30..3.90 mm, >= 60.18 mm solid concentric extrusion path/layer). Physical bridge and insert pull-out strength remain NOT RUN."
+    },
+    {
+      "id": "access_safety_corner_insert_and_3dof_float",
+      "result": "PASS",
+      "record_sha256": "45b121b8f16de5369f8c18e50d8f606209b8fa3b460c7aa805fbea2d29a2a98a",
+      "method": "check_access.py: 163/163 PASS — 15x10 mm USB-C overmold sweeps, +1.55 mm top-latch RJ45 sweeps, nominal & expanded microSD allowances, full-height dia-8.0 conductive keepouts across all 3 printed parts (0.000 mm3 overlap), solid roof shrouding over all 4 live 48-57 V mounts and real CON1 40-pin GPIO (y>=22.0), continuous >=0.90 mm outer 2-loop corner skins on all 8 lid corners, >=1.6 mm nominal insert walls, 360-deg head-well walls, every vent open through all walls (1238.1 mm2 PoE / 742.2 mm2 bare), and 52 3-DOF (dx, dy, yaw) collision checks (0.000 mm3 overlap against chamfered ZERO 3E v1.2 DXF sbc-ref, real CON1 y=[24.135,29.215], and PoE stack across base, bare-lid, and poe-lid)."
+    },
+    {
+      "id": "mesh_and_gcode",
+      "result": "PASS",
+      "record_sha256": "3ac8f474a604e8dbfd7f8474e0590c3ace8fcc84f0e4e4078b47b094168fedb2",
+      "method": "Lacuna slice and prepared-job preflight: 4 closed two-manifold BED_SUPPORTED bodies, exact STL-to-G-code layer heights (base 29, bare-lid 73, poe-lid 178 layers), supports disabled, 0 layer-support violations, exact mesh/job and 140x110 thumbnail binding."
+    },
+    {
+      "id": "sampled_assembly",
+      "result": "PASS",
+      "record_sha256": "adc4ebe080c51d3b4906ddfd8fbed4a1ad881b07dbd782cbd6ff5d67e767b838",
+      "method": "Lacuna tools.geometry.sampled on geometry-plan.json (sha256 10f4ff03d8311ef5b1965d52dc3d36471a54be891922de5410f26897c75da385): 23 manifold instances (0 unreadable), 8 assembly motion paths, 479 poses, 1036 pair measurements, 0 collisions, 0 near warnings (<0.1 mm), 3.0 s."
+    },
+    {
+      "id": "printable_guide",
+      "result": "PASS",
+      "record_sha256": "3ba51412f0678f1b06a8be74201388ac3165d07552d6351f50c142704215a921",
+      "method": "Six monochrome Letter pages (612x792 pt, >=18 pt margins) generated from exact R9 STL meshes and DXF-derived nominal reference envelopes; independently inspected at 150 dpi grayscale and byte-matched against fresh pdftoppm output by Lacuna approve."
+    },
+    {
+      "id": "lacuna_approval",
+      "result": "PASS",
+      "record_sha256": "40a5abe91a12fa2114bb19a138214a4477a98af707cdfc9b4dfda40524668589",
+      "method": "python3 -m tools.print approve validated all bound packet/review files, exact 1-to-1 plate triangle identity, freshly rendered monochrome PDF page hashes, and advisory sampled geometry (PASS, 0 collisions, 0 near warnings)."
+    }
+  ],
+  "limits": [
+    "Nominal RA023 HAT spacing follows Radxa's shipped 4 x M2.5 x 14.5 mm copper pillars (hat_gap = 14.5 mm, 3.0 mm roof clearance). Accept measured facing PCB gap 14.2-14.8 mm; otherwise adjust hat_gap and reprint only the PoE lid.",
+    "Retention: SBC bare edges rest on six DXF-verified perimeter pads (Z 5.8) bounded by eight positive PCB-perimeter locator stops (Z 7.2); lid ribs stop 0.4 mm above component-free top edges without clamping PCBs or loading the conductive pillars.",
+    "Physical watchpoints from cold review: verify y_stops_front[1] (1.8 x 1.0 x 5.6 mm post between USB3 and OTG) takes no side-load from real USB-C plug collars and inspect bare_fin_3/4 clearance behind CON1 unpowered before snugging screws.",
+    "Acceptance after snugging: seam shadow gap 0.15-0.45 mm on every side (front and rear flush); screw heads at or below floor; zero shelf, insert, or post movement.",
+    "Never connect both PoE and USB-C power simultaneously on a PoE-equipped board; leave bare box corner mounting holes empty and shrouded.",
+    "No digital check establishes printed tolerance, thread/insert pull-out strength, cable seating, service durability, or powered PLA thermal margin."
+  ],
+  "independent_cold_review": {
+    "result": "PASS",
+    "reviewer": "r9_cold_design_independent",
+    "review_sha256": "fa6380480c160fdfc9aa9da7bbccd9e8f1427e3bc1416c26de45b9f455069e27",
+    "scope": "PREPRINT_ASSEMBLY_REVIEW",
+    "physical_validation": "NOT RUN",
+    "prior": "First R9 packet failed independent review on underestimated X-float (chamfered PCB corners + lid post radius), unconstrained board yaw around the 5 mm RJ45 cradle, and real 40-pin GPIO CON1 centerline (y=24.135..29.215); second R9 packet added 8 positive PCB-perimeter locator stops, expanded rear cavity to 39.20 mm, relocated back_pads & bare_fins, and passed all 7 required checks across 15,466 fine-grid 3-DOF poses."
+  }
+}

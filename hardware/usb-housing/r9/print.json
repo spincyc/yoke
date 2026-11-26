@@ -1,0 +1,71 @@
+{
+ "schema": "yoke.usb-housing-print/1",
+ "revision": "R9",
+ "kind": "HARDENED_COMPACT_POE_AND_BARE_FIRST_ARTICLES_ONE_PLATE",
+ "state": "SUBMITTED_AND_PRINTING_VERIFIED",
+ "printer_model": "FlashForge Adventurer 5M",
+ "printer_firmware": "5.1.8",
+ "job_filename": "yoke-usb-housing-r9.gcode",
+ "stl_sha256": "dd07e4a7b776fb766412625be38f95739aecf6c6897b37281f8fd507a03d7c59",
+ "gcode_sha256": "721156b28b27a743b2ab98ac67d64db9b5774a24b9b1386663be9c0205f72fbe",
+ "toolpath_sha256": "c032f9e7d550677cb8d381ced46405abb318ff03ddf0f933d131d902c61db6be",
+ "estimated_filament_g": 55.77,
+ "estimated_time": "4h43m56s plus preparation",
+ "material_profile": "Flashforge Generic PLA",
+ "layers": 178,
+ "supports": "DISABLED",
+ "bed_levelling": true,
+ "printed_parts": [
+  "poe-base",
+  "bare-base",
+  "poe-lid",
+  "bare-lid"
+ ],
+ "housing_dimensions_mm": {
+  "poe": [
+   84.55,
+   39.2,
+   40.2
+  ],
+  "bare": [
+   84.55,
+   39.2,
+   19.2
+  ]
+ },
+ "hardware": "Per box: four M3x8 case screws and four RX-M3x5.7 lid inserts. PoE box also uses the Radxa-supplied four M2.5x14.5 insulated copper pillars and eight CM2.5x4 screws; the bare box leaves its mounting holes empty and shrouded.",
+ "instructions": "assembly.pdf",
+ "assembly_pdf_sha256": "65eda2dfff241b759ea79122f34a8569c232e04b1f38c839d18d28e499971077",
+ "design_source_sha256": {
+  "build.py": "8302ca9d87f763fa273aa0c73988fd035917354919b4c9dd430743f11aef6268",
+  "check_access.py": "a326062e16db3c179ff35ad1644cd47121a0d0e04df0e1461205f457b8fc48ba",
+  "check_joint.py": "dd84fb8e0601e7adb6fd2e39460d8b4aa21bf5bcfa3b773316e3bf6d8936123a",
+  "check_toolpaths.py": "45f2e55efde664aa5e620fc96e0d3c8a84afaa3f9faa9c3e6f1902eaedd70c5b",
+  "document.py": "8a8f73b2f15115ba01491ea8ccef2227e31a1de607b569e4fce65771fbc4af24",
+  "hardware.json": "119a10d6f2f6cb4f90c61a5d8d4061be36274f7c76e776d65d3482bbed76bbdc",
+  "housing.scad": "064c8c54c743f2eff83f1c9eef5cecd63ff677966167360ec5ea1fdc3f4a71f7",
+  "reference_envelopes.scad": "26ce25e2c61e0ce3d1ad3b84084fb48d5d6976604156b62616f0a46644ddef5b"
+ },
+ "assembly_packet_sha256": "cb2fd0cde83dcbaaa1011af402211b73604317ab1b3edde47a6ef1bce81f7923",
+ "assembly_release_sha256": "9ba5bd749ee5d06e8b542210e2be6e7a96ce5c905e68168b920b2caa9590ea82",
+ "assembly_review_sha256": "fa6380480c160fdfc9aa9da7bbccd9e8f1427e3bc1416c26de45b9f455069e27",
+ "independent_reviewer": "r9_cold_design_independent",
+ "review_history": "First R9 independent review FAILED on underestimated X-float (chamfered PCB corners + lid post radius), unconstrained board yaw around the 5 mm RJ45 cradle during USB-C insertion/removal, and real 40-pin GPIO CON1 centerline (y=24.135..29.215, bottom pads y<=28.771). Fixed with 8 solid-to-floor base PCB-perimeter locator stops (dx/dy in [-0.25,+0.25] mm, yaw in [-0.54,+0.48] deg), expanded 39.20 mm body with rear lip behind PCB y=30.0, DXF-verified bare-edge pads and relocated bare_fins, and 163 3-DOF checks; second independent review PASS across all 7 required checks (15,466 fine-grid 3-DOF poses).",
+ "approval_result": "PASS",
+ "approval_sha256": "40a5abe91a12fa2114bb19a138214a4477a98af707cdfc9b4dfda40524668589",
+ "geometry_advisory": "PASS at approval (479 poses, 1036 pair measurements, 0 collisions, 0 gaps under 0.1 mm, 4.5 s)",
+ "dispatch_attempted": true,
+ "dispatch_attempt_count": 1,
+ "dispatch_outcome": "STARTED_AND_FILENAME_VERIFIED",
+ "submitted_at": "2026-11-26T16:11:23Z",
+ "acknowledged_at": "2026-11-26T16:11:56Z",
+ "physical_validation": "NOT RUN",
+ "physical_test_scope": "Unloaded shell fit and flush front/rear seam gap 0.15-0.45 mm; heat-set insert squareness and screw fit with no shelf or post-ring movement; measured RA023 HAT gap 14.2-14.8 mm else reprint only PoE lid; complete electronics installation; zero side-load on inter-port front stop y_stops_front[1] and unpowered bare_fin_3/4 clearance behind CON1; USB3/OTG and top-latch RJ45 cable seating; ten service cycles; sustained open vs closed powered cooling (<= 45 C PLA limit).",
+ "dispatch_ledger": {
+  "path": "lacuna/tools/print/dispatch-log.jsonl",
+  "matching_rows_sha256": "1c2bff8798e10e0377bdf4c53c4a090ba5e1f4ea724ba9c19a00531f4048ffaa",
+  "matching_row_count": 2,
+  "matching_rows_sha256_method": "Exact matching UTF-8 JSONL bytes in ledger order, including LF."
+ },
+ "repeat_policy": "One authorized start consumed. Reconcile this job; never automatically resend or reauthorize."
+}

@@ -1,0 +1,21 @@
+{
+  "schema": "yoke.usb-housing-owner-result/1",
+  "revision": "R8",
+  "result": "FAIL",
+  "basis": "OWNER_REPORT",
+  "on": "2026-11-25",
+  "owner_statement": "the three square bumps on the base are too high ; revise ; the side without the bumps sits flush, the side with the bumps has a several millimeter gap",
+  "assembly_result": "FAIL",
+  "specific_failure_mode": "R8 front base pads (pad_x=[[10,16],[27,33],[46,52]], front_pad_y=[0.8,5.8], z=5.8 mm) collided with underside Radxa ZERO 3E v1.2 components omitted from Radxa's 3D STEP file (U12 16-pin SOIC IC at x=29.8..33.1, micro-HDMI & USB-C through-hole shield legs, ED9-12, C151), lifting the front side of the board by ~2-3 mm while the bare-edge rear side (back_pad_y=[29.0,30.2], clear of GPIO pads at y<=28.75) sat flush.",
+  "measured_dimensions": null,
+  "printed_job": "yoke-usb-housing-r8.gcode",
+  "printed_mesh_sha256": "d91be3e78a6da9df86ebed6c2987f1cd3de6b3bf8379df89bafffea27ebfe4c8",
+  "repeat_print_allowed": false,
+  "replacement_requirements": [
+    "Replace R8's three 6 x 5 mm interior front base pads (y=0.8..5.8) with narrow bare-edge pads verified 0-hit against official radxa_zero_3e_v1200_bottom.dxf across full XY board float, leaving 4.20 mm clear floor height under U12 and all front THT connector legs.",
+    "Encode real ZERO 3E v1.2 bottom-side and top-side DXF component envelopes into reference_envelopes.scad and enforce 9-pose XY board-float clearance checks against base, bare-lid, and poe-lid.",
+    "Also clear bare-lid top retention ribs of all top-side SMD footprints in radxa_zero_3e_v1200_top.dxf across full XY board float."
+  ],
+  "physical_test_limit": "Owner physical fit observation supersedes R8 digital checks. Exact caliper measurements, insert pull-out, cable seating, and powered thermal results remain NOT RUN on R8.",
+  "next_revision": "R9"
+}

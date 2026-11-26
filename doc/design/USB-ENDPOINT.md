@@ -52,10 +52,12 @@ available without a proprietary management service.
   assembly of the device-side box, including its cooling parts. The
   computer-side box needs no HAT. Enclosure requirements: rectangular shell, freely nesting
   halves, recessed M3 screws, heat-set inserts and unobstructed ventilation.
-  R8 provides hardened compact PoE (device-side, 14.5 mm pillars) and bare
-  (computer-side) first articles sharing one base; physical fit and powered
-  cooling remain NOT RUN. R7 was superseded after a mechanical/safety audit;
-  R6 was superseded as too large; R5 is retired.
+  R9 provides hardened compact PoE (device-side, 14.5 mm pillars) and bare
+  (computer-side) first articles sharing one DXF-verified 8-stop base; physical
+  fit and powered cooling remain NOT RUN. R8 was superseded after physical fit
+  exposed underside component collisions on its front base pads; R7 was
+  superseded after a mechanical/safety audit; R6 was superseded as too large;
+  R5 is retired.
 
 ## Firmware status
 
